@@ -79,13 +79,14 @@ def test_guardrail_trips_on_adversarial_injection(mocker):
 def test_semantic_cache_hit_and_miss():
     """Ensure cache miss routes to router and cache hit bypasses pipeline with stored answer."""
     query = "what are deployment hours"
-    state_miss = {"sanitized_question": query}
+    state_miss = {"sanitized_question": query, "workspace_id": "default"}
 
     SEMANTIC_CACHE.clear()
     miss_result = cache_lookup_node(state_miss)
     assert miss_result["cache_hit"] is False
 
-    key = hashlib.sha256(query.strip().lower().encode()).hexdigest()
+    # Key includes the workspace prefix: f"{workspace_id}:{raw_query}"
+    key = hashlib.sha256(f"default:{query.strip().lower()}".encode()).hexdigest()
     SEMANTIC_CACHE[key] = "Deployments are Tuesday and Thursday."
 
     hit_result = cache_lookup_node(state_miss)
@@ -192,6 +193,7 @@ def test_hitl_node_approval(mocker):
     SEMANTIC_CACHE.clear()
 
     state = {
+        "workspace_id": "default",
         "original_question": "What is the rollback SLA?",
         "sanitized_question": "what is the rollback sla?",
         "generation": "Rollback SLA is strictly under 5 minutes.",
@@ -202,7 +204,7 @@ def test_hitl_node_approval(mocker):
     result = human_in_the_loop_node(state)
 
     assert "Assistant: Rollback SLA is strictly under 5 minutes." in result["history"][-1]
-    key = hashlib.sha256(state["sanitized_question"].strip().lower().encode()).hexdigest()
+    key = hashlib.sha256(f"default:{state['sanitized_question'].strip().lower()}".encode()).hexdigest()
     assert SEMANTIC_CACHE[key] == "Rollback SLA is strictly under 5 minutes."
 
 
@@ -211,6 +213,7 @@ def test_hitl_node_rejection(mocker):
     mocker.patch("app.interrupt", return_value="rejected")
 
     state = {
+        "workspace_id": "default",
         "original_question": "Can I bypass deployment approvals?",
         "sanitized_question": "can i bypass deployment approvals?",
         "generation": "Yes, if you are an admin.",
@@ -220,4 +223,5 @@ def test_hitl_node_rejection(mocker):
 
     result = human_in_the_loop_node(state)
 
-    assert "rejected by human compliance" in result["generation"]
+    # Case-insensitive comparison
+    assert "rejected by human compliance" in result["generation"].lower()
