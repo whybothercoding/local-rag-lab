@@ -1,0 +1,26 @@
+# Core Agent & Graph Orchestration
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-ollama>=0.2.0
+langchain-text-splitters>=0.3.0
+
+# Vector & Keyword Retrieval
+chromadb>=0.5.0
+rank-bm25>=0.2.2
+
+# Document Parsers
+pypdf>=5.0.0
+python-docx>=1.1.0
+
+# Database & Checkpointing
+psycopg[binary]>=3.2.0
+psycopg-pool>=3.2.0
+
+# Web Interface & Data Validation
+streamlit>=1.39.0
+pydantic>=2.8.0
+
+# Testing & Quality Assurance
+pytest>=8.3.0
+pytest-mock>=3.14.0
+watchdog>=4.0.0
