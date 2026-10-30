@@ -1,0 +1,41 @@
+.PHONY: help up down restart test test-unit test-int run audit export clean
+
+help:
+    @echo "Available commands:"
+    @echo "  make up         Start PostgreSQL Docker container"
+    @echo "  make down       Stop PostgreSQL Docker container"
+    @echo "  make run        Execute RAG pipeline until approval breakpoint"
+    @echo "  make audit      Open interactive CLI to review/approve pending tasks"
+    @echo "  make test       Run all unit and integration tests"
+    @echo "  make export     Regenerate architecture diagram (MMD and PNG)"
+    @echo "  make clean      Remove python caches and temporary artifacts"
+
+up:
+    docker compose up -d
+
+down:
+    docker compose down
+
+restart: down up
+
+run:
+    python app.py
+
+audit:
+    python approve.py
+
+test:
+    pytest -v
+
+test-unit:
+    pytest tests/test_engine.py -v
+
+test-int:
+    pytest tests/test_integration.py -v
+
+export:
+    python export_graph.py
+
+clean:
+    find . -type d -name "__pycache__" -exec rm -rf {} +
+    find . -type d -name ".pytest_cache" -exec rm -rf {} +

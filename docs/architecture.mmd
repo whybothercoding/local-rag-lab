@@ -1,0 +1,43 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	guardrail(guardrail)
+	cache_lookup(cache_lookup)
+	router(router)
+	direct_answer(direct_answer)
+	retrieve(retrieve)
+	grade_documents(grade_documents)
+	rewrite_query(rewrite_query)
+	generate(generate)
+	grade_hallucination(grade_hallucination)
+	grade_relevance(grade_relevance)
+	human_approval(human_approval)
+	fallback(fallback)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> guardrail;
+	cache_lookup -.-> __end__;
+	cache_lookup -.-> router;
+	generate --> grade_hallucination;
+	grade_documents -.-> fallback;
+	grade_documents -.-> generate;
+	grade_documents -. &nbsp;rewrite&nbsp; .-> rewrite_query;
+	grade_hallucination -.-> fallback;
+	grade_hallucination -.-> grade_relevance;
+	grade_relevance -.-> human_approval;
+	grade_relevance -. &nbsp;rewrite&nbsp; .-> rewrite_query;
+	guardrail -.-> cache_lookup;
+	guardrail -.-> fallback;
+	retrieve --> grade_documents;
+	rewrite_query --> retrieve;
+	router -. &nbsp;direct&nbsp; .-> direct_answer;
+	router -. &nbsp;rag&nbsp; .-> retrieve;
+	direct_answer --> __end__;
+	fallback --> __end__;
+	human_approval --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

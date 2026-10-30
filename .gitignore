@@ -1,0 +1,26 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env
+
+# ChromaDB vector store & indices (local storage)
+chroma_data/
+chroma_db/
+bm25_indices/
+uploads/
+
+# Pytest & coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS system metadata
+.DS_Store
+
+# Exported raster artifacts (keep .mmd in git, ignore generated binaries)
+docs/*.png
