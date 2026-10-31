@@ -46,5 +46,12 @@ AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", str(ROOT / "data" / "audit.db"))
 ACCESS_POLICY_PATH = os.getenv("ACCESS_POLICY_PATH", str(ROOT / "access_policy.json"))
 ACCESS_KEY_PATH = os.getenv("ACCESS_KEY_PATH", str(ROOT / "data" / "access.key"))
 
+# Relevance gate: retrieval abstains unless the best chunk clears one of these. Calibrated on the
+# eval calibration split; see eval/README.md.
+# Calibration: answerable questions scored similarity 0.72-0.91 and coverage 0.50-1.00; out-of-scope
+# questions scored similarity 0.42-0.54 and coverage 0.00-0.25. The thresholds sit in those gaps.
+RELEVANCE_MIN_SIMILARITY = float(os.getenv("RELEVANCE_MIN_SIMILARITY", "0.65"))
+RELEVANCE_MIN_COVERAGE = float(os.getenv("RELEVANCE_MIN_COVERAGE", "0.40"))
+
 # Keep source files bounded so one huge upload cannot exhaust memory.
 MAX_SOURCE_BYTES = int(os.getenv("MAX_SOURCE_BYTES", str(25 * 1024 * 1024)))

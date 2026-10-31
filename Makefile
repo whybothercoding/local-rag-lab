@@ -1,4 +1,4 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail users eval clean
+.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback users eval eval-judge clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -62,6 +62,14 @@ users:
 # 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
 eval:
 	./venv/bin/python eval.py
+
+# Same gates, plus an advisory answer-support check by the local Ollama model
+eval-judge:
+	./venv/bin/python eval.py --judge
+
+# List answers reviewers rejected, with their reasons
+audit-feedback:
+	./venv/bin/python audit.py feedback -n 20
 
 # 14. Clean caches and test artifacts
 clean:

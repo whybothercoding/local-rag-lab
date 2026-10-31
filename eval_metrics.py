@@ -44,18 +44,22 @@ def mean(values: list[float | None]) -> float | None:
 
 
 def summarize(results: list[dict]) -> dict:
-    answered = [r for r in results if r["expect"] == "answer"]
+    answerable = [r for r in results if r["expect"] == "answer"]
     security = [r for r in results if r["expect"] in ("denied", "blocked")]
     abstain = [r for r in results if r["expect"] == "abstain"]
+    judged = [r for r in answerable if r.get("judge_supported") is not None]
     latencies = [r["latency_ms"] for r in results]
     return {
         "cases": len(results),
-        "retrieval_recall": mean([r.get("context_recall") for r in answered]),
-        "context_precision": mean([r.get("context_precision") for r in answered]),
-        "keyword_recall": mean([r.get("keyword_recall") for r in answered]),
-        "groundedness": mean([r.get("groundedness") for r in answered]),
+        "answer_rate": mean([0.0 if r["abstained"] else 1.0 for r in answerable]),
+        "retrieval_recall": mean([r.get("context_recall") for r in answerable]),
+        "context_precision": mean([r.get("context_precision") for r in answerable]),
+        "keyword_recall": mean([r.get("keyword_recall") for r in answerable]),
+        "groundedness": mean([r.get("groundedness") for r in answerable]),
+        "abstention_accuracy": mean([1.0 if r["passed"] else 0.0 for r in abstain]),
         "security_accuracy": mean([1.0 if r["passed"] else 0.0 for r in security]),
-        "abstention_rate": mean([1.0 if r["abstained"] else 0.0 for r in abstain]),
+        "judge_support": mean([1.0 if r["judge_supported"] else 0.0 for r in judged]),
+        "degraded_cases": sum(1 for r in results if r.get("degraded")),
         "median_latency_ms": round(median(latencies), 1) if latencies else None,
     }
 

@@ -36,15 +36,29 @@ def test_keyword_recall_is_case_insensitive():
 def test_summarize_separates_answer_security_and_abstention_cases():
     results = [
         {"expect": "answer", "context_recall": 1.0, "context_precision": 0.5, "keyword_recall": 1.0,
-         "groundedness": 0.8, "passed": True, "abstained": False, "latency_ms": 10},
-        {"expect": "denied", "passed": True, "abstained": False, "latency_ms": 2},
-        {"expect": "abstain", "passed": False, "abstained": False, "latency_ms": 30},
+         "groundedness": 0.8, "passed": True, "abstained": False, "latency_ms": 10,
+         "judge_supported": True, "degraded": []},
+        {"expect": "denied", "passed": True, "abstained": False, "latency_ms": 2, "degraded": []},
+        {"expect": "abstain", "passed": False, "abstained": False, "latency_ms": 30, "degraded": ["not_indexed"]},
     ]
     summary = summarize(results)
     assert summary["retrieval_recall"] == 1.0
+    assert summary["answer_rate"] == 1.0
     assert summary["security_accuracy"] == 1.0
-    assert summary["abstention_rate"] == 0.0
+    assert summary["abstention_accuracy"] == 0.0
+    assert summary["judge_support"] == 1.0
+    assert summary["degraded_cases"] == 1
     assert summary["median_latency_ms"] == 10
+
+
+def test_answer_rate_drops_when_answerable_questions_are_abstained():
+    results = [
+        {"expect": "answer", "context_recall": 1.0, "keyword_recall": 1.0, "groundedness": 1.0,
+         "passed": True, "abstained": False, "latency_ms": 1, "judge_supported": None, "degraded": []},
+        {"expect": "answer", "context_recall": 0.0, "keyword_recall": 0.0, "groundedness": None,
+         "passed": False, "abstained": True, "latency_ms": 1, "judge_supported": None, "degraded": []},
+    ]
+    assert summarize(results)["answer_rate"] == 0.5
 
 
 def test_threshold_gate_reports_each_failure():

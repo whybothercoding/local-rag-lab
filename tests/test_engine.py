@@ -14,6 +14,7 @@ from app import (
     human_in_the_loop_node,
     reciprocal_rank_fusion,
     SEMANTIC_CACHE,
+    cache_key,
 )
 
 
@@ -54,7 +55,7 @@ def test_semantic_cache_hit_and_miss():
     miss_result = cache_lookup_node(state)
     assert miss_result["cache_hit"] is False
 
-    key = hashlib.sha256(f"default:{query.strip().lower()}".encode()).hexdigest()
+    key = cache_key("default", query)
     SEMANTIC_CACHE[key] = "Deployments are Tuesday and Thursday."
 
     hit_result = cache_lookup_node(state)
@@ -154,7 +155,7 @@ def test_hitl_node_approval(mocker):
     result = human_in_the_loop_node(state)
     assert "Assistant: Rollback SLA is strictly under 5 minutes." in result["history"][-1]
 
-    key = hashlib.sha256(f"default:{state['sanitized_question'].strip().lower()}".encode()).hexdigest()
+    key = cache_key("default", state["sanitized_question"])
     assert SEMANTIC_CACHE[key] == "Rollback SLA is strictly under 5 minutes."
 
 

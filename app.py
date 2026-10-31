@@ -5,11 +5,15 @@ import hashlib
 from typing import TypedDict, List, Dict, Any, Optional
 
 import chromadb
+from chromadb.errors import NotFoundError
 
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
+from pathlib import Path
+
+import workspace_manager
 from config import (
     DB_URI,
     OLLAMA_BASE_URL,
@@ -17,11 +21,13 @@ from config import (
     EMBED_MODEL,
     CHROMA_PATH,
     BM25_DIR,
+    RELEVANCE_MIN_COVERAGE,
+    RELEVANCE_MIN_SIMILARITY,
 )
 from access import authorize, verify_token
 from audit import record as audit_record
 from embedding_provider import get_embedding_model
-from llm_provider import get_chat_llm
+from llm_provider import DeterministicContextLLM, get_chat_llm
 from redaction import redact_pii
 from sparse_search import search_sparse_chunks
 
@@ -46,6 +52,7 @@ class GraphState(TypedDict, total=False):
     retry_count: int
     history: List[str]
     telemetry: Dict[str, Any]
+    degraded: List[str]
 
 
 StateInput = GraphState | dict[str, Any]
@@ -54,6 +61,42 @@ SEMANTIC_CACHE: dict[str, str] = {}
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+ABSTAIN_MESSAGE = "I could not find relevant documentation in this workspace to answer your query."
+
+STOPWORDS = frozenset({
+    "what", "which", "when", "where", "who", "whom", "whose", "why", "how", "does", "did", "have",
+    "has", "had", "with", "from", "into", "about", "there", "their", "your", "this", "that", "these",
+    "those", "must", "should", "would", "could", "under", "over", "between", "after", "before", "tell",
+    "give", "show", "list", "they", "them", "were", "been", "being", "will", "shall", "each", "every",
+    "some", "any",
+})
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _content_terms(text: str) -> set[str]:
+    return {word for word in _WORD.findall(text.lower()) if len(word) >= 4 and word not in STOPWORDS}
+
+
+def _coverage(query_terms: set[str], chunk: str) -> float:
+    """Share of the query's content words that appear in one chunk."""
+    if not query_terms:
+        return 0.0
+    return len(query_terms & set(_WORD.findall(chunk.lower()))) / len(query_terms)
+
+
+def _index_version(ws_id: str) -> str:
+    """Fingerprint of a workspace's indexed content. It changes whenever the workspace is re-indexed."""
+    manifest = Path(workspace_manager.BM25_DIR) / f"{ws_id}_manifest.json"
+    if not manifest.is_file():
+        return "none"
+    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
+def cache_key(ws_id: str, query: str) -> str:
+    """Cached answers are keyed by workspace, query, and index version, so re-indexing invalidates them."""
+    return _sha256(f"{ws_id}:{_index_version(ws_id)}:{query.strip().lower()}")
 
 
 # --- HELPER: RECIPROCAL RANK FUSION (RRF) ---
@@ -157,7 +200,7 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     query = state.get("sanitized_question", "")
     ws_id = state.get("workspace_id", "default")
     telemetry = dict(state.get("telemetry", {}))
-    key = hashlib.sha256(f"{ws_id}:{query.strip().lower()}".encode()).hexdigest()
+    key = cache_key(ws_id, query)
 
     telemetry["cache_lookup_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     if key in SEMANTIC_CACHE:
@@ -201,57 +244,70 @@ def chitchat_node(state: StateInput) -> dict[str, Any]:
 
 
 def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
+    """Retrieve candidates, then keep them only if they are relevant enough to answer from.
+
+    Relevance is judged two ways: the best cosine similarity from the vector store, and how many
+    of the query's content words one chunk contains. If neither clears its threshold, no documents
+    are passed on, and the graph rewrites the query and eventually abstains.
+    """
     t0 = time.perf_counter()
     query = state.get("sanitized_question", "")
     ws_id = state.get("workspace_id", "default")
     telemetry = dict(state.get("telemetry", {}))
+    degraded: List[str] = []
 
     dense_candidates: List[Dict[str, Any]] = []
     sparse_candidates: List[Dict[str, Any]] = []
 
-    # 1. Dense retrieval (ChromaDB)
+    # 1. Dense retrieval (ChromaDB). Stored vectors are unit-normalized, so cosine = 1 - squared_l2 / 2.
     try:
         chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
-        embeddings = get_embedding_model()
-        q_vec = embeddings.embed_query(query)
-
+        q_vec = get_embedding_model().embed_query(query)
         results = collection.query(query_embeddings=[q_vec], n_results=5)
-        if results and "documents" in results and results["documents"]:
-            docs = results["documents"][0]
-            metas = results["metadatas"][0] if "metadatas" in results and results["metadatas"] else []
-            ids = results["ids"][0] if "ids" in results and results["ids"] else []
-            for doc, meta, cid in zip(docs, metas, ids):
-                src = meta.get("source", "document")
-                dense_candidates.append({
-                    "id": cid,
-                    "content": doc,
-                    "citation": f"[{cid}] {src}"
-                })
-    except Exception:
-        pass
+        docs = (results.get("documents") or [[]])[0]
+        metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
+        ids = (results.get("ids") or [[]])[0]
+        distances = (results.get("distances") or [[]])[0] or [2.0] * len(docs)
+        for doc, meta, cid, distance in zip(docs, metas, ids, distances):
+            dense_candidates.append({
+                "id": cid,
+                "content": doc,
+                "citation": f"[{cid}] {meta.get('source', 'document')}",
+                "similarity": 1.0 - float(distance) / 2.0,
+            })
+    except NotFoundError:
+        degraded.append("not_indexed: this workspace has no vector index yet")
+    except Exception as exc:
+        degraded.append(f"dense_retrieval_unavailable: {type(exc).__name__}")
 
-    # 2. Sparse retrieval (Safe SQLite FTS5 with BM25 ranking & legacy fallback)
+    # 2. Sparse retrieval (SQLite FTS5 with BM25 ranking, legacy fallback)
     try:
         sparse_candidates = search_sparse_chunks(ws_id, query, top_n=5, base_dir=BM25_DIR)
-    except Exception:
-        sparse_candidates = []
+    except Exception as exc:
+        degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}")
 
-    # 3. Fuse with Reciprocal Rank Fusion (RRF)
-    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=3)
+    # 3. Relevance gate
+    candidates = dense_candidates + sparse_candidates
+    best_similarity = max((c["similarity"] for c in dense_candidates), default=0.0)
+    query_terms = _content_terms(query)
+    best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
+    relevant = bool(candidates) and (
+        best_similarity >= RELEVANCE_MIN_SIMILARITY or best_coverage >= RELEVANCE_MIN_COVERAGE
+    )
 
+    # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant
+    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=3) if relevant else []
     chunks_found = [item["content"] for item in fused_docs]
     citations = [item["citation"] for item in fused_docs]
-
-    # Preserve pre-seeded test or passed documents if retrieval found no candidates
-    if not chunks_found and state.get("documents"):
-        chunks_found = list(state.get("documents", []))
-        citations = list(state.get("citations", []))
 
     telemetry["retrieval_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     telemetry["dense_candidates_count"] = len(dense_candidates)
     telemetry["sparse_candidates_count"] = len(sparse_candidates)
     telemetry["fused_chunks_count"] = len(chunks_found)
+    telemetry["best_similarity"] = round(best_similarity, 4)
+    telemetry["best_coverage"] = round(best_coverage, 4)
+    telemetry["relevant"] = relevant
 
     audit_record(
         "retrieval",
@@ -261,6 +317,10 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             "citations": citations,
             "dense_candidates": len(dense_candidates),
             "sparse_candidates": len(sparse_candidates),
+            "best_similarity": telemetry["best_similarity"],
+            "best_coverage": telemetry["best_coverage"],
+            "relevant": relevant,
+            "degraded": degraded,
             "retry_count": state.get("retry_count", 0),
         },
     )
@@ -268,7 +328,8 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     return {
         "documents": chunks_found,
         "citations": citations,
-        "telemetry": telemetry
+        "telemetry": telemetry,
+        "degraded": degraded,
     }
 
 
@@ -294,29 +355,32 @@ def generate_node(state: StateInput) -> dict[str, Any]:
     docs = state.get("documents", [])
     q = state.get("sanitized_question", "")
     telemetry = dict(state.get("telemetry", {}))
+    # Keep retrieval degradations; drop fallback notes from an earlier attempt so they are not repeated.
+    degraded = [d for d in state.get("degraded", []) if not d.startswith("generation_fallback")]
 
     if not docs:
+        telemetry["abstained"] = True
         telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-        return {
-            "generation": "I could not find relevant documentation in this workspace to answer your query.",
-            "telemetry": telemetry
-        }
+        return {"generation": ABSTAIN_MESSAGE, "telemetry": telemetry, "degraded": degraded}
 
     context = "\n\n---\n\n".join(docs)
     prompt = f"Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:"
+    telemetry["abstained"] = False
     try:
-        llm = get_chat_llm()
-        response = llm.invoke(prompt)
+        response = get_chat_llm().invoke(prompt)
         gen_content = str(response.content).strip()
-    except Exception:
-        # Fallback if local model execution fails
-        gen_content = f"Based on the documentation: {docs[0]}"
+    except Exception as exc:
+        # The model failed. Answer extractively from the same context and flag it for the reviewer.
+        gen_content = str(DeterministicContextLLM().invoke(prompt).content).strip()
+        degraded.append(f"generation_fallback: {type(exc).__name__}; the answer is extractive, not model-written")
+        telemetry["generation_fallback"] = True
 
     telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
     return {
         "generation": gen_content,
-        "telemetry": telemetry
+        "telemetry": telemetry,
+        "degraded": degraded,
     }
 
 
@@ -421,6 +485,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             "groundedness_ratio": state.get("telemetry", {}).get("groundedness_ratio"),
             "hallucination_status": state.get("hallucination_status", ""),
             "relevance_status": state.get("relevance_status", ""),
+            "degraded": state.get("degraded", []),
         },
     )
 
@@ -429,7 +494,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
 
         q = state.get("sanitized_question", "")
         ws_id = state.get("workspace_id", "default")
-        key = hashlib.sha256(f"{ws_id}:{q.strip().lower()}".encode()).hexdigest()
+        key = cache_key(ws_id, q)
         SEMANTIC_CACHE[key] = gen
 
         return {"generation": gen, "history": history}

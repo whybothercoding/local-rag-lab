@@ -9,6 +9,8 @@ import shutil
 import socket
 import tempfile
 
+import pytest
+
 # Chroma's anonymous telemetry must never run in tests.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 # Audit log, access policy, and signing key for tests live in throwaway files, never in data/.
@@ -17,8 +19,29 @@ atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
 os.environ["AUDIT_DB_PATH"] = os.path.join(_scratch_dir, "audit.db")
 os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.json")
 os.environ["ACCESS_KEY_PATH"] = os.path.join(_scratch_dir, "access.key")
+# Tests never depend on a running model server; the deterministic synthesizer keeps answers reproducible.
+os.environ["LLM_PROVIDER"] = "deterministic"
 
 TEST_PASSWORD = "correct-horse-battery"
+
+
+@pytest.fixture
+def rollback_index(tmp_path, monkeypatch):
+    """A real, indexed workspace named 'default'. The pipeline retrieves from it; nothing is injected."""
+    from ingest import ingest_workspace
+
+    source = tmp_path / "kb" / "default"
+    source.mkdir(parents=True)
+    (source / "company_policy.md").write_text("Rollback SLA is strictly under 5 minutes.", encoding="utf-8")
+
+    store = tmp_path / "store"
+    for target in ("workspace_manager", "app"):
+        monkeypatch.setattr(f"{target}.CHROMA_PATH", str(store / "chroma"))
+        monkeypatch.setattr(f"{target}.BM25_DIR", str(store / "bm25"))
+    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(store / "uploads"))
+
+    assert ingest_workspace("default", str(source)).ok
+    return source
 
 
 def token_for(name: str) -> str:

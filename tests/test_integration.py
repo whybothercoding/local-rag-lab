@@ -24,40 +24,44 @@ def is_postgres_available() -> bool:
         return False
 
 
-def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
+def _inputs(session: str) -> GraphState:
+    return {
+        "workspace_id": "default",
+        "session_id": session,
+        "principal_token": token_for("carol"),
+        "question": "What is our company rollback SLA?",
+        "original_question": "What is our company rollback SLA?",
+        "sanitized_question": "",
+        "documents": [],
+        "citations": [],
+        "generation": "",
+        "intent": "",
+        "cache_hit": False,
+        "is_safe": True,
+        "grade_status": "",
+        "hallucination_status": "",
+        "relevance_status": "",
+        "retry_count": 0,
+        "history": [],
+        "telemetry": {},
+        "degraded": [],
+    }
+
+
+def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path, rollback_index):
     sqlite_uri = f"sqlite:///{tmp_path / 'test_checkpoints.db'}"
     config: RunnableConfig = {"configurable": {"thread_id": "test-sqlite-thread-001"}}
 
     with get_checkpointer(uri=sqlite_uri) as checkpointer:
         engine = workflow.compile(checkpointer=checkpointer)
 
-        inputs: GraphState = {
-            "workspace_id": "default",
-            "session_id": "test-sqlite-thread-001",
-            "principal_token": token_for("carol"),
-            "question": "What is our company rollback SLA?",
-            "original_question": "What is our company rollback SLA?",
-            "sanitized_question": "",
-            "documents": ["Rollback SLA is strictly under 5 minutes."],
-            "citations": ["[CHUNK-1] docs/company_policy.md"],
-            "generation": "",
-            "intent": "rag",
-            "cache_hit": False,
-            "is_safe": True,
-            "grade_status": "approved",
-            "hallucination_status": "grounded",
-            "relevance_status": "relevant",
-            "retry_count": 0,
-            "history": [],
-            "telemetry": {}
-        }
-
         # Step until interrupt
-        for _ in engine.stream(inputs, config=config):
+        for _ in engine.stream(_inputs("test-sqlite-thread-001"), config=config):
             pass
 
         state = engine.get_state(config)
         assert state.next == ("human_approval",)
+        assert state.values["citations"], "answer should be grounded in the indexed document"
 
         # Confirm thread is discoverable by checkpointer inspection
         threads = fetch_checkpoint_threads(uri=sqlite_uri)
@@ -73,7 +77,7 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
 
 
 @pytest.mark.skipif(not is_postgres_available(), reason="PostgreSQL container not reachable on localhost:5432")
-def test_full_pipeline_to_postgres_and_approve_cli():
+def test_full_pipeline_to_postgres_and_approve_cli(rollback_index):
     config: RunnableConfig = {"configurable": {"thread_id": "test-integration-thread-001"}}
 
     with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
@@ -81,29 +85,8 @@ def test_full_pipeline_to_postgres_and_approve_cli():
         checkpointer.setup()
         engine = workflow.compile(checkpointer=checkpointer)
 
-        inputs: GraphState = {
-            "workspace_id": "default",
-            "session_id": "test-integration-thread-001",
-            "principal_token": token_for("carol"),
-            "question": "What is our company rollback SLA?",
-            "original_question": "What is our company rollback SLA?",
-            "sanitized_question": "",
-            "documents": ["Rollback SLA is strictly under 5 minutes."],
-            "citations": ["[CHUNK-1] docs/company_policy.md"],
-            "generation": "",
-            "intent": "rag",
-            "cache_hit": False,
-            "is_safe": True,
-            "grade_status": "approved",
-            "hallucination_status": "grounded",
-            "relevance_status": "relevant",
-            "retry_count": 0,
-            "history": [],
-            "telemetry": {}
-        }
-
         # Step until interrupt
-        for _ in engine.stream(inputs, config=config):
+        for _ in engine.stream(_inputs("test-integration-thread-001"), config=config):
             pass
 
         state = engine.get_state(config)

@@ -41,6 +41,12 @@ def render_citations(citations):
             st.markdown(f"**[{idx}]** `{citation}`")
 
 
+def render_degraded(notes) -> None:
+    """Shows what went wrong when an answer was produced in a reduced mode, so no one reads it as a full answer."""
+    for note in notes or []:
+        st.warning(f"Degraded answer: {note}")
+
+
 def _sign_out(notice: str = "") -> None:
     for key in ("user", "token", "last_seen"):
         st.session_state.pop(key, None)
@@ -101,6 +107,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
     st.text_area("Candidate Output", value=state.values.get("generation", ""), height=130,
                  disabled=True, key=f"candidate-{thread_id}")
     render_citations(state.values.get("citations", []))
+    render_degraded(state.values.get("degraded", []))
 
     requester = state.values.get("principal", "")
     if not authorize(user, ws_id, "review") or user == requester:
@@ -125,6 +132,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
                     "role": "assistant",
                     "content": final_state.values.get("generation", ""),
                     "citations": final_state.values.get("citations", []),
+                    "degraded": final_state.values.get("degraded", []),
                 })
             else:
                 st.session_state.messages.append({
@@ -244,6 +252,7 @@ if "current_ws" not in st.session_state or st.session_state.current_ws != active
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
+        render_degraded(msg.get("degraded"))
         if msg.get("citations"):
             render_citations(msg["citations"])
 
@@ -295,11 +304,14 @@ with get_checkpointer() as checkpointer:
 
         ans = state.values.get("generation", "No answer generated.")
         citations = state.values.get("citations", [])
+        degraded = state.values.get("degraded", [])
         st.session_state.messages.append({
             "role": "assistant",
             "content": ans,
-            "citations": citations
+            "citations": citations,
+            "degraded": degraded,
         })
         with st.chat_message("assistant"):
             st.write(ans)
+            render_degraded(degraded)
             render_citations(citations)

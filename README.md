@@ -113,6 +113,15 @@ To index a single directory into a named workspace:
 python ingest.py --workspace accounting --dir ./knowledge_base/accounting --as alice
 ```
 
+### Answer Quality Controls
+
+- **Abstention.** Retrieval passes evidence on only if the best chunk is similar enough to the question (cosine ≥ 0.65) or covers enough of its content words (≥ 40%). Otherwise the assistant says it could not find documentation instead of answering from unrelated text.
+- **Cache invalidation.** Cached answers are keyed by workspace, query, and the workspace's index fingerprint. Re-indexing invalidates them. The cache lives in memory and is cleared on restart.
+- **Visible degradation.** If the vector store, keyword index, or model is unavailable, the answer carries a warning. A model failure produces a labeled extractive answer. Nothing silently falls back.
+- **Rejections as feedback.** `make audit-feedback` lists answers reviewers declined, with their reasons.
+- **Local OpenAI-compatible model.** Set `LLM_PROVIDER=openai` and `LOCAL_LLM_URL` to use LM Studio, vLLM, or llama.cpp servers.
+- **Measured.** `make eval` gates answer rate, retrieval, keyword recall, groundedness, abstention, and security on a held-out split. See `eval/README.md`.
+
 ### Security Controls
 
 - **Signed identity.** Signing in issues an HMAC-signed session token that expires after 8 hours. The pipeline verifies the token itself. A bare account name in the input is ignored.

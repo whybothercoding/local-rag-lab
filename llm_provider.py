@@ -13,7 +13,7 @@ from typing import Any, List, Optional
 
 import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from config import (
@@ -77,8 +77,9 @@ class DeterministicContextLLM(BaseChatModel):
                 matched_sentences.append((overlap, s_clean))
 
         if matched_sentences:
-            matched_sentences.sort(key=lambda x: x[0], reverse=True)
-            best_sentences = [item[1] for item in matched_sentences[:2]]
+            # Keep only the sentences tied for the strongest overlap, so a weak second match cannot pad the answer.
+            top_overlap = max(overlap for overlap, _ in matched_sentences)
+            best_sentences = [text for overlap, text in matched_sentences if overlap == top_overlap][:2]
             return " ".join(best_sentences)
 
         # Fallback to the first sentence of context
@@ -105,6 +106,53 @@ class DeterministicContextLLM(BaseChatModel):
         return "deterministic-context-synthesizer"
 
 
+def _openai_role(message: BaseMessage) -> str:
+    if isinstance(message, SystemMessage):
+        return "system"
+    if isinstance(message, AIMessage):
+        return "assistant"
+    return "user"
+
+
+class OpenAICompatibleChat(BaseChatModel):
+    """Chat model for any local server that speaks the OpenAI chat-completions API (LM Studio, vLLM, llama.cpp).
+
+    Built on httpx, so it needs no vendor SDK. `transport` lets tests run against an in-memory handler.
+    """
+
+    base_url: str
+    model_name: str = "qwen2.5-coder:7b"
+    api_key: str = "local"
+    timeout_sec: float = 120.0
+    transport: Any = None
+
+    @property
+    def _llm_type(self) -> str:
+        return "openai-compatible"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        payload = {
+            "model": self.model_name,
+            "temperature": 0.0,
+            "messages": [{"role": _openai_role(m), "content": str(m.content)} for m in messages],
+        }
+        with httpx.Client(timeout=self.timeout_sec, transport=self.transport) as client:
+            response = client.post(
+                f"{self.base_url.rstrip('/')}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=str(content)))])
+
+
 def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -> bool:
     """Fast check whether local Ollama server is responding."""
     try:
@@ -120,17 +168,7 @@ def get_chat_llm(provider: str | None = None) -> BaseChatModel:
     active = (provider or LLM_PROVIDER).lower().strip()
 
     if active == "openai":
-        try:
-            from langchain_openai import ChatOpenAI  # type: ignore[import-untyped]
-            return ChatOpenAI(
-                base_url=LOCAL_LLM_URL,
-                api_key="local",
-                model=CHAT_MODEL,
-                temperature=0.0,
-            )
-        except ImportError:
-            logger.warning("langchain-openai not installed; falling back to in-process synthesizer.")
-            return DeterministicContextLLM()
+        return OpenAICompatibleChat(base_url=LOCAL_LLM_URL, model_name=CHAT_MODEL)
 
     if active == "deterministic":
         return DeterministicContextLLM()

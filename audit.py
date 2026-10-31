@@ -171,6 +171,32 @@ def list_events(limit: int = 50, workspace_id: str | None = None, path: str | No
     ]
 
 
+def list_rejections(limit: int = 50, workspace_id: str | None = None, path: str | None = None) -> list[dict[str, Any]]:
+    """Newest-first human rejections with the reviewer's reason. Feedback on answers the reviewer declined to release."""
+    conn = _open(path)
+    try:
+        sql = f"SELECT {_COLUMNS} FROM audit_events WHERE event_type = 'hitl_decision' AND json_extract(data, '$.released') = 0"
+        params: list[Any] = []
+        if workspace_id:
+            sql += " AND workspace_id = ?"
+            params.append(workspace_id)
+        sql += " ORDER BY seq DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "seq": seq,
+            "ts": ts,
+            "workspace_id": workspace_id_,
+            "session_id": session_id,
+            "data": json.loads(data),
+        }
+        for seq, ts, _event, workspace_id_, session_id, data, _prev, _hash in rows
+    ]
+
+
 def count_events_since(
     event_type: str,
     json_field: str,
@@ -195,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("verify", help="Recompute the hash chain and report the first broken record")
     sub.add_parser("head", help="Print the newest record hash for external anchoring")
+    feedback = sub.add_parser("feedback", help="List answers reviewers rejected, with their reasons")
+    feedback.add_argument("-n", type=int, default=20)
+    feedback.add_argument("--workspace")
     tail = sub.add_parser("tail", help="Show recent events as JSON lines")
     tail.add_argument("-n", type=int, default=20, help="Number of events to show")
     tail.add_argument("--workspace", help="Only show events for this workspace")
@@ -210,6 +239,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "head":
         print(head_hash())
+        return 0
+
+    if args.command == "feedback":
+        rejections = list_rejections(limit=args.n, workspace_id=args.workspace)
+        if not rejections:
+            print("No rejected answers recorded.")
+        for item in rejections:
+            data = item["data"]
+            print(f"{item['ts']} [{item['workspace_id']}] approver={data.get('approver') or '-'}")
+            print(f"  reason: {data.get('reason') or '(none given)'}")
+            print(f"  groundedness: {data.get('groundedness_ratio')}  degraded: {data.get('degraded') or 'no'}")
+            print(f"  citations: {', '.join(data.get('citations', [])) or 'none'}")
         return 0
 
     for event in reversed(list_events(limit=args.n, workspace_id=args.workspace)):
