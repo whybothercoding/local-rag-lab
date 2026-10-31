@@ -12,6 +12,11 @@ from workspace_manager import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_knowledge_base(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("workspace_manager.KNOWLEDGE_BASE_DIR", str(tmp_path / "knowledge_base"))
+
+
 def test_sanitize_workspace_id():
     assert sanitize_workspace_id("Accounting & Finance") == "accounting_finance"
     assert sanitize_workspace_id("Workspace---2026!!!") == "workspace_2026"

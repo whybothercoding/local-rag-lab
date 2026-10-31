@@ -94,14 +94,14 @@ The ingestion pipeline handles multi-format file parsing, character chunking, an
 ## 6. Developer Workflows & Commands
 
 ```bash
-# Bootstrap entire environment (venv, deps, postgres container, model pull)
+# Create venv and install pure-Python dependencies (no Docker or model daemon required)
 make setup
 
 # Run the test suite (15 tests: engine, workspace manager, file parsers, integration)
 make test
 
-# Ingest default bundles via CLI
-make ingest
+# Discover and index every workspace folder under knowledge_base/ (idempotent)
+make sync
 
 # Launch Streamlit interface
 make ui

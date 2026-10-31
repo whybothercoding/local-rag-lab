@@ -12,6 +12,7 @@ from langchain_core.embeddings import Embeddings
 from config import (
     EMBED_MODEL,
     EMBEDDING_PROVIDER,
+    FASTEMBED_MODEL,
     MODELS_DIR,
     OLLAMA_BASE_URL,
 )
@@ -26,7 +27,7 @@ class LocalFastEmbeddings(Embeddings):
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-small-en-v1.5",
+        model_name: str = FASTEMBED_MODEL,
         cache_dir: str | None = None,
     ) -> None:
         self.model_name = model_name
@@ -54,6 +55,17 @@ class LocalFastEmbeddings(Embeddings):
         if not vectors:
             return []
         return vectors[0].tolist()
+
+
+def embedding_fingerprint(provider: str | None = None) -> str:
+    """Identify the embedding model that produced stored vectors.
+
+    Stored in ingestion manifests so a model change forces re-indexing.
+    """
+    active_provider = (provider or EMBEDDING_PROVIDER).lower().strip()
+    if active_provider == "ollama":
+        return f"ollama:{EMBED_MODEL}"
+    return f"fastembed:{FASTEMBED_MODEL}"
 
 
 def get_embedding_model(provider: str | None = None) -> Embeddings:

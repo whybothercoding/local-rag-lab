@@ -19,7 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import workspace_manager
 from config import MAX_SOURCE_BYTES
-from embedding_provider import get_embedding_model
+from embedding_provider import embedding_fingerprint, get_embedding_model
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
 from sparse_search import index_sparse_chunks
 from workspace_manager import ensure_base_dirs, sanitize_workspace_id
@@ -112,7 +112,9 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
     raw_docs: list[dict] = []
     skipped: list[str] = []
     files = sorted(
-        path for path in source_path.rglob("*") if path.is_file() and not path.name.startswith(".")
+        path
+        for path in source_path.rglob("*")
+        if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
     )
     for file_path in files:
         relative = str(file_path.relative_to(source_path))
@@ -178,6 +180,7 @@ def ingest_workspace(
             manifest.get("files") == file_hashes
             and manifest.get("chunk_size") == chunk_size
             and manifest.get("chunk_overlap") == chunk_overlap
+            and manifest.get("embedding") == embedding_fingerprint()
         ):
             try:
                 client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
@@ -257,6 +260,7 @@ def ingest_workspace(
         "files": file_hashes,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
+        "embedding": embedding_fingerprint(),
         "total_chunks": len(chunks),
         "total_docs": len(raw_docs),
     })
@@ -289,10 +293,26 @@ def _print_result(result: IngestResult) -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Multi-tenant knowledge ingestion")
-    parser.add_argument("--workspace", required=True, help="Workspace name, for example accounting")
-    parser.add_argument("--dir", required=True, help="Directory of source documents")
+    parser.add_argument("--workspace", required=False, help="Workspace name, for example accounting")
+    parser.add_argument("--dir", required=False, help="Directory of source documents")
+    parser.add_argument("--all", action="store_true", help="Auto-discover and sync all workspaces in knowledge_base/")
     parser.add_argument("--force", action="store_true", help="Force re-indexing even if files are unchanged")
     args = parser.parse_args()
+
+    if args.all or not args.workspace:
+        from workspace_manager import sync_all_workspaces
+        print("Discovering and syncing all workspaces in knowledge_base/...")
+        outcomes = sync_all_workspaces(force=args.force)
+        if not outcomes:
+            print("No workspace directories found under knowledge_base/.")
+            sys.exit(0)
+        for ws, outcome in outcomes.items():
+            _print_result(outcome)
+        sys.exit(0 if all(o.ok for o in outcomes.values()) else 1)
+
+    if not args.dir:
+        print("Error: --dir is required when specifying a single --workspace.")
+        sys.exit(1)
 
     outcome = ingest_workspace(args.workspace, args.dir, force=args.force)
     _print_result(outcome)

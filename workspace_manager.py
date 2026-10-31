@@ -3,7 +3,8 @@ import logging
 import os
 import re
 import shutil
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import List, Dict, Any, Tuple
 import chromadb
 from psycopg_pool import ConnectionPool
 
@@ -12,6 +13,7 @@ from config import (
     CHROMA_PATH as _CHROMA_PATH,
     DB_URI as _DB_URI,
     UPLOADS_DIR as _UPLOADS_DIR,
+    KNOWLEDGE_BASE_DIR as _KNOWLEDGE_BASE_DIR,
 )
 from checkpointer import is_postgres_uri, get_sqlite_path
 from sparse_search import delete_sparse_index, has_sparse_index
@@ -20,6 +22,7 @@ from sparse_search import delete_sparse_index, has_sparse_index
 CHROMA_PATH = _CHROMA_PATH
 BM25_DIR = _BM25_DIR
 UPLOADS_DIR = _UPLOADS_DIR
+KNOWLEDGE_BASE_DIR = _KNOWLEDGE_BASE_DIR
 DB_URI = _DB_URI
 
 logger = logging.getLogger("workspace_manager")
@@ -75,7 +78,53 @@ def list_workspaces() -> List[str]:
             if os.path.isdir(full_path) and not entry.startswith("."):
                 workspaces.add(entry)
 
+    # 4. Discover knowledge_base folders (same rules as sync)
+    for ws_id, _ in discover_knowledge_base_workspaces():
+        workspaces.add(ws_id)
+
     return sorted(list(workspaces))
+
+
+def discover_knowledge_base_workspaces(base_dir: str | None = None) -> list[Tuple[str, str]]:
+    """Return (workspace_id, directory) for each plain folder under knowledge_base/.
+
+    Symlinked folders are skipped so a link cannot pull content from outside the tree.
+    When two folder names sanitize to the same ID, the first one wins.
+    """
+    kb_path = Path(base_dir or KNOWLEDGE_BASE_DIR)
+    if not kb_path.is_dir():
+        return []
+
+    discovered: list[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in sorted(kb_path.iterdir()):
+        if entry.is_symlink() or not entry.is_dir() or entry.name.startswith((".", "_")):
+            continue
+        ws_id = sanitize_workspace_id(entry.name)
+        if not ws_id:
+            continue
+        if ws_id in seen:
+            logger.warning("Skipping '%s': workspace id '%s' is already used by another folder.", entry.name, ws_id)
+            continue
+        seen.add(ws_id)
+        discovered.append((ws_id, str(entry)))
+    return discovered
+
+
+def sync_all_workspaces(
+    base_dir: str | None = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Scan knowledge_base/ directory and automatically index all discovered workspaces.
+
+    Idempotent: Uses content-addressable SHA-256 manifests to skip unchanged files.
+    """
+    from ingest import ingest_workspace
+    discovered = discover_knowledge_base_workspaces(base_dir)
+    results = {}
+    for ws_id, dir_path in discovered:
+        results[ws_id] = ingest_workspace(ws_id, dir_path, force=force)
+    return results
 
 
 def create_workspace(raw_name: str) -> str:

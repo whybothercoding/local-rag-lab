@@ -30,11 +30,13 @@ OLLAMA_MODEL = CHAT_MODEL
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
 
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "fastembed")
+FASTEMBED_MODEL = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
 MODELS_DIR = os.getenv("MODELS_DIR", str(ROOT / "models"))
 
 CHROMA_PATH = os.getenv("CHROMA_PATH", str(ROOT / "chroma_data"))
 BM25_DIR = os.getenv("BM25_DIR", str(ROOT / "bm25_indices"))
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", str(ROOT / "uploads"))
+KNOWLEDGE_BASE_DIR = os.getenv("KNOWLEDGE_BASE_DIR", str(ROOT / "knowledge_base"))
 
 # Keep source files bounded so one huge upload cannot exhaust memory.
 MAX_SOURCE_BYTES = int(os.getenv("MAX_SOURCE_BYTES", str(25 * 1024 * 1024)))
