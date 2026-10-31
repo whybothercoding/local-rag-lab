@@ -87,15 +87,36 @@ def process_decision(app, thread_id: str, decision: str, approver: str, reason: 
     print(f"Final Emitted Output:\n{final_state.values.get('generation')}\n")
 
 
+MAX_SIGN_IN_ATTEMPTS = 3
+
+
 def confirm_reviewer(state, preset: str | None) -> str:
-    """Authenticate the reviewer by password and check their review grant on the thread's workspace."""
-    name = (preset or input("Reviewer ID: ")).strip().lower()
-    password = getpass.getpass(f"Password for {name}: ")
-    if not authenticate(name, password):
-        sys.exit("Authentication failed. No decision recorded.")
+    """Sign the reviewer in with their account password, then check their review grant on this thread's workspace."""
     workspace = state.values.get("workspace_id", "")
+    print("\nTo record this decision, sign in with the reviewer account.")
+    print("Enter the account name and the password set for that account.")
+    print("Forgot the password? An administrator can reset it with: python access.py set-password <name>")
+    print("Unsure of the account name? List accounts with: python access.py list")
+    print("Press Ctrl-C at any time to cancel. Nothing is recorded and the query stays in the queue.\n")
+
+    try:
+        name = (preset or input("Account name: ")).strip().lower()
+        for attempt in range(1, MAX_SIGN_IN_ATTEMPTS + 1):
+            password = getpass.getpass(f"Password for '{name}': ")
+            if authenticate(name, password):
+                break
+            remaining = MAX_SIGN_IN_ATTEMPTS - attempt
+            if remaining == 0:
+                sys.exit("Sign-in failed too many times. No decision recorded.")
+            print(f"Sign-in failed: the account name or password is wrong. Attempts left: {remaining}.")
+    except (KeyboardInterrupt, EOFError):
+        sys.exit("\nCancelled. No decision recorded; the query is still waiting for review.")
+
     if not authorize(name, workspace, "review"):
-        sys.exit(f"'{name}' has no review permission on workspace '{workspace}'. No decision recorded.")
+        sys.exit(
+            f"'{name}' signed in but has no review permission on workspace '{workspace}'. "
+            "No decision recorded."
+        )
     return name
 
 

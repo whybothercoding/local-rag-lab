@@ -79,6 +79,7 @@ python access.py add-user alice --admin                 # administrator: creates
 python access.py add-user bob                           # analyst
 python access.py grant bob accounting --perms query,review
 python access.py list
+python access.py set-password bob                       # forgotten or shared password? reset it here
 ```
 
 Permissions are per workspace. `query` allows asking questions. `review` allows approving or rejecting answers, but never one's own. Access is denied by default.

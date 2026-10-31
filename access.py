@@ -119,14 +119,31 @@ def _normalize_username(raw: str) -> str:
     return name
 
 
-def add_user(username: str, password: str, admin: bool = False, path: str | None = None) -> None:
-    name = _normalize_username(username)
+def _check_password_length(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Passwords must be at least {MIN_PASSWORD_LENGTH} characters.")
+
+
+def add_user(username: str, password: str, admin: bool = False, path: str | None = None) -> None:
+    name = _normalize_username(username)
+    _check_password_length(password)
     policy = load_policy(path)
     if name in policy["users"]:
-        raise ValueError(f"User '{name}' already exists.")
+        raise ValueError(
+            f"User '{name}' already exists. To reset the password, run: python access.py set-password {name}"
+        )
     policy["users"][name] = {"password_hash": hash_password(password), "admin": admin, "grants": {}}
+    save_policy(policy, path)
+
+
+def set_password(username: str, password: str, path: str | None = None) -> None:
+    """Set or reset an account's password. Existing grants and admin status are kept."""
+    name = _normalize_username(username)
+    _check_password_length(password)
+    policy = load_policy(path)
+    if name not in policy["users"]:
+        raise ValueError(f"User '{name}' does not exist.")
+    policy["users"][name]["password_hash"] = hash_password(password)
     save_policy(policy, path)
 
 
@@ -157,7 +174,8 @@ def list_users(path: str | None = None) -> list[dict[str, Any]]:
     ]
 
 
-def _prompt_new_password() -> str:
+def _prompt_new_password(username: str) -> str:
+    print(f"Choose a password for '{username.strip().lower()}' (at least {MIN_PASSWORD_LENGTH} characters).")
     first = getpass.getpass("New password: ")
     second = getpass.getpass("Repeat password: ")
     if first != second:
@@ -182,13 +200,19 @@ def main(argv: list[str] | None = None) -> int:
     revoke.add_argument("username")
     revoke.add_argument("workspace")
 
+    reset = sub.add_parser("set-password", help="Set or reset an account's password (prompts)")
+    reset.add_argument("username")
+
     sub.add_parser("list", help="Show accounts and grants (never password hashes)")
 
     args = parser.parse_args(argv)
     try:
         if args.command == "add-user":
-            add_user(args.username, _prompt_new_password(), admin=args.admin)
+            add_user(args.username, _prompt_new_password(args.username), admin=args.admin)
             print(f"Created user '{args.username.lower()}'{' (admin)' if args.admin else ''}.")
+        elif args.command == "set-password":
+            set_password(args.username, _prompt_new_password(args.username))
+            print(f"Password updated for '{args.username.lower()}'. Existing grants are unchanged.")
         elif args.command == "grant":
             perms = [p.strip() for p in args.perms.split(",") if p.strip()]
             set_grant(args.username, args.workspace, perms)

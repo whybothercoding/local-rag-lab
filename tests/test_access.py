@@ -140,24 +140,79 @@ def test_guardrail_denies_anonymous_caller():
     assert result["is_safe"] is False
 
 
-def test_cli_reviewer_must_authenticate_and_hold_review_grant(mocker):
+@pytest.fixture
+def thread_state():
     from types import SimpleNamespace
 
+    return SimpleNamespace(values={"workspace_id": "default"})
+
+
+def test_cli_reviewer_signs_in_with_correct_password(mocker, thread_state, capsys):
     import approve
 
-    state = SimpleNamespace(values={"workspace_id": "default"})
-
     mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
-    assert approve.confirm_reviewer(state, "bob") == "bob"
+    assert approve.confirm_reviewer(thread_state, "bob") == "bob"
+    assert "Forgot the password" in capsys.readouterr().out
 
-    mocker.patch("approve.getpass.getpass", return_value="wrong-password-value")
-    with pytest.raises(SystemExit, match="Authentication failed"):
-        approve.confirm_reviewer(state, "bob")
 
-    # carol authenticates correctly but has query-only access, so she cannot decide.
+def test_cli_reviewer_gets_attempts_left_and_can_retry(mocker, thread_state, capsys):
+    import approve
+
+    mocker.patch("approve.getpass.getpass", side_effect=["wrong-password-value", TEST_PASSWORD])
+    assert approve.confirm_reviewer(thread_state, "bob") == "bob"
+    assert "Attempts left: 2" in capsys.readouterr().out
+
+
+def test_cli_reviewer_is_refused_after_three_failures(mocker, thread_state):
+    import approve
+
+    prompt = mocker.patch("approve.getpass.getpass", return_value="wrong-password-value")
+    with pytest.raises(SystemExit, match="too many times"):
+        approve.confirm_reviewer(thread_state, "bob")
+    assert prompt.call_count == 3
+
+
+def test_cli_reviewer_can_cancel_without_recording_anything(mocker, thread_state):
+    import approve
+
+    mocker.patch("approve.getpass.getpass", side_effect=KeyboardInterrupt)
+    with pytest.raises(SystemExit, match="Cancelled"):
+        approve.confirm_reviewer(thread_state, "bob")
+
+
+def test_cli_reviewer_needs_review_grant_even_with_correct_password(mocker, thread_state):
+    import approve
+
     mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
     with pytest.raises(SystemExit, match="no review permission"):
-        approve.confirm_reviewer(state, "carol")
+        approve.confirm_reviewer(thread_state, "carol")
+
+
+def test_password_reset_keeps_grants(policy_path):
+    from access import set_password
+
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+    set_grant("erin", "accounting", ["query", "review"], path=policy_path)
+
+    new_password = "a-new-long-password"
+    set_password("erin", new_password, path=policy_path)
+
+    assert authenticate("erin", new_password, path=policy_path)
+    assert not authenticate("erin", TEST_PASSWORD, path=policy_path)
+    assert authorize("erin", "accounting", "review", path=policy_path)
+
+
+def test_password_reset_requires_an_existing_account(policy_path):
+    from access import set_password
+
+    with pytest.raises(ValueError, match="does not exist"):
+        set_password("nobody", "a-new-long-password", path=policy_path)
+
+
+def test_adding_an_existing_user_points_to_password_reset(policy_path):
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+    with pytest.raises(ValueError, match="set-password erin"):
+        add_user("erin", TEST_PASSWORD, path=policy_path)
 
 
 def test_reviewer_without_grant_cannot_release_an_answer(mocker):

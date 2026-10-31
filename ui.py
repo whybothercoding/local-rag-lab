@@ -47,7 +47,7 @@ def login_gate() -> None:
         if authenticate(name, password):
             st.session_state.user = name
             st.rerun()
-        st.error("Invalid username or password.")
+        st.error("Invalid username or password. Forgot it? Ask an administrator to reset it (access.py set-password <name>).")
     st.stop()
 
 
