@@ -91,4 +91,5 @@ audit-feedback:
 # 14. Clean caches and test artifacts
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
-	rm -rf .pytest_cache .coverage
+	find . -type f -name ".DS_Store" -delete
+	rm -rf .pytest_cache .coverage htmlcov eval/out *.log

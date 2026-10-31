@@ -2,14 +2,21 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
 
-# Virtual environments
+# Virtual environments & local environment configs
 venv/
+.venv/
 env/
 .env
+.env.local
 models/
 
-# ChromaDB vector store & indices (local storage)
+# ChromaDB vector store, sparse indices & runtime data
 chroma_data/
 chroma_db/
 bm25_indices/
@@ -18,21 +25,47 @@ data/
 *.db
 *.db-wal
 *.db-shm
+postgres_data/
 
-# Backups hold governance data; keys are never copied into them
-backups/
-
-# Local accounts (password hashes) and offline evaluation output
+# Security keys & access policy (runtime generated & sensitive)
 access_policy.json
+*.key
+
+# Backups & exports (governance data)
+backups/
+*.backup
+
+# Offline evaluation output & temporary reports
 eval/out/
 
-# Pytest & coverage caches
+# Testing, type-checking & coverage caches
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# macOS system metadata
+# Logs & scratch files
+*.log
+scratch/
+
+# IDE & Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System metadata
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
 
 # Exported raster artifacts (keep .mmd in git, ignore generated binaries)
 docs/*.png
