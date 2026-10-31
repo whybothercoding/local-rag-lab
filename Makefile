@@ -1,4 +1,4 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui clean
+.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -46,7 +46,15 @@ ui:
 	-./venv/bin/python ingest.py --all
 	./venv/bin/streamlit run ui.py
 
-# 10. Clean caches and test artifacts
+# 10. Verify the audit hash chain (exits non-zero if any record was altered or removed)
+audit-verify:
+	./venv/bin/python audit.py verify
+
+# 11. Show the 20 most recent audit events
+audit-tail:
+	./venv/bin/python audit.py tail -n 20
+
+# 12. Clean caches and test artifacts
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf .pytest_cache .coverage

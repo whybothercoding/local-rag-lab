@@ -63,12 +63,17 @@ def inspect_thread(app, thread_id: str):
     return state
 
 
-def process_decision(app, thread_id: str, decision: str):
-    """Resumes the graph from Postgres using the operator's decision."""
+def process_decision(app, thread_id: str, decision: str, approver: str, reason: str = ""):
+    """Resumes the graph with the operator's decision and the reviewer identity the audit log records."""
     config = {"configurable": {"thread_id": thread_id}}
-    resume_cmd = Command(resume=decision.strip().lower())
+    payload = {
+        "decision": decision.strip().lower(),
+        "approver": approver.strip(),
+        "reason": reason.strip(),
+    }
+    resume_cmd = Command(resume=payload)
 
-    logger.info(f"Submitting '{decision}' decision to thread: {thread_id}...")
+    logger.info(f"Submitting '{payload['decision']}' by {payload['approver']} to thread: {thread_id}...")
     for event in app.stream(resume_cmd, config=config):
         for node_name, state_update in event.items():
             logger.info(f"Post-approval Node Completed: [{node_name}]")
@@ -81,10 +86,12 @@ def process_decision(app, thread_id: str, decision: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Human-in-the-Loop CLI Operator for Postgres Checkpoints")
+    parser = argparse.ArgumentParser(description="Human-in-the-Loop CLI Operator for Checkpoints")
     parser.add_argument("--list", action="store_true", help="List all threads awaiting human review")
     parser.add_argument("--thread", type=str, help="Thread ID to inspect or approve/reject")
     parser.add_argument("--action", type=str, choices=["approved", "rejected"], help="Decision action to apply")
+    parser.add_argument("--approver", type=str, help="Reviewer identity recorded in the audit log (required to decide)")
+    parser.add_argument("--reason", type=str, default="", help="Optional reason recorded in the audit log")
     args = parser.parse_args()
 
     with get_checkpointer() as checkpointer:
@@ -104,9 +111,11 @@ def main():
 
         # Mode 2: Direct approval/rejection via CLI args
         if args.thread and args.action:
+            if not args.approver:
+                parser.error("--approver is required when approving or rejecting")
             state = inspect_thread(app, args.thread)
             if state:
-                process_decision(app, args.thread, args.action)
+                process_decision(app, args.thread, args.action, args.approver, args.reason)
             return
 
         # Mode 3: Interactive approval
@@ -123,11 +132,16 @@ def main():
         if not state:
             sys.exit(1)
 
+        approver = args.approver or input("Reviewer ID (recorded in the audit log): ").strip()
+        if not approver:
+            print("A reviewer ID is required. Aborted without changes.")
+            sys.exit(1)
+
         choice = input("Enter decision ('a' for approve / 'r' for reject / 'q' to abort): ").strip().lower()
         if choice in ["a", "approve", "approved"]:
-            process_decision(app, target_thread, "approved")
+            process_decision(app, target_thread, "approved", approver, args.reason)
         elif choice in ["r", "reject", "rejected"]:
-            process_decision(app, target_thread, "rejected")
+            process_decision(app, target_thread, "rejected", approver, args.reason)
         else:
             print("Aborted without changes.")
 

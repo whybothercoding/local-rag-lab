@@ -7,6 +7,8 @@ from langchain_core.runnables import RunnableConfig
 from app import workflow, DB_URI, GraphState
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
+REVIEW = {"decision": "approved", "approver": "integration-test", "reason": "automated check"}
+
 
 def is_postgres_available() -> bool:
     """Quick check to avoid 30-second pytest hanging if PostgreSQL container is off."""
@@ -29,6 +31,7 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
 
         inputs: GraphState = {
             "workspace_id": "default",
+            "session_id": "test-sqlite-thread-001",
             "question": "What is our company rollback SLA?",
             "original_question": "What is our company rollback SLA?",
             "sanitized_question": "",
@@ -57,8 +60,8 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
         threads = fetch_checkpoint_threads(uri=sqlite_uri)
         assert "test-sqlite-thread-001" in threads
 
-        # Resume with human approval
-        for _ in engine.stream(Command(resume="approved"), config=config):
+        # Resume with a named reviewer
+        for _ in engine.stream(Command(resume=REVIEW), config=config):
             pass
 
         final_state = engine.get_state(config)
@@ -77,6 +80,7 @@ def test_full_pipeline_to_postgres_and_approve_cli():
 
         inputs: GraphState = {
             "workspace_id": "default",
+            "session_id": "test-integration-thread-001",
             "question": "What is our company rollback SLA?",
             "original_question": "What is our company rollback SLA?",
             "sanitized_question": "",
@@ -101,8 +105,8 @@ def test_full_pipeline_to_postgres_and_approve_cli():
         state = engine.get_state(config)
         assert state.next == ("human_approval",)
 
-        # Resume with human approval
-        for _ in engine.stream(Command(resume="approved"), config=config):
+        # Resume with a named reviewer
+        for _ in engine.stream(Command(resume=REVIEW), config=config):
             pass
 
         final_state = engine.get_state(config)

@@ -1,11 +1,13 @@
 import streamlit as st
 import uuid
 import os
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
-from app import workflow, DB_URI
+from app import workflow, DB_URI, GraphState
 from checkpointer import get_checkpointer
 from ingest import ingest_workspace
+from redaction import redact_pii
 from workspace_manager import (
     list_workspaces,
     create_workspace,
@@ -24,6 +26,49 @@ def render_citations(citations):
     with st.expander("Retrieved Source Citations", expanded=False):
         for idx, citation in enumerate(citations, 1):
             st.markdown(f"**[{idx}]** `{citation}`")
+
+
+def pending_review_panel(engine, config) -> bool:
+    """Render the compliance gate when the thread is paused. Returns True while a decision is pending.
+
+    Runs on every rerun, not only after a chat submission, so the buttons still work
+    after Streamlit reruns the script on click.
+    """
+    state = engine.get_state(config)
+    if state.next != ("human_approval",):
+        return False
+
+    st.warning("Action Required: Candidate answer paused at compliance approval gate.")
+    st.text_area("Candidate Output", value=state.values.get("generation", ""), height=130, disabled=True)
+    render_citations(state.values.get("citations", []))
+
+    reviewer = st.text_input("Reviewer ID (required; recorded in the audit log)", key="reviewer_id").strip()
+    reason = st.text_input("Reason (optional)", key="review_reason").strip()
+
+    col1, col2 = st.columns(2)
+    approve_clicked = col1.button("Approve Output", disabled=not reviewer)
+    reject_clicked = col2.button("Reject Output", disabled=not reviewer)
+
+    if approve_clicked or reject_clicked:
+        decision = "approved" if approve_clicked else "rejected"
+        resume = {"decision": decision, "approver": reviewer, "reason": reason}
+        for _ in engine.stream(Command(resume=resume), config=config):
+            pass
+        if decision == "approved":
+            final_state = engine.get_state(config)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": final_state.values.get("generation", ""),
+                "citations": final_state.values.get("citations", []),
+            })
+        else:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "[Rejected by reviewer]",
+                "citations": [],
+            })
+        st.rerun()
+    return True
 
 
 # --- SIDEBAR: WORKSPACE CONTROLS ---
@@ -101,22 +146,24 @@ for msg in st.session_state.messages:
         if msg.get("citations"):
             render_citations(msg["citations"])
 
-user_query = st.chat_input(f"Ask a question grounded in '{active_ws}'...")
+config: RunnableConfig = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-if user_query:
-    st.session_state.messages.append({"role": "user", "content": user_query})
-    with st.chat_message("user"):
-        st.write(user_query)
+with get_checkpointer() as checkpointer:
+    engine = workflow.compile(checkpointer=checkpointer)
+    paused = pending_review_panel(engine, config)
+    user_query = st.chat_input(f"Ask a question grounded in '{active_ws}'...", disabled=paused)
 
-    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+    if user_query:
+        st.session_state.messages.append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.write(user_query)
 
-    with get_checkpointer() as checkpointer:
-        engine = workflow.compile(checkpointer=checkpointer)
-
-        inputs = {
+        inputs: GraphState = {
             "workspace_id": active_ws,
-            "question": user_query,
-            "original_question": user_query,
+            "session_id": st.session_state.thread_id,
+            # Redacted before submission: LangGraph persists the input in the checkpoint before any node runs.
+            "question": redact_pii(user_query),
+            "original_question": redact_pii(user_query),
             "sanitized_question": "",
             "documents": [],
             "citations": [],
@@ -138,41 +185,17 @@ if user_query:
 
         state = engine.get_state(config)
 
-        # HITL Interruption Checkpoint
         if state.next == ("human_approval",):
-            st.warning("Action Required: Candidate answer paused at compliance approval gate.")
-            candidate = state.values.get("generation", "")
-            citations = state.values.get("citations", [])
+            # The review panel renders on the next run.
+            st.rerun()
 
-            st.text_area("Candidate Output", value=candidate, height=130, disabled=True)
+        ans = state.values.get("generation", "No answer generated.")
+        citations = state.values.get("citations", [])
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": ans,
+            "citations": citations
+        })
+        with st.chat_message("assistant"):
+            st.write(ans)
             render_citations(citations)
-
-            col1, col2 = st.columns(2)
-            if col1.button("Approve Output"):
-                for _ in engine.stream(Command(resume="approved"), config=config):
-                    pass
-                final_state = engine.get_state(config)
-                ans = final_state.values.get("generation", "")
-                cits = final_state.values.get("citations", [])
-                st.session_state.messages.append({"role": "assistant", "content": ans, "citations": cits})
-                st.rerun()
-            if col2.button("Reject Output"):
-                for _ in engine.stream(Command(resume="rejected"), config=config):
-                    pass
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": "[Rejected by reviewer]",
-                    "citations": []
-                })
-                st.rerun()
-        else:
-            ans = state.values.get("generation", "No answer generated.")
-            citations = state.values.get("citations", [])
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": ans,
-                "citations": citations
-            })
-            with st.chat_message("assistant"):
-                st.write(ans)
-                render_citations(citations)

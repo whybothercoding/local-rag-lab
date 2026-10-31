@@ -110,6 +110,17 @@ From the web browser (`http://localhost:8501`), you can:
 - **Switch Bundles**: Select an active workspace from the sidebar.
 - **Create / Delete Bundles**: Manage staging folders, indices, and vector collections directly.
 - **Upload Documents**: Drag and drop `.pdf`, `.docx`, `.txt`, and `.md` files to index them on the fly.
+
+### Audit Trail
+
+Every query, groundedness check, retrieval, and human decision is written to `data/audit.db` (override with `AUDIT_DB_PATH`).
+
+- **Append-only and hash-chained.** Each record commits to the one before it, and `UPDATE` and `DELETE` are rejected by triggers. Editing or removing any row breaks verification from that point on.
+- **Redacted by default.** Emails and phone numbers are masked before anything is written.
+- **Attributed decisions.** Reviewers must enter a reviewer ID to approve or reject. An approval without one is recorded as a rejection and is not released.
+- **Fail-closed.** If an event cannot be written, the answer is not released.
+- **Verify:** `make audit-verify` exits non-zero when the chain is broken. Recent events: `make audit-tail`.
+- **Known limit:** the chain cannot detect truncation of the newest records. Copy the output of `python audit.py head` to an external store on a schedule to close that gap.
 - **Review Citations**: Inspect expandable source citation drawers beneath responses.
 - **Approve / Reject Outputs**: Handle compliance review checkpoints interactively when answers trigger review gates.
 

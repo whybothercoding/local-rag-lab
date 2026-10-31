@@ -42,6 +42,7 @@ CHROMA_PATH = os.getenv("CHROMA_PATH", str(ROOT / "chroma_data"))
 BM25_DIR = os.getenv("BM25_DIR", str(ROOT / "bm25_indices"))
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", str(ROOT / "uploads"))
 KNOWLEDGE_BASE_DIR = os.getenv("KNOWLEDGE_BASE_DIR", str(ROOT / "knowledge_base"))
+AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", str(ROOT / "data" / "audit.db"))
 
 # Keep source files bounded so one huge upload cannot exhaust memory.
 MAX_SOURCE_BYTES = int(os.getenv("MAX_SOURCE_BYTES", str(25 * 1024 * 1024)))

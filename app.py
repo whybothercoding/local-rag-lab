@@ -18,13 +18,16 @@ from config import (
     CHROMA_PATH,
     BM25_DIR,
 )
+from audit import record as audit_record
 from embedding_provider import get_embedding_model
 from llm_provider import get_chat_llm
+from redaction import redact_pii
 from sparse_search import search_sparse_chunks
 
 
 class GraphState(TypedDict, total=False):
     workspace_id: str
+    session_id: str
     question: str
     original_question: str
     sanitized_question: str
@@ -44,6 +47,10 @@ class GraphState(TypedDict, total=False):
 
 StateInput = GraphState | dict[str, Any]
 SEMANTIC_CACHE: dict[str, str] = {}
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # --- HELPER: RECIPROCAL RANK FUSION (RRF) ---
@@ -77,8 +84,11 @@ def reciprocal_rank_fusion(
 # --- NODES ---
 
 def guardrail_input_node(state: StateInput) -> dict[str, Any]:
+    # Callers must pass redacted input: the checkpoint stores the submitted state before this node runs.
     t0 = time.perf_counter()
     raw = state.get("question", "")
+    ws_id = state.get("workspace_id", "default")
+    session_id = state.get("session_id", "")
     telemetry = dict(state.get("telemetry", {}))
 
     adversarial_patterns = [
@@ -90,20 +100,27 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     for pattern in adversarial_patterns:
         if re.search(pattern, raw, re.IGNORECASE):
             telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+            safe_query = redact_pii(raw)
+            audit_record(
+                "query_received",
+                workspace_id=ws_id,
+                session_id=session_id,
+                data={"status": "blocked", "reason": "prompt_injection", "query": safe_query},
+            )
             return {
                 "is_safe": False,
                 "generation": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
-                "sanitized_question": raw,
+                "sanitized_question": safe_query,
                 "telemetry": telemetry,
             }
 
-    # PII sanitization: email and phone redaction
-    sanitized = re.sub(
-        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        "[REDACTED_EMAIL]",
-        raw,
+    sanitized = redact_pii(raw)
+    audit_record(
+        "query_received",
+        workspace_id=ws_id,
+        session_id=session_id,
+        data={"status": "accepted", "query": sanitized},
     )
-    sanitized = re.sub(r"\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b", "[REDACTED_PHONE]", sanitized)
 
     telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     return {
@@ -123,9 +140,16 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     telemetry["cache_lookup_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     if key in SEMANTIC_CACHE:
         telemetry["cache_hit"] = True
+        cached = SEMANTIC_CACHE[key]
+        audit_record(
+            "cache_hit",
+            workspace_id=ws_id,
+            session_id=state.get("session_id", ""),
+            data={"query": query, "answer_sha256": _sha256(cached)},
+        )
         return {
             "cache_hit": True,
-            "generation": SEMANTIC_CACHE[key],
+            "generation": cached,
             "telemetry": telemetry,
         }
 
@@ -143,6 +167,12 @@ def router_node(state: StateInput) -> dict[str, Any]:
 
 
 def chitchat_node(state: StateInput) -> dict[str, Any]:
+    audit_record(
+        "chitchat",
+        workspace_id=state.get("workspace_id", "default"),
+        session_id=state.get("session_id", ""),
+        data={"query": state.get("sanitized_question", "")},
+    )
     return {
         "generation": "Hello! I am your local enterprise knowledge assistant. Ask me anything grounded in your active workspace."
     }
@@ -200,6 +230,18 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     telemetry["dense_candidates_count"] = len(dense_candidates)
     telemetry["sparse_candidates_count"] = len(sparse_candidates)
     telemetry["fused_chunks_count"] = len(chunks_found)
+
+    audit_record(
+        "retrieval",
+        workspace_id=ws_id,
+        session_id=state.get("session_id", ""),
+        data={
+            "citations": citations,
+            "dense_candidates": len(dense_candidates),
+            "sparse_candidates": len(sparse_candidates),
+            "retry_count": state.get("retry_count", 0),
+        },
+    )
 
     return {
         "documents": chunks_found,
@@ -260,21 +302,36 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     gen = state.get("generation", "")
     docs = state.get("documents", [])
     retries = state.get("retry_count", 0)
+    telemetry = dict(state.get("telemetry", {}))
 
-    if not docs:
-        return {"hallucination_status": "grounded"}
+    status = "grounded"
+    update: dict[str, Any] = {}
+    ratio: float | None = None
 
-    doc_words = set(" ".join(docs).lower().split())
-    gen_words = [w for w in gen.lower().split() if len(w) > 3]
+    if docs:
+        doc_words = set(" ".join(docs).lower().split())
+        gen_words = [w for w in gen.lower().split() if len(w) > 3]
+        if gen_words:
+            ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
+            if ratio < 0.25:
+                if retries >= 2:
+                    status = "circuit_break"
+                else:
+                    status = "retry"
+                    update["retry_count"] = retries + 1
 
-    if gen_words:
-        grounded_ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
-        if grounded_ratio < 0.25:
-            if retries >= 2:
-                return {"hallucination_status": "circuit_break"}
-            return {"hallucination_status": "retry", "retry_count": retries + 1}
-
-    return {"hallucination_status": "grounded"}
+    telemetry["groundedness_ratio"] = None if ratio is None else round(ratio, 4)
+    audit_record(
+        "groundedness",
+        workspace_id=state.get("workspace_id", "default"),
+        session_id=state.get("session_id", ""),
+        data={
+            "status": status,
+            "groundedness_ratio": telemetry["groundedness_ratio"],
+            "retry_count": retries,
+        },
+    )
+    return {"hallucination_status": status, "telemetry": telemetry, **update}
 
 
 def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
@@ -291,12 +348,53 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     return {"relevance_status": "relevant"}
 
 
+def _normalize_decision(raw: Any) -> dict[str, str]:
+    """Accept the resume payload as a dict or a bare decision string (older callers)."""
+    payload = raw if isinstance(raw, dict) else {"decision": raw}
+    return {
+        "decision": str(payload.get("decision", "")).strip().lower(),
+        "approver": str(payload.get("approver", "")).strip(),
+        "reason": redact_pii(str(payload.get("reason", "")).strip()),
+    }
+
+
 def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
-    decision = interrupt("human_approval")
+    # The payload is what approve.py displays. It carries the redacted question, never the raw input.
+    review = _normalize_decision(interrupt({
+        "action": "human_approval",
+        "question": state.get("sanitized_question", ""),
+        "citations": state.get("citations", []),
+        "candidate_answer": state.get("generation", ""),
+    }))
+    gen = state.get("generation", "")
     history = list(state.get("history", []))
 
-    if decision == "approved":
-        gen = state.get("generation", "")
+    approved = review["decision"] == "approved"
+    if approved and not review["approver"]:
+        # An approval with no accountable reviewer is not released.
+        approved = False
+        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: no approver identity"]))
+
+    # Written before the answer is released, so a failed write releases nothing.
+    audit_record(
+        "hitl_decision",
+        workspace_id=state.get("workspace_id", "default"),
+        session_id=state.get("session_id", ""),
+        data={
+            "decision": "approved" if approved else "rejected",
+            "requested": review["decision"],
+            "approver": review["approver"],
+            "reason": review["reason"],
+            "released": approved,
+            "answer_sha256": _sha256(gen),
+            "citations": state.get("citations", []),
+            "groundedness_ratio": state.get("telemetry", {}).get("groundedness_ratio"),
+            "hallucination_status": state.get("hallucination_status", ""),
+            "relevance_status": state.get("relevance_status", ""),
+        },
+    )
+
+    if approved:
         history.append(f"Assistant: {gen}")
 
         q = state.get("sanitized_question", "")
@@ -305,10 +403,10 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         SEMANTIC_CACHE[key] = gen
 
         return {"generation": gen, "history": history}
-    else:
-        rejection_notice = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
-        history.append(f"Assistant: {rejection_notice}")
-        return {"generation": rejection_notice, "history": history}
+
+    rejection_notice = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
+    history.append(f"Assistant: {rejection_notice}")
+    return {"generation": rejection_notice, "history": history}
 
 
 # --- GRAPH EDGES & ROUTING ---

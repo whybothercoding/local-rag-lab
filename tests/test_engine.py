@@ -134,7 +134,7 @@ def test_telemetry_recorded_in_nodes():
 
 
 def test_hitl_node_approval(mocker):
-    mocker.patch("app.interrupt", return_value="approved")
+    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver": "alice"})
     SEMANTIC_CACHE.clear()
 
     state = {

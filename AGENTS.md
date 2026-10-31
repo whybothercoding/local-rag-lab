@@ -67,6 +67,7 @@ The ingestion pipeline handles multi-format file parsing, character chunking, an
 
 ### Graph State Schema (`GraphState`)
 * `workspace_id` (`str`): Target workspace bundle name.
+* `session_id` (`str`): Review-session identifier recorded with every audit event (`audit.py`).
 * `question` / `original_question` / `sanitized_question` (`str`): Query lifecycle states.
 * `documents` (`List[str]`): Retrieved raw context chunks.
 * `citations` (`List[str]`): Formatted provenance tags (`[chunk_id] source_file`).
