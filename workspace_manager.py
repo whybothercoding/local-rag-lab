@@ -121,7 +121,15 @@ def delete_workspace(raw_name: str) -> bool:
     # 2. Delete sparse index (SQLite FTS5 and legacy PKL)
     delete_sparse_index(ws_id, base_dir=BM25_DIR)
 
-    # 3. Delete uploaded source files
+    # 3. Delete manifest file if present
+    manifest_file = os.path.join(BM25_DIR, f"{ws_id}_manifest.json")
+    if os.path.exists(manifest_file):
+        try:
+            os.remove(manifest_file)
+        except OSError:
+            pass
+
+    # 4. Delete uploaded source files
     upload_path = os.path.join(UPLOADS_DIR, ws_id)
     if os.path.exists(upload_path):
         shutil.rmtree(upload_path, ignore_errors=True)

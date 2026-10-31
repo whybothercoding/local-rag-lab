@@ -1,0 +1,151 @@
+"""Pluggable LLM factory supporting Ollama, local OpenAI-compatible engines, and in-process synthesizer.
+
+Ensures the Local Enterprise Hub operates seamlessly:
+- Uses local Ollama (`qwen2.5-coder:7b`) when the daemon is active.
+- Connects to local OpenAI-compatible endpoints (vLLM, LM Studio, llama.cpp server) when configured.
+- Gracefully falls back to an in-process grounded context synthesizer when no external daemon is running.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any, List, Optional
+
+import httpx
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
+from config import (
+    CHAT_MODEL,
+    LLM_PROVIDER,
+    LOCAL_LLM_URL,
+    OLLAMA_BASE_URL,
+)
+
+logger = logging.getLogger("llm_provider")
+
+
+class DeterministicContextLLM(BaseChatModel):
+    """In-process, zero-dependency synthesizer that extracts and constructs answers
+
+    directly from provided context chunks. Used for air-gapped demo runs, testing,
+    and automatic fallback when local inference daemons are unreachable.
+    """
+
+    model_name: str = "deterministic-context-synthesizer"
+
+    def _extract_answer(self, prompt: str) -> str:
+        # Prompt structure expected:
+        # Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:
+        context = ""
+        question = ""
+
+        if "Context:" in prompt and "Question:" in prompt:
+            parts = prompt.split("Question:")
+            ctx_part = parts[0].replace("Context:", "").strip()
+            # Remove separator markers
+            chunks = [c.strip() for c in ctx_part.split("---") if c.strip()]
+            context = " ".join(chunks)
+
+            q_part = parts[1]
+            if "Answer" in q_part:
+                question = q_part.split("Answer")[0].strip()
+            else:
+                question = q_part.strip()
+        else:
+            context = prompt
+            question = ""
+
+        if not context:
+            return "I could not find relevant documentation in this workspace to answer your query."
+
+        # Find the most relevant sentences in context matching question tokens
+        q_tokens = set(re.findall(r"\w+", question.lower())) - {
+            "what", "is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"
+        }
+        sentences = re.split(r"(?<=[.!?])\s+", context)
+
+        matched_sentences = []
+        for s in sentences:
+            s_clean = s.strip()
+            if not s_clean:
+                continue
+            s_tokens = set(re.findall(r"\w+", s_clean.lower()))
+            overlap = len(q_tokens & s_tokens)
+            if overlap > 0:
+                matched_sentences.append((overlap, s_clean))
+
+        if matched_sentences:
+            matched_sentences.sort(key=lambda x: x[0], reverse=True)
+            best_sentences = [item[1] for item in matched_sentences[:2]]
+            return " ".join(best_sentences)
+
+        # Fallback to the first sentence of context
+        first_sentence = sentences[0].strip() if sentences else context[:200]
+        return f"Based on available documentation: {first_sentence}"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        prompt_text = messages[-1].content if messages else ""
+        if isinstance(prompt_text, list):
+            prompt_text = " ".join(str(p) for p in prompt_text)
+
+        answer = self._extract_answer(str(prompt_text))
+        gen = ChatGeneration(message=AIMessage(content=answer))
+        return ChatResult(generations=[gen])
+
+    @property
+    def _llm_type(self) -> str:
+        return "deterministic-context-synthesizer"
+
+
+def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -> bool:
+    """Fast check whether local Ollama server is responding."""
+    try:
+        url = f"{base_url.rstrip('/')}/api/tags"
+        resp = httpx.get(url, timeout=timeout_sec)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def get_chat_llm(provider: str | None = None) -> BaseChatModel:
+    """Factory returning the appropriate chat model based on environment and runtime availability."""
+    active = (provider or LLM_PROVIDER).lower().strip()
+
+    if active == "openai":
+        try:
+            from langchain_openai import ChatOpenAI  # type: ignore[import-untyped]
+            return ChatOpenAI(
+                base_url=LOCAL_LLM_URL,
+                api_key="local",
+                model=CHAT_MODEL,
+                temperature=0.0,
+            )
+        except ImportError:
+            logger.warning("langchain-openai not installed; falling back to in-process synthesizer.")
+            return DeterministicContextLLM()
+
+    if active == "deterministic":
+        return DeterministicContextLLM()
+
+    if active == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.0)
+
+    # "auto" mode: probe Ollama; if running, use it; otherwise fallback to DeterministicContextLLM
+    if is_ollama_alive(OLLAMA_BASE_URL):
+        try:
+            from langchain_ollama import ChatOllama
+            return ChatOllama(model=CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.0)
+        except Exception as exc:
+            logger.warning("Could not initialize ChatOllama: %s. Using in-process synthesizer.", exc)
+
+    logger.info("Ollama is offline or unreachable; using in-process context synthesizer.")
+    return DeterministicContextLLM()

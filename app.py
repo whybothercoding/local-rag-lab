@@ -19,6 +19,7 @@ from config import (
     BM25_DIR,
 )
 from embedding_provider import get_embedding_model
+from llm_provider import get_chat_llm
 from sparse_search import search_sparse_chunks
 
 
@@ -238,13 +239,13 @@ def generate_node(state: StateInput) -> dict[str, Any]:
         }
 
     context = "\n\n---\n\n".join(docs)
+    prompt = f"Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:"
     try:
-        llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.0)
-        prompt = f"Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:"
+        llm = get_chat_llm()
         response = llm.invoke(prompt)
         gen_content = str(response.content).strip()
     except Exception:
-        # Fallback if local Ollama daemon is unreachable
+        # Fallback if local model execution fails
         gen_content = f"Based on the documentation: {docs[0]}"
 
     telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)

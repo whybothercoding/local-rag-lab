@@ -19,9 +19,12 @@ POSTGRES_DB_URI = "postgresql://rag_user:rag_password@localhost:5432/rag_checkpo
 DEFAULT_CHAT_MODEL = "qwen2.5-coder:7b"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
 
 DB_URI = os.getenv("DB_URI", DEFAULT_DB_URI)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL)
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto")
 CHAT_MODEL = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)
 OLLAMA_MODEL = CHAT_MODEL
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)

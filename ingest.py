@@ -6,9 +6,10 @@ Embeddings are computed before either store is replaced, so a failed
 embedding call leaves the previous index in place.
 """
 import argparse
+import hashlib
+import json
 import logging
 import os
-import pickle
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,11 +37,36 @@ class IngestResult:
     chunks: int = 0
     indexed_files: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    unchanged: bool = False
     error: str | None = None
 
     @property
     def ok(self) -> bool:
-        return self.error is None and self.chunks > 0
+        return self.error is None and (self.chunks > 0 or self.unchanged)
+
+
+def _get_manifest_path(ws_id: str) -> Path:
+    return Path(workspace_manager.BM25_DIR) / f"{ws_id}_manifest.json"
+
+
+def _load_manifest(ws_id: str) -> dict | None:
+    path = _get_manifest_path(ws_id)
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def _save_manifest(ws_id: str, manifest_data: dict) -> None:
+    path = _get_manifest_path(ws_id)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+    except Exception as exc:
+        logger.warning("Could not save manifest for %s: %s", ws_id, exc)
 
 
 def _add_in_batches(collection, ids, documents, metadatas, embeddings) -> None:
@@ -105,7 +131,11 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
         if not content:
             skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
             continue
-        raw_docs.append({"content": content, "source": relative})
+        raw_docs.append({
+            "content": content,
+            "source": relative,
+            "doc_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        })
     return raw_docs, skipped
 
 
@@ -114,6 +144,7 @@ def ingest_workspace(
     source_dir: str,
     chunk_size: int = 600,
     chunk_overlap: int = 100,
+    force: bool = False,
 ) -> IngestResult:
     """Index every supported file under source_dir into one workspace.
 
@@ -138,15 +169,47 @@ def ingest_workspace(
         result.error = f"No supported documents with extractable text found in {source_dir}"
         return result
 
+    file_hashes = {doc["source"]: doc["doc_hash"] for doc in raw_docs}
+
+    # Content-Addressable idempotency check: bypass re-indexing if files match
+    manifest = _load_manifest(ws_id)
+    if not force and manifest is not None:
+        if (
+            manifest.get("files") == file_hashes
+            and manifest.get("chunk_size") == chunk_size
+            and manifest.get("chunk_overlap") == chunk_overlap
+        ):
+            try:
+                client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+                existing_cols = [getattr(c, "name", str(c)) for c in client.list_collections()]
+                fts_exists = os.path.exists(os.path.join(workspace_manager.BM25_DIR, f"{ws_id}.db"))
+                if f"ws_{ws_id}" in existing_cols and fts_exists:
+                    result.documents = len(raw_docs)
+                    result.chunks = manifest.get("total_chunks", 0)
+                    result.indexed_files = list(file_hashes.keys())
+                    result.unchanged = True
+                    logger.info("Workspace '%s' unchanged; skipping redundant embedding.", ws_id)
+                    return result
+            except Exception:
+                pass
+
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks: list[str] = []
     metadatas: list[dict] = []
     chunk_ids: list[str] = []
     for doc_idx, doc in enumerate(raw_docs):
+        doc_hash_short = doc["doc_hash"][:12]
         for chunk_idx, chunk_text in enumerate(splitter.split_text(doc["content"])):
-            cid = f"{ws_id}_{doc_idx}_{chunk_idx}"
+            chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
+            cid = f"{ws_id}_{doc_idx}_{chunk_idx}_{chunk_hash}"
             chunks.append(chunk_text)
-            metadatas.append({"source": doc["source"], "workspace": ws_id, "id": cid})
+            metadatas.append({
+                "source": doc["source"],
+                "workspace": ws_id,
+                "id": cid,
+                "chunk_hash": chunk_hash,
+                "doc_hash": doc_hash_short,
+            })
             chunk_ids.append(cid)
 
     if not chunks:
@@ -188,6 +251,16 @@ def ingest_workspace(
         result.error = f"Keyword index write failed: {exc}"
         return result
 
+    # 3. Save ingestion manifest for idempotent verification
+    _save_manifest(ws_id, {
+        "workspace_id": ws_id,
+        "files": file_hashes,
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "total_chunks": len(chunks),
+        "total_docs": len(raw_docs),
+    })
+
     result.documents = len(raw_docs)
     result.chunks = len(chunks)
     result.indexed_files = [doc["source"] for doc in raw_docs]
@@ -201,6 +274,12 @@ def _print_result(result: IngestResult) -> None:
     if result.error:
         print(f"Error: {result.error}")
         return
+    if result.unchanged:
+        print(
+            f"Workspace '{result.workspace_id}' is already up-to-date: "
+            f"{result.documents} file(s), {result.chunks} chunks (skipped re-embedding)."
+        )
+        return
     print(
         f"Workspace '{result.workspace_id}' indexed successfully: "
         f"{result.documents} file(s), {result.chunks} chunks."
@@ -212,9 +291,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-tenant knowledge ingestion")
     parser.add_argument("--workspace", required=True, help="Workspace name, for example accounting")
     parser.add_argument("--dir", required=True, help="Directory of source documents")
+    parser.add_argument("--force", action="store_true", help="Force re-indexing even if files are unchanged")
     args = parser.parse_args()
 
-    outcome = ingest_workspace(args.workspace, args.dir)
+    outcome = ingest_workspace(args.workspace, args.dir, force=args.force)
     _print_result(outcome)
     if not outcome.ok:
         sys.exit(1)
