@@ -282,3 +282,66 @@ def test_adding_an_existing_user_points_to_password_reset(policy_path):
     add_user("erin", TEST_PASSWORD, path=policy_path)
     with pytest.raises(ValueError, match="set-password erin"):
         add_user("erin", TEST_PASSWORD, path=policy_path)
+
+
+def test_delete_user_removes_account_and_grants(policy_path):
+    from access import delete_user, load_policy
+
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+    set_grant("erin", "accounting", ["query", "review"], path=policy_path)
+
+    delete_user("erin", path=policy_path)
+
+    assert not authenticate("erin", TEST_PASSWORD, path=policy_path)
+    assert not authorize("erin", "accounting", "query", path=policy_path)
+    assert not authorize("erin", "accounting", "review", path=policy_path)
+    assert "erin" not in [u["username"] for u in list_users(path=policy_path)]
+
+    # Confirm policy HMAC integrity is intact
+    policy = load_policy(path=policy_path)
+    assert "erin" not in policy["users"]
+
+
+def test_delete_nonexistent_user_raises(policy_path):
+    from access import delete_user
+
+    with pytest.raises(ValueError, match="does not exist"):
+        delete_user("ghost_user", path=policy_path)
+
+
+def test_reset_users_removes_all_accounts(policy_path):
+    from access import delete_user, load_policy, reset_users
+
+    add_user("user_a", TEST_PASSWORD, path=policy_path)
+    add_user("user_b", TEST_PASSWORD, path=policy_path)
+    assert len(list_users(path=policy_path)) == 2
+
+    reset_users(path=policy_path)
+
+    assert list_users(path=policy_path) == []
+    policy = load_policy(path=policy_path)
+    assert policy["users"] == {}
+
+
+def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
+    import access
+
+    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+
+    # Cancelled deletion
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    ret = access.main(["delete-user", "erin"])
+    assert ret == 0
+    assert "erin" in [u["username"] for u in list_users(path=policy_path)]
+
+    # Confirmed deletion with -y
+    ret = access.main(["delete-user", "erin", "-y"])
+    assert ret == 0
+    assert "erin" not in [u["username"] for u in list_users(path=policy_path)]
+
+    # Reset users with -y
+    add_user("frank", TEST_PASSWORD, path=policy_path)
+    ret = access.main(["reset-users", "-y"])
+    assert ret == 0
+    assert list_users(path=policy_path) == []

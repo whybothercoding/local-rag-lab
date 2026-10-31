@@ -138,6 +138,15 @@ make users
 
 # Reset an account password
 python access.py set-password bob
+
+# Delete an individual user and all their grants
+python access.py delete-user bob
+# Or bypass confirmation:
+python access.py delete-user bob -y
+
+# Delete ALL user accounts and grants
+make reset-users
+# Or: python access.py reset-users -y
 ```
 
 ---
@@ -221,6 +230,11 @@ make backup
 
 # Verify a backup manifest and audit chain
 make backup-verify DIR=backups/backup-<timestamp>
+
+# Zero-trace factory reset (wipes all users, audit logs, checkpoints, keys, and vectors)
+make factory-reset
+# Or bypass confirmation prompt:
+make factory-reset CONFIRM=yes
 ```
 
 ---

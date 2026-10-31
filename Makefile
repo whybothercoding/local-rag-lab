@@ -1,4 +1,4 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users eval eval-judge clean
+.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users reset-users factory-reset eval eval-judge clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -93,3 +93,29 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name ".DS_Store" -delete
 	rm -rf .pytest_cache .coverage htmlcov eval/out *.log
+
+# 19. Delete all users and reset the access policy
+reset-users:
+	./venv/bin/python access.py reset-users $(if $(CONFIRM),-y,)
+
+# 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
+factory-reset:
+	@if [ "$(CONFIRM)" != "yes" ]; then \
+		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, and indexed vectors.\nType 'yes' to proceed: "; \
+		read ans; \
+		if [ "$$ans" != "yes" ]; then \
+			echo "Factory reset cancelled."; \
+			exit 1; \
+		fi; \
+	fi
+	rm -f access_policy.json
+	rm -rf data
+	rm -rf chroma_data
+	rm -rf bm25_indices
+	rm -rf uploads
+	rm -rf backups
+	rm -rf eval/out
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type f -name ".DS_Store" -delete
+	rm -rf .pytest_cache .coverage htmlcov *.log
+	@echo "Factory reset complete. System restored to clean initial state."

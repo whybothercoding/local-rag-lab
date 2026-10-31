@@ -32,11 +32,13 @@ make eval-judge             # Evaluation with Ollama LLM-as-a-judge support chec
 make sync ADMIN=<user>      # Ingest/sync knowledge_base/ directories into indexes
 make ui                     # Run Streamlit frontend application
 
-# Security & Governance
+# Security, Identity & Governance
 make audit-verify           # Verify append-only HMAC-keyed audit chain
 make audit-tail             # View recent audit events
 make retention              # Apply audit and checkpoint data retention policy
 make backup                 # Create encrypted snapshot of audit, checkpoints, and policy
+make reset-users            # Delete all user accounts from access policy
+make factory-reset          # Complete zero-trace wipe (data, policy, keys, indices)
 ```
 
 ---

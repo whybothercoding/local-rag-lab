@@ -321,6 +321,23 @@ def set_grant(username: str, workspace: str, permissions: list[str], path: str |
     save_policy(policy, path)
 
 
+def delete_user(username: str, path: str | None = None) -> None:
+    """Permanently delete a user account and all of its workspace grants."""
+    name = _normalize_username(username)
+    policy = load_policy(path)
+    if name not in policy["users"]:
+        raise ValueError(f"User '{name}' does not exist.")
+    del policy["users"][name]
+    save_policy(policy, path)
+
+
+def reset_users(path: str | None = None) -> None:
+    """Permanently delete all user accounts and workspace grants from the access policy."""
+    policy = load_policy(path)
+    policy["users"] = {}
+    save_policy(policy, path)
+
+
 def list_users(path: str | None = None) -> list[dict[str, Any]]:
     users = load_policy(path)["users"]
     return [
@@ -358,6 +375,13 @@ def main(argv: list[str] | None = None) -> int:
     reset = sub.add_parser("set-password", help="Set or reset an account's password (prompts)")
     reset.add_argument("username")
 
+    del_user = sub.add_parser("delete-user", help="Delete a user account and all their workspace grants")
+    del_user.add_argument("username")
+    del_user.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+
+    reset_all = sub.add_parser("reset-users", help="Delete all user accounts and workspace grants")
+    reset_all.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+
     sub.add_parser("list", help="Show accounts and grants (never password hashes)")
 
     args = parser.parse_args(argv)
@@ -368,6 +392,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "set-password":
             set_password(args.username, _prompt_new_password(args.username))
             print(f"Password updated for '{args.username.lower()}'. Existing grants are unchanged.")
+        elif args.command == "delete-user":
+            if not args.yes:
+                ans = input(f"Are you sure you want to delete user '{args.username}'? [y/N]: ").strip().lower()
+                if ans not in ("y", "yes"):
+                    print("Deletion cancelled.")
+                    return 0
+            delete_user(args.username)
+            print(f"Deleted user '{args.username.lower()}'.")
+        elif args.command == "reset-users":
+            if not args.yes:
+                ans = input("Are you sure you want to delete ALL user accounts? [y/N]: ").strip().lower()
+                if ans not in ("y", "yes"):
+                    print("Reset cancelled.")
+                    return 0
+            reset_users()
+            print("All user accounts have been reset.")
         elif args.command == "grant":
             perms = [p.strip() for p in args.perms.split(",") if p.strip()]
             set_grant(args.username, args.workspace, perms)
