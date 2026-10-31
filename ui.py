@@ -1,11 +1,10 @@
 import streamlit as st
 import uuid
 import os
-from psycopg_pool import ConnectionPool
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 
 from app import workflow, DB_URI
+from checkpointer import get_checkpointer
 from ingest import ingest_workspace
 from workspace_manager import (
     list_workspaces,
@@ -16,6 +15,16 @@ from workspace_manager import (
 )
 
 st.set_page_config(page_title="Local Enterprise Knowledge Hub", layout="wide")
+
+
+def render_citations(citations):
+    """Renders visual expandable cards showing retrieved document sources."""
+    if not citations:
+        return
+    with st.expander("Retrieved Source Citations", expanded=False):
+        for idx, citation in enumerate(citations, 1):
+            st.markdown(f"**[{idx}]** `{citation}`")
+
 
 # --- SIDEBAR: WORKSPACE CONTROLS ---
 st.sidebar.title("Document Bundles")
@@ -89,6 +98,8 @@ if "current_ws" not in st.session_state or st.session_state.current_ws != active
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
+        if msg.get("citations"):
+            render_citations(msg["citations"])
 
 user_query = st.chat_input(f"Ask a question grounded in '{active_ws}'...")
 
@@ -99,9 +110,7 @@ if user_query:
 
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-    with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
-        checkpointer = PostgresSaver(pool)
-        checkpointer.setup()
+    with get_checkpointer() as checkpointer:
         engine = workflow.compile(checkpointer=checkpointer)
 
         inputs = {
@@ -133,7 +142,10 @@ if user_query:
         if state.next == ("human_approval",):
             st.warning("Action Required: Candidate answer paused at compliance approval gate.")
             candidate = state.values.get("generation", "")
+            citations = state.values.get("citations", [])
+
             st.text_area("Candidate Output", value=candidate, height=130, disabled=True)
+            render_citations(citations)
 
             col1, col2 = st.columns(2)
             if col1.button("Approve Output"):
@@ -141,15 +153,26 @@ if user_query:
                     pass
                 final_state = engine.get_state(config)
                 ans = final_state.values.get("generation", "")
-                st.session_state.messages.append({"role": "assistant", "content": ans})
+                cits = final_state.values.get("citations", [])
+                st.session_state.messages.append({"role": "assistant", "content": ans, "citations": cits})
                 st.rerun()
             if col2.button("Reject Output"):
                 for _ in engine.stream(Command(resume="rejected"), config=config):
                     pass
-                st.session_state.messages.append({"role": "assistant", "content": "[Rejected by reviewer]"})
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": "[Rejected by reviewer]",
+                    "citations": []
+                })
                 st.rerun()
         else:
             ans = state.values.get("generation", "No answer generated.")
-            st.session_state.messages.append({"role": "assistant", "content": ans})
+            citations = state.values.get("citations", [])
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": ans,
+                "citations": citations
+            })
             with st.chat_message("assistant"):
                 st.write(ans)
+                render_citations(citations)

@@ -2,12 +2,11 @@
 import sys
 import argparse
 import logging
-from psycopg_pool import ConnectionPool
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 
-# Import workflow and config from app.py
-from app import workflow, DB_URI
+# Import workflow and checkpointer factory
+from app import workflow
+from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,28 +15,20 @@ logging.basicConfig(
 logger = logging.getLogger("HITL-Operator-CLI")
 
 
-def list_pending_threads(pool: ConnectionPool) -> list[str]:
-    """Inspects Postgres checkpoints to find threads paused at an interrupt."""
-    checkpointer = PostgresSaver(pool)
-    app = workflow.compile(checkpointer=checkpointer)
-
-    query = """
-        SELECT DISTINCT thread_id
-        FROM checkpoints
-        ORDER BY thread_id;
-    """
+def list_pending_threads(app) -> list[str]:
+    """Inspects checkpoints to find threads paused at an interrupt."""
+    thread_ids = fetch_checkpoint_threads()
     pending = []
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query)
-            rows = cur.fetchall()
 
-    for (thread_id,) in rows:
+    for thread_id in thread_ids:
         config = {"configurable": {"thread_id": thread_id}}
-        state = app.get_state(config)
-        # Check if the thread is halted at the human_approval node with an active interrupt
-        if state.next == ("human_approval",) and state.tasks and any(t.interrupts for t in state.tasks):
-            pending.append(thread_id)
+        try:
+            state = app.get_state(config)
+            # Check if the thread is halted at the human_approval node with an active interrupt
+            if state.next == ("human_approval",) and state.tasks and any(t.interrupts for t in state.tasks):
+                pending.append(thread_id)
+        except Exception as exc:
+            logger.debug("Failed inspecting thread %s: %s", thread_id, exc)
 
     return pending
 
@@ -96,13 +87,12 @@ def main():
     parser.add_argument("--action", type=str, choices=["approved", "rejected"], help="Decision action to apply")
     args = parser.parse_args()
 
-    with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
-        checkpointer = PostgresSaver(pool)
+    with get_checkpointer() as checkpointer:
         app = workflow.compile(checkpointer=checkpointer)
 
         # Mode 1: List all pending threads
         if args.list:
-            pending = list_pending_threads(pool)
+            pending = list_pending_threads(app)
             print("\n--- THREADS AWAITING HUMAN APPROVAL ---")
             if not pending:
                 print("No threads currently paused at [human_approval].")
@@ -122,9 +112,9 @@ def main():
         # Mode 3: Interactive approval
         target_thread = args.thread
         if not target_thread:
-            pending = list_pending_threads(pool)
+            pending = list_pending_threads(app)
             if not pending:
-                print("\nNo pending threads found in PostgreSQL database.")
+                print("\nNo pending threads found in checkpoint database.")
                 sys.exit(0)
             target_thread = pending[0]
             print(f"Auto-selected pending thread: {target_thread}")

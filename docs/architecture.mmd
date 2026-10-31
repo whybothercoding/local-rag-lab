@@ -8,35 +8,33 @@ graph TD;
 	guardrail(guardrail)
 	cache_lookup(cache_lookup)
 	router(router)
-	direct_answer(direct_answer)
+	chitchat(chitchat)
 	retrieve(retrieve)
-	grade_documents(grade_documents)
-	rewrite_query(rewrite_query)
+	grade_docs(grade_docs)
+	rewrite(rewrite)
 	generate(generate)
 	grade_hallucination(grade_hallucination)
 	grade_relevance(grade_relevance)
 	human_approval(human_approval)
-	fallback(fallback)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> guardrail;
-	cache_lookup -.-> __end__;
-	cache_lookup -.-> router;
+	cache_lookup -. &nbsp;hit&nbsp; .-> __end__;
+	cache_lookup -. &nbsp;miss&nbsp; .-> router;
 	generate --> grade_hallucination;
-	grade_documents -.-> fallback;
-	grade_documents -.-> generate;
-	grade_documents -. &nbsp;rewrite&nbsp; .-> rewrite_query;
-	grade_hallucination -.-> fallback;
-	grade_hallucination -.-> grade_relevance;
-	grade_relevance -.-> human_approval;
-	grade_relevance -. &nbsp;rewrite&nbsp; .-> rewrite_query;
-	guardrail -.-> cache_lookup;
-	guardrail -.-> fallback;
-	retrieve --> grade_documents;
-	rewrite_query --> retrieve;
-	router -. &nbsp;direct&nbsp; .-> direct_answer;
+	grade_docs -. &nbsp;approved&nbsp; .-> generate;
+	grade_docs -.-> rewrite;
+	grade_hallucination -. &nbsp;retry&nbsp; .-> generate;
+	grade_hallucination -. &nbsp;grounded&nbsp; .-> grade_relevance;
+	grade_hallucination -. &nbsp;circuit_break&nbsp; .-> human_approval;
+	grade_relevance -. &nbsp;circuit_break&nbsp; .-> human_approval;
+	grade_relevance -. &nbsp;irrelevant&nbsp; .-> rewrite;
+	guardrail -. &nbsp;fail&nbsp; .-> __end__;
+	guardrail -. &nbsp;pass&nbsp; .-> cache_lookup;
+	retrieve --> grade_docs;
+	rewrite --> retrieve;
+	router -.-> chitchat;
 	router -. &nbsp;rag&nbsp; .-> retrieve;
-	direct_answer --> __end__;
-	fallback --> __end__;
+	chitchat --> __end__;
 	human_approval --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import logging
 import os
 import re
 import shutil
@@ -6,13 +7,23 @@ from typing import List, Dict, Any
 import chromadb
 from psycopg_pool import ConnectionPool
 
-CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_data")
-BM25_DIR = os.getenv("BM25_DIR", "./bm25_indices")
-UPLOADS_DIR = os.getenv("UPLOADS_DIR", "./uploads")
-DB_URI = os.getenv(
-    "DB_URI",
-    "postgresql://rag_user:rag_password@localhost:5432/rag_checkpoint_db"
+from config import (
+    BM25_DIR as _BM25_DIR,
+    CHROMA_PATH as _CHROMA_PATH,
+    DB_URI as _DB_URI,
+    UPLOADS_DIR as _UPLOADS_DIR,
 )
+
+# Re-exported so tests and ingest can redirect storage without editing config.
+CHROMA_PATH = _CHROMA_PATH
+BM25_DIR = _BM25_DIR
+UPLOADS_DIR = _UPLOADS_DIR
+DB_URI = _DB_URI
+
+logger = logging.getLogger("workspace_manager")
+
+# `ws_<id>__build` must stay inside Chroma's 63-character collection name limit.
+_MAX_WORKSPACE_ID = 48
 
 
 def sanitize_workspace_id(raw_name: str) -> str:
@@ -22,7 +33,7 @@ def sanitize_workspace_id(raw_name: str) -> str:
     cleaned = raw_name.strip().lower()
     # Replace any sequence of non-alphanumeric characters with a single underscore
     cleaned = re.sub(r'[^a-z0-9]+', '_', cleaned)
-    return cleaned.strip('_')
+    return cleaned.strip('_')[:_MAX_WORKSPACE_ID].strip('_')
 
 
 def ensure_base_dirs():
@@ -44,8 +55,8 @@ def list_workspaces() -> List[str]:
             name = getattr(col, "name", str(col))
             if name.startswith("ws_"):
                 workspaces.add(name[3:])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not list Chroma collections: %s", exc)
 
     # 2. Discover serialized BM25 indices
     if os.path.exists(BM25_DIR):
@@ -79,8 +90,8 @@ def create_workspace(raw_name: str) -> str:
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         client.get_or_create_collection(name=f"ws_{ws_id}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not create Chroma collection for %s: %s", ws_id, exc)
 
     return ws_id
 
@@ -100,16 +111,16 @@ def delete_workspace(raw_name: str) -> bool:
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         client.delete_collection(name=f"ws_{ws_id}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not delete Chroma collection for %s: %s", ws_id, exc)
 
     # 2. Delete BM25 pickle
     bm25_file = os.path.join(BM25_DIR, f"{ws_id}.pkl")
     if os.path.exists(bm25_file):
         try:
             os.remove(bm25_file)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("Could not delete BM25 index for %s: %s", ws_id, exc)
 
     # 3. Delete uploaded source files
     upload_path = os.path.join(UPLOADS_DIR, ws_id)
@@ -124,9 +135,9 @@ def delete_workspace(raw_name: str) -> bool:
                     cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
                     cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
                     cur.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-    except Exception:
-        # If Postgres is temporarily offline, don't break file deletion
-        pass
+    except Exception as exc:
+        # File and vector deletion already happened. A down database should not undo that.
+        logger.warning("Could not delete checkpoints for %s: %s", ws_id, exc)
 
     return True
 
@@ -143,8 +154,8 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         col = client.get_collection(name=f"ws_{ws_id}")
         chunk_count = col.count()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not read chunk count for %s: %s", ws_id, exc)
 
     # BM25 presence
     bm25_file = os.path.join(BM25_DIR, f"{ws_id}.pkl")

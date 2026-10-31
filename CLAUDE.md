@@ -1,75 +1,107 @@
-# AGENTS.md
-## Overview of the local-rag-lab Project Architecture
+# AGENTS.md — Local Enterprise Knowledge Hub Specification
 
-The `local-rag-lab` project is designed to provide an enterprise-grade language model assistant using the LangChain framework. The project is structured to handle document retrieval, relevance grading, and document generation, with a focus on production observability and robustness.
+This document provides system instructions, architectural design details, and agent execution guidelines for the **Local Enterprise RAG Lab** Compound AI system.
 
-## File Layout
+---
 
-### Core Files
+## 1. System Overview
 
-- **`app.py`**: The main entry point for the application. Defines the workflow, nodes, and logic for document retrieval, grading, and generation.
-- **`docs/company_policy.md`**: The source document used for training the vector store.
+The engine is a fully local, multi-tenant Compound AI system implementing Self-RAG, Corrective RAG (CRAG), and Human-in-the-Loop (HITL) compliance gates. 
 
-### External Libraries and Dependencies
+* **LLM Engine**: Ollama (`qwen2.5-coder:7b`) for generation and embeddings (`OLLAMA_BASE_URL=http://localhost:11434`).
+* **Vector & Sparse Stores**: ChromaDB (dense vectors) + `rank-bm25` (sparse BM25Okapi).
+* **State & Persistence**: LangGraph state graph with durable PostgreSQL checkpointer (`psycopg-pool`).
+* **Multi-Tenancy**: Isolated workspace bundles for knowledge isolation and dynamic switching.
 
-- **LangChain**: A framework for building language models and workflows.
-- **Chroma**: A vector database for storing and querying documents.
-- **Ollama**: A library for interacting with language models and embedding services.
+---
 
-### Vector Database Paths
+## 2. Multi-Tenant Workspace Architecture
 
-- The vector store is stored in the `./chroma_db` directory.
+Workspaces partition knowledge bases to prevent cross-tenant data leakage:
 
-## Core Libraries Used
+* **Sanitization**: Names are normalized via `sanitize_workspace_id()` to alphanumeric slugs with single underscores (e.g., `accounting_2026`).
+* **ChromaDB**: Named vector collections prefixed with `ws_<workspace_id>`.
+* **Sparse Index**: Pickled BM25 structures stored at `bm25_indices/<workspace_id>.pkl`.
+* **Staging Area**: Uploaded raw documents stored under `uploads/<workspace_id>/`.
+* **Semantic Cache**: State-keyed by workspace slug (`hashlib.sha256(f"{workspace_id}:{query}".encode())`).
+* **Thread Tracking**: Persistent sessions isolated via `ui-<workspace_id>-<uuid>` thread IDs.
 
-- **LangChain**: A comprehensive library for building language models and workflows. It provides a high-level API for interacting with language models, document retrieval, and document generation.
-- **Chroma**: A vector database library that allows for efficient storage and retrieval of document embeddings.
-- **Ollama**: A library that provides access to language models and embedding services, including the `ChatOllama` and `OllamaEmbeddings` classes.
+---
 
-## Coding Guidelines and Conventions
+## 3. Supported Ingestion Pipeline (`ingest.py`)
 
-### General Guidelines
+The ingestion pipeline handles multi-format file parsing, character chunking, and synchronous index generation:
 
-1. **Logging**: All logging statements use a consistent format with the following fields: timestamp, log level, logger name, and message.
-   ```python
-   logging.basicConfig(
-       level=logging.INFO,
-       format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-   )
-   logger = logging.getLogger("AI-Engineering-Lab")
-   ```
+* **Supported Formats**:
+  * `.md` & `.txt`: Raw UTF-8 extraction.
+  * `.pdf`: Page-by-page extraction via `pypdf`.
+  * `.docx`: Structural paragraph parsing via `python-docx`.
+* **Chunking**: `RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)`.
+* **Chunk Metadata**: Each chunk stores `{"source": filename, "workspace": ws_id, "id": f"{ws_id}_{doc_idx}_{chunk_idx}"}`.
 
-2. **Error Handling**: All functions should include basic error handling to log and handle exceptions gracefully.
-   ```python
-   try:
-       retrieved_docs = retriever.invoke(question)
-   except Exception as e:
-       logger.error(f"Retrieval failed: {e}")
-       return {"documents": []}
-   ```
+---
 
-3. **State Management**: All state management is handled using typed dictionaries to ensure type safety and clarity.
-   ```python
-   class ProductionGraphState(TypedDict):
-       question: str
-       documents: List[str]
-       generation: str
-       grade_status: str  # "approved" or "retry"
-       retry_count: int
-   ```
+## 4. LangGraph Agent Workflow
 
-### File Naming and Organization
+[START]
+│
+[guardrail] ──(fail)──> [END] (Prompt Injection / Adversarial)
+│ (pass)
+[cache_lookup] ──(hit)──> [END]
+│ (miss)
+[router] ──(chitchat)──> [chitchat] ──> [END]
+│ (rag)
+[retrieve] (Hybrid Dense + Sparse)
+│
+[grade_docs] ──(rewrite / max retries)──> [rewrite] ──> [retrieve]
+│ (approved)
+[generate]
+│
+[grade_hallucination] ──(retry)──> [generate]
+│ (grounded)
+[grade_relevance] ──(irrelevant)──> [rewrite]
+│ (relevant)
+[human_approval] (HITL Compliance Interruption)
+│
+[END]
 
-1. **Root Directories**: The project contains a single root directory, `/Users/theo.dev/Documents/misc/local-rag-lab`.
-2. **Document Files**: Source documents are stored in the `docs` directory.
-3. **Code Files**: The main application logic is located in the `app.py` file.
+### Graph State Schema (`GraphState`)
+* `workspace_id` (`str`): Target workspace bundle name.
+* `question` / `original_question` / `sanitized_question` (`str`): Query lifecycle states.
+* `documents` (`List[str]`): Retrieved raw context chunks.
+* `citations` (`List[str]`): Formatted provenance tags (`[chunk_id] source_file`).
+* `generation` (`str`): Current response or compliance rejection text.
+* `intent` (`str`): Routing classification (`rag` vs `chitchat`).
+* `cache_hit` (`bool`): Direct semantic cache bypass flag.
+* `is_safe` (`bool`): Input guardrail security gate.
+* `grade_status` / `hallucination_status` / `relevance_status` (`str`): Self-RAG evaluation flags.
+* `retry_count` (`int`): Retries counter with circuit breaker capped at 2.
+* `history` (`List[str]`): Rolling conversation memory.
+* `telemetry` (`Dict[str, Any]`): Latency, token metrics, and execution diagnostics.
 
-### Naming Conventions
+---
 
-1. **Node Functions**: Functions representing nodes in the workflow are prefixed with `node_`, e.g., `retrieve_node`.
-2. **State Dictionaries**: Typed dictionaries representing the state of the workflow are suffixed with `_State`, e.g., `ProductionGraphState`.
-3. **Error Handling**: Exception handling blocks are clearly labeled with comments, e.g., `try...except`.
+## 5. UI & Traceability (`ui.py`)
 
-## Conclusion
+* **Workspace Selector**: Sidebar selector dynamically scans directories and Chroma collections.
+* **Bundle Creation & Deletion**: Staged file purge, Chroma collection deletion, and BM25 index cleanup.
+* **In-App Ingestion**: Multi-file uploader supporting `.md`, `.txt`, `.pdf`, `.docx`.
+* **Visual Citations**: Expandable citation cards (`render_citations()`) rendered below both streaming responses and past conversation turns.
+* **HITL Action Drawer**: Halts on compliance approval gate with interactive review buttons.
 
-The `local-rag-lab` project is designed to be modular, scalable, and production-ready. By following the guidelines and conventions outlined in this document, new developers can quickly understand and contribute to the project.
+---
+
+## 6. Developer Workflows & Commands
+
+```bash
+# Bootstrap entire environment (venv, deps, postgres container, model pull)
+make setup
+
+# Run the test suite (15 tests: engine, workspace manager, file parsers, integration)
+make test
+
+# Ingest default bundles via CLI
+make ingest
+
+# Launch Streamlit interface
+make ui

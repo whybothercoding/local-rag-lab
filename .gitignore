@@ -13,6 +13,10 @@ chroma_data/
 chroma_db/
 bm25_indices/
 uploads/
+data/
+*.db
+*.db-wal
+*.db-shm
 
 # Pytest & coverage caches
 .pytest_cache/

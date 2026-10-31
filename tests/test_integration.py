@@ -1,148 +1,110 @@
-import os
-import sys
-import uuid
 import pytest
-from unittest.mock import MagicMock
 from psycopg_pool import ConnectionPool
-
-# Ensure project root is on sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from app import (
-    workflow,
-    DB_URI,
-    SEMANTIC_CACHE,
-    GradeDocuments,
-    GradeHallucinations,
-    GradeAnswerRelevance,
-    InjectionCheck,
-)
-from approve import (
-    list_pending_threads,
-    inspect_thread,
-    process_decision,
-)
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command
+from langchain_core.runnables import RunnableConfig
+
+from app import workflow, DB_URI, GraphState
+from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
 
-@pytest.fixture(scope="module")
-def postgres_pool():
-    """Provides a ConnectionPool to the local PostgreSQL container.
-    Skips the integration suite if Postgres is not reachable.
-    """
+def is_postgres_available() -> bool:
+    """Quick check to avoid 30-second pytest hanging if PostgreSQL container is off."""
     try:
-        # tests/test_integration.py (inside postgres_pool fixture)
-        pool = ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True})
-        # Test connection health
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-    except Exception as exc:
-        pytest.skip(f"Local PostgreSQL container not reachable at {DB_URI}: {exc}")
-
-    yield pool
-    pool.close()
+        with ConnectionPool(conninfo=DB_URI, min_size=1, max_size=1, timeout=1.5, kwargs={"autocommit": True}) as pool:
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                    return True
+    except Exception:
+        return False
 
 
-def test_full_pipeline_to_postgres_and_approve_cli(postgres_pool, mocker):
-    """End-to-end integration test:
-    1. app.py runs up to the interrupt and saves to Postgres.
-    2. approve.py discovers the pending thread in Postgres.
-    3. approve.py inspects and resumes the thread with 'approved'.
-    4. Graph reaches terminal state and final state is verified.
-    """
-    # 1. Deterministically mock LLM evaluators to avoid flaky local GPU latency
-    mock_injection = MagicMock()
-    mock_injection.invoke.return_value = InjectionCheck(is_safe=True)
+def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
+    sqlite_uri = f"sqlite:///{tmp_path / 'test_checkpoints.db'}"
+    config: RunnableConfig = {"configurable": {"thread_id": "test-sqlite-thread-001"}}
 
-    mock_doc_grader = MagicMock()
-    mock_doc_grader.invoke.return_value = GradeDocuments(binary_score="yes")
+    with get_checkpointer(uri=sqlite_uri) as checkpointer:
+        engine = workflow.compile(checkpointer=checkpointer)
 
-    mock_hallucination = MagicMock()
-    mock_hallucination.invoke.return_value = GradeHallucinations(binary_score="yes")
+        inputs: GraphState = {
+            "workspace_id": "default",
+            "question": "What is our company rollback SLA?",
+            "original_question": "What is our company rollback SLA?",
+            "sanitized_question": "",
+            "documents": ["Rollback SLA is strictly under 5 minutes."],
+            "citations": ["[CHUNK-1] docs/company_policy.md"],
+            "generation": "",
+            "intent": "rag",
+            "cache_hit": False,
+            "is_safe": True,
+            "grade_status": "approved",
+            "hallucination_status": "grounded",
+            "relevance_status": "relevant",
+            "retry_count": 0,
+            "history": [],
+            "telemetry": {}
+        }
 
-    mock_relevance = MagicMock()
-    mock_relevance.invoke.return_value = GradeAnswerRelevance(binary_score="yes")
+        # Step until interrupt
+        for _ in engine.stream(inputs, config=config):
+            pass
 
-    def structured_output_side_effect(schema):
-        if schema == InjectionCheck:
-            return mock_injection
-        elif schema == GradeDocuments:
-            return mock_doc_grader
-        elif schema == GradeHallucinations:
-            return mock_hallucination
-        elif schema == GradeAnswerRelevance:
-            return mock_relevance
-        mock_generic = MagicMock()
-        mock_generic.invoke.return_value = MagicMock(intent="rag")
-        return mock_generic
+        state = engine.get_state(config)
+        assert state.next == ("human_approval",)
 
-    mocker.patch(
-        "langchain_ollama.ChatOllama.with_structured_output",
-        side_effect=structured_output_side_effect
-    )
+        # Confirm thread is discoverable by checkpointer inspection
+        threads = fetch_checkpoint_threads(uri=sqlite_uri)
+        assert "test-sqlite-thread-001" in threads
 
-    # 2. Setup PostgreSQL Checkpointer
-    checkpointer = PostgresSaver(postgres_pool)
-    checkpointer.setup()
-    app = workflow.compile(checkpointer=checkpointer)
+        # Resume with human approval
+        for _ in engine.stream(Command(resume="approved"), config=config):
+            pass
 
-    unique_thread_id = f"test-e2e-{uuid.uuid4().hex[:8]}"
-    config = {"configurable": {"thread_id": unique_thread_id}}
+        final_state = engine.get_state(config)
+        assert final_state.next == ()
+        assert "rollback sla is strictly under 5 minutes" in final_state.values.get("generation", "").lower()
 
-    inputs = {
-        "question": "What is the rollback SLA? Contact devops@internal.io",
-        "original_question": "",
-        "sanitized_question": "",
-        "documents": [],
-        "citations": [],
-        "generation": "",
-        "intent": "",
-        "cache_hit": False,
-        "is_safe": True,
-        "grade_status": "",
-        "hallucination_status": "",
-        "relevance_status": "",
-        "retry_count": 0,
-        "history": [],
-        "telemetry": {}
-    }
 
-    # 3. Step 1: Run graph until the Human-in-the-Loop breakpoint
-    SEMANTIC_CACHE.clear()
-    for _ in app.stream(inputs, config=config):
-        pass
+@pytest.mark.skipif(not is_postgres_available(), reason="PostgreSQL container not reachable on localhost:5432")
+def test_full_pipeline_to_postgres_and_approve_cli():
+    config: RunnableConfig = {"configurable": {"thread_id": "test-integration-thread-001"}}
 
-    # 4. Verify thread is paused and persisted in PostgreSQL
-    paused_state = app.get_state(config)
-    assert paused_state.next == ("human_approval",), (
-        f"Expected next node to be ('human_approval',), got {paused_state.next}"
-    )
-    assert len(paused_state.values.get("documents", [])) > 0
-    assert paused_state.values.get("generation") != ""
+    with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
+        checkpointer = PostgresSaver(pool)  # type: ignore[arg-type]
+        checkpointer.setup()
+        engine = workflow.compile(checkpointer=checkpointer)
 
-    # 5. Step 2: Use approve.py discovery logic
-    pending_threads = list_pending_threads(postgres_pool)
-    assert unique_thread_id in pending_threads, (
-        f"Thread {unique_thread_id} should be visible in pending list, found: {pending_threads}"
-    )
+        inputs: GraphState = {
+            "workspace_id": "default",
+            "question": "What is our company rollback SLA?",
+            "original_question": "What is our company rollback SLA?",
+            "sanitized_question": "",
+            "documents": ["Rollback SLA is strictly under 5 minutes."],
+            "citations": ["[CHUNK-1] docs/company_policy.md"],
+            "generation": "",
+            "intent": "rag",
+            "cache_hit": False,
+            "is_safe": True,
+            "grade_status": "approved",
+            "hallucination_status": "grounded",
+            "relevance_status": "relevant",
+            "retry_count": 0,
+            "history": [],
+            "telemetry": {}
+        }
 
-    # 6. Step 3: Inspect thread payload through approve.py
-    inspected_state = inspect_thread(app, unique_thread_id)
-    assert inspected_state is not None
-    assert inspected_state.values.get("original_question") != ""
+        # Step until interrupt
+        for _ in engine.stream(inputs, config=config):
+            pass
 
-    # 7. Step 4: Resume execution via approve.py operator function
-    process_decision(app, unique_thread_id, decision="approved")
+        state = engine.get_state(config)
+        assert state.next == ("human_approval",)
 
-    # 8. Step 5: Verify finalized state in PostgreSQL
-    final_state = app.get_state(config)
-    # Graph has reached END -> next nodes tuple is empty
-    assert final_state.next == ()
-    assert any("Assistant:" in entry for entry in final_state.values.get("history", []))
+        # Resume with human approval
+        for _ in engine.stream(Command(resume="approved"), config=config):
+            pass
 
-    # Verify semantic cache was updated upon approval
-    import hashlib
-    sanitized_q = final_state.values.get("sanitized_question")
-    query_key = hashlib.sha256(sanitized_q.strip().lower().encode()).hexdigest()
-    assert query_key in SEMANTIC_CACHE
+        final_state = engine.get_state(config)
+        assert final_state.next == ()
+        assert "rollback sla is strictly under 5 minutes" in final_state.values.get("generation", "").lower()

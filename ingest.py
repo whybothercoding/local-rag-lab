@@ -1,129 +1,234 @@
 #!/usr/bin/env python3
-import os
-import sys
-import pickle
+"""Parse a folder of source documents into one workspace index.
+
+Dense vectors go to ChromaDB and keyword vectors go to a BM25 pickle.
+Embeddings are computed before either store is replaced, so a failed
+embedding call leaves the previous index in place.
+"""
 import argparse
+import logging
+import os
+import pickle
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+
 import chromadb
-from rank_bm25 import BM25Okapi
 from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rank_bm25 import BM25Okapi
 
-from workspace_manager import sanitize_workspace_id, ensure_base_dirs, CHROMA_PATH, BM25_DIR
+import workspace_manager
+from config import EMBED_MODEL, MAX_SOURCE_BYTES, OLLAMA_BASE_URL
+from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
+from workspace_manager import ensure_base_dirs, sanitize_workspace_id
 
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+logger = logging.getLogger("ingest")
 
-
-def extract_text_from_file(file_path: Path) -> str:
-    """Extracts raw text content across supported file formats: .md, .txt, .pdf, .docx."""
-    ext = file_path.suffix.lower()
-
-    if ext in [".md", ".txt"]:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read().strip()
-
-    elif ext == ".pdf":
-        import pypdf
-        reader = pypdf.PdfReader(str(file_path))
-        pages_text = []
-        for page_idx, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages_text.append(text.strip())
-        return "\n\n".join(pages_text)
-
-    elif ext == ".docx":
-        import docx
-        doc = docx.Document(str(file_path))
-        paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        return "\n\n".join(paras)
-
-    return ""
+# Chroma rejects a single add() above a few thousand rows.
+_ADD_BATCH = 256
 
 
-def ingest_workspace(workspace_id: str, source_dir: str, chunk_size: int = 600, chunk_overlap: int = 100):
-    """Parses .md, .txt, .pdf, and .docx files in source_dir, chunks them, and stores
-    them in a dedicated Chroma collection and serialized BM25 index.
+@dataclass
+class IngestResult:
+    workspace_id: str
+    documents: int = 0
+    chunks: int = 0
+    indexed_files: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and self.chunks > 0
+
+
+def _add_in_batches(collection, ids, documents, metadatas, embeddings) -> None:
+    for start in range(0, len(ids), _ADD_BATCH):
+        end = start + _ADD_BATCH
+        collection.add(
+            ids=ids[start:end],
+            documents=documents[start:end],
+            metadatas=metadatas[start:end],
+            embeddings=embeddings[start:end],
+        )
+
+
+def _delete_quiet(client, name: str) -> None:
+    try:
+        client.delete_collection(name=name)
+    except Exception as exc:
+        logger.info("Collection %s was not deleted (%s)", name, exc)
+
+
+def _publish_collection(client, name: str, ids, documents, metadatas, embeddings) -> None:
+    """Write a side collection first, then replace the live collection.
+
+    The side collection is removed only after the live copy has been written.
+    If the live write fails, the side collection still holds the new vectors.
+    """
+    build_name = f"{name}__build"
+    _delete_quiet(client, build_name)
+    building = client.create_collection(name=build_name)
+    _add_in_batches(building, ids, documents, metadatas, embeddings)
+
+    _delete_quiet(client, name)
+    try:
+        live = client.create_collection(name=name)
+        _add_in_batches(live, ids, documents, metadatas, embeddings)
+    except Exception:
+        logger.exception("Live collection %s failed; vectors remain in %s", name, build_name)
+        raise
+    _delete_quiet(client, build_name)
+
+
+def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
+    raw_docs: list[dict] = []
+    skipped: list[str] = []
+    files = sorted(
+        path for path in source_path.rglob("*") if path.is_file() and not path.name.startswith(".")
+    )
+    for file_path in files:
+        relative = str(file_path.relative_to(source_path))
+        ext = file_path.suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            skipped.append(f"{relative}: {unsupported_reason(ext)}")
+            continue
+        if file_path.stat().st_size > MAX_SOURCE_BYTES:
+            skipped.append(f"{relative}: larger than {MAX_SOURCE_BYTES} bytes")
+            continue
+        try:
+            content = extract_text_from_file(file_path)
+        except Exception as exc:
+            skipped.append(f"{relative}: {exc}")
+            continue
+        if not content:
+            skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
+            continue
+        raw_docs.append({"content": content, "source": relative})
+    return raw_docs, skipped
+
+
+def ingest_workspace(
+    workspace_id: str,
+    source_dir: str,
+    chunk_size: int = 600,
+    chunk_overlap: int = 100,
+) -> IngestResult:
+    """Index every supported file under source_dir into one workspace.
+
+    Re-running replaces that workspace's Chroma collection and BM25 file.
+    Other workspaces are left untouched.
     """
     ws_id = sanitize_workspace_id(workspace_id)
+    result = IngestResult(workspace_id=ws_id)
     if not ws_id:
-        print("Error: Invalid workspace name provided.")
-        return
+        result.error = "Invalid workspace name."
+        return result
 
     ensure_base_dirs()
     source_path = Path(source_dir)
-    if not source_path.exists():
-        print(f"Directory not found: {source_dir}")
-        return
+    if not source_path.is_dir():
+        result.error = f"Directory not found: {source_dir}"
+        return result
 
-    # 1. Discover and load documents across all supported extensions
-    supported_exts = {".md", ".txt", ".pdf", ".docx"}
-    raw_docs = []
-
-    for file_path in source_path.glob("**/*"):
-        if file_path.is_file() and file_path.suffix.lower() in supported_exts:
-            try:
-                content = extract_text_from_file(file_path)
-                if content:
-                    raw_docs.append({"content": content, "source": file_path.name})
-            except Exception as e:
-                print(f"Skipping {file_path.name}: {e}")
-
+    raw_docs, skipped = _collect_documents(source_path)
+    result.skipped = skipped
     if not raw_docs:
-        print(f"No valid documents (.md, .txt, .pdf, .docx) found in {source_dir}")
-        return
+        result.error = f"No supported documents with extractable text found in {source_dir}"
+        return result
 
-    print(f"Indexing {len(raw_docs)} document(s) into workspace '{ws_id}'...")
-
-    # 2. Chunk documents dynamically
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    chunks = []
-    metadatas = []
-    chunk_ids = []
-
+    chunks: list[str] = []
+    metadatas: list[dict] = []
+    chunk_ids: list[str] = []
     for doc_idx, doc in enumerate(raw_docs):
-        sub_chunks = splitter.split_text(doc["content"])
-        for chunk_idx, chunk_text in enumerate(sub_chunks):
+        for chunk_idx, chunk_text in enumerate(splitter.split_text(doc["content"])):
             cid = f"{ws_id}_{doc_idx}_{chunk_idx}"
             chunks.append(chunk_text)
             metadatas.append({"source": doc["source"], "workspace": ws_id, "id": cid})
             chunk_ids.append(cid)
 
-    # 3. Dense Storage (ChromaDB)
-    embeddings = OllamaEmbeddings(model="qwen2.5-coder:7b", base_url=OLLAMA_URL)
-    chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+    if not chunks:
+        result.error = "Documents were read but produced no chunks."
+        return result
 
+    try:
+        embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+        vectors = embeddings.embed_documents(chunks)
+    except Exception as exc:
+        logger.exception("Embedding failed for workspace %s", ws_id)
+        result.error = (
+            f"Embedding failed with model '{EMBED_MODEL}': {exc}. "
+            "The existing index was not changed."
+        )
+        return result
+
+    if len(vectors) != len(chunks):
+        result.error = "Embedding service returned a different number of vectors than chunks."
+        return result
+
+    chroma_path = workspace_manager.CHROMA_PATH
+    bm25_dir = workspace_manager.BM25_DIR
     collection_name = f"ws_{ws_id}"
     try:
-        chroma_client.delete_collection(name=collection_name)
-    except Exception:
-        pass
-    collection = chroma_client.create_collection(name=collection_name)
+        client = chromadb.PersistentClient(path=chroma_path)
+        _publish_collection(client, collection_name, chunk_ids, chunks, metadatas, vectors)
+    except Exception as exc:
+        logger.exception("Chroma write failed for workspace %s", ws_id)
+        result.error = f"Vector index write failed: {exc}"
+        return result
 
-    vectors = embeddings.embed_documents(chunks)
-    collection.add(ids=chunk_ids, documents=chunks, metadatas=metadatas, embeddings=vectors)
-
-    # 4. Sparse Storage (BM25)
     tokenized_corpus = [chunk.lower().split() for chunk in chunks]
-    bm25 = BM25Okapi(tokenized_corpus)
-
     bm25_data = {
-        "bm25": bm25,
+        "bm25": BM25Okapi(tokenized_corpus),
         "chunks": chunks,
         "metadatas": metadatas,
         "ids": chunk_ids,
     }
-    bm25_path = os.path.join(BM25_DIR, f"{ws_id}.pkl")
-    with open(bm25_path, "wb") as f:
-        pickle.dump(bm25_data, f)
+    bm25_path = os.path.join(bm25_dir, f"{ws_id}.pkl")
+    temporary = bm25_path + ".tmp"
+    try:
+        with open(temporary, "wb") as handle:
+            pickle.dump(bm25_data, handle)
+        os.replace(temporary, bm25_path)
+    except Exception as exc:
+        logger.exception("BM25 write failed for workspace %s", ws_id)
+        if os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+        result.error = f"Keyword index write failed: {exc}"
+        return result
 
-    print(f"Workspace '{ws_id}' indexed successfully: {len(chunks)} chunks.")
+    result.documents = len(raw_docs)
+    result.chunks = len(chunks)
+    result.indexed_files = [doc["source"] for doc in raw_docs]
+    logger.info("Indexed %s chunks from %s files into %s", result.chunks, result.documents, ws_id)
+    return result
+
+
+def _print_result(result: IngestResult) -> None:
+    for note in result.skipped:
+        print(f"Skipped {note}")
+    if result.error:
+        print(f"Error: {result.error}")
+        return
+    print(
+        f"Workspace '{result.workspace_id}' indexed successfully: "
+        f"{result.documents} file(s), {result.chunks} chunks."
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Multi-Tenant Knowledge Ingestion CLI")
-    parser.add_argument("--workspace", required=True, help="Unique identifier for the knowledge base")
-    parser.add_argument("--dir", required=True, help="Directory containing documents (.md, .txt, .pdf, .docx)")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    parser = argparse.ArgumentParser(description="Multi-tenant knowledge ingestion")
+    parser.add_argument("--workspace", required=True, help="Workspace name, for example accounting")
+    parser.add_argument("--dir", required=True, help="Directory of source documents")
     args = parser.parse_args()
 
-    ingest_workspace(args.workspace, args.dir)
+    outcome = ingest_workspace(args.workspace, args.dir)
+    _print_result(outcome)
+    if not outcome.ok:
+        sys.exit(1)

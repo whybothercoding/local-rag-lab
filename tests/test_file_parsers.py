@@ -2,6 +2,7 @@ import pytest
 from pathlib import Path
 from ingest import extract_text_from_file
 
+
 def test_extract_text_and_md(tmp_path: Path):
     txt_file = tmp_path / "sample.txt"
     txt_file.write_text("Hello plain text world", encoding="utf-8")
@@ -28,13 +29,11 @@ def test_extract_docx(tmp_path: Path):
 def test_extract_pdf(tmp_path: Path):
     import pypdf
     pdf_path = tmp_path / "sample.pdf"
-    
-    # Generate minimal valid PDF using pypdf writer
+
     writer = pypdf.PdfWriter()
     writer.add_blank_page(width=72, height=72)
     with open(pdf_path, "wb") as f:
         writer.write(f)
 
-    # Blank page returns empty string without error
     extracted = extract_text_from_file(pdf_path)
     assert isinstance(extracted, str)
