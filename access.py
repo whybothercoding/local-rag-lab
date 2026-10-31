@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Local identity and workspace access control.
+"""Local identity, sign-in, and workspace access control.
 
 Users, scrypt password hashes, and per-workspace grants live in one JSON file
-(ACCESS_POLICY_PATH). Authorization is default-deny: an account may act on a
-workspace only through an explicit grant. The file is written with owner-only permissions.
+(ACCESS_POLICY_PATH). The file carries an HMAC tag made with a local signing key
+(ACCESS_KEY_PATH); if it is edited outside this module, every check fails closed.
 
-Grants are per workspace: "query" (ask questions) and "review" (approve or reject answers).
-"admin" is a separate flag for workspace lifecycle (create, delete, upload, sync).
+Authorization is default-deny: an account may act on a workspace only through an
+explicit grant. "query" and "review" are per-workspace grants. "admin" is a separate
+flag for workspace lifecycle and indexing.
+
+Identity crosses into the pipeline as an HMAC-signed session token, never as a bare name.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import hashlib
 import hmac
@@ -20,25 +24,67 @@ import re
 import secrets
 import sys
 import tempfile
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from config import ACCESS_POLICY_PATH
+from audit import count_events_since
+from audit import record as audit_record
+from config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
 from workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review")
 MIN_PASSWORD_LENGTH = 12
+LOCKOUT_MAX_FAILURES = 5
+LOCKOUT_WINDOW_SECONDS = 15 * 60
+TOKEN_TTL_SECONDS = 8 * 60 * 60
+IDLE_TIMEOUT_SECONDS = 30 * 60
+
 _USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{1,63}")
-_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
+_SCRYPT_PARAMS = {"n": 2**17, "r": 8, "p": 1}
+_SCRYPT_MAXMEM = 256 * 1024 * 1024
+_DENYLIST_PATH = Path(__file__).resolve().parent / "common_passwords.txt"
+
+
+class PolicyIntegrityError(RuntimeError):
+    """The access policy file was changed outside access.py, or its signing key is missing or wrong."""
+
+
+@dataclass(frozen=True)
+class SignInResult:
+    ok: bool
+    username: str = ""
+    token: str = ""
+    reason: str = ""
+    retry_after_minutes: int = 0
+
+    def describe(self) -> str:
+        if self.ok:
+            return "Signed in."
+        if self.reason == "locked":
+            return (
+                f"Too many failed sign-ins for '{self.username}'. "
+                f"Try again in about {self.retry_after_minutes} minutes."
+            )
+        return "Sign-in failed: the account name or password is wrong."
+
+
+# --- Password hashing -------------------------------------------------------
+
+def _scrypt(password: str, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
+    return hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=dklen, maxmem=_SCRYPT_MAXMEM
+    )
 
 
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=32
-    )
-    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${digest.hex()}"
+    n, r, p = _SCRYPT_PARAMS["n"], _SCRYPT_PARAMS["r"], _SCRYPT_PARAMS["p"]
+    digest = _scrypt(password, salt, n, r, p, 32)
+    return f"scrypt${n}${r}${p}${salt.hex()}${digest.hex()}"
 
 
 def verify_password(password: str, stored: str) -> bool:
@@ -48,21 +94,61 @@ def verify_password(password: str, stored: str) -> bool:
         return False
     if scheme != "scrypt":
         return False
-    digest = hashlib.scrypt(
-        password.encode("utf-8"),
-        salt=bytes.fromhex(salt_hex),
-        n=int(n),
-        r=int(r),
-        p=int(p),
-        dklen=len(digest_hex) // 2,
-    )
+    digest = _scrypt(password, bytes.fromhex(salt_hex), int(n), int(r), int(p), len(digest_hex) // 2)
     return hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def needs_rehash(stored: str) -> bool:
+    """True when a stored hash uses older scrypt parameters and should be upgraded at the next sign-in."""
+    try:
+        _, n, r, p, _, _ = stored.split("$")
+    except ValueError:
+        return True
+    return (int(n), int(r), int(p)) != (_SCRYPT_PARAMS["n"], _SCRYPT_PARAMS["r"], _SCRYPT_PARAMS["p"])
 
 
 @lru_cache(maxsize=1)
 def _timing_equalizer() -> str:
-    """A real hash checked against unknown usernames, so login timing does not reveal which accounts exist."""
+    """Checked against unknown usernames so sign-in timing does not reveal which accounts exist."""
     return hash_password("timing-equalizer-not-a-password")
+
+
+@lru_cache(maxsize=1)
+def _common_passwords() -> frozenset[str]:
+    lines = _DENYLIST_PATH.read_text(encoding="utf-8").splitlines()
+    return frozenset(line.strip().lower() for line in lines if line.strip() and not line.startswith("#"))
+
+
+def check_password_strength(password: str, username: str = "") -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Passwords must be at least {MIN_PASSWORD_LENGTH} characters.")
+    lowered = password.lower()
+    if lowered in _common_passwords():
+        raise ValueError("That password is too common. Choose a less predictable one.")
+    if username and username.lower() in lowered:
+        raise ValueError("The password must not contain the account name.")
+
+
+# --- Signing key, policy integrity, and session tokens ----------------------
+
+def _signing_key(path: str | None = None) -> bytes:
+    """Load the local signing key, creating it with owner-only permissions on first use."""
+    target = Path(path or ACCESS_KEY_PATH)
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(secrets.token_bytes(32))
+    return target.read_bytes()
+
+
+def _policy_mac(users: dict[str, Any]) -> str:
+    body = json.dumps(users, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hmac.new(_signing_key(), b"policy:" + body, hashlib.sha256).hexdigest()
 
 
 def load_policy(path: str | None = None) -> dict[str, Any]:
@@ -70,18 +156,65 @@ def load_policy(path: str | None = None) -> dict[str, Any]:
     if not target.is_file():
         return {"version": 1, "users": {}}
     with open(target, encoding="utf-8") as handle:
-        return json.load(handle)
+        policy = json.load(handle)
+    users = policy.get("users", {})
+    if not hmac.compare_digest(str(policy.get("integrity", "")), _policy_mac(users)):
+        raise PolicyIntegrityError(
+            f"Access policy {target} failed its integrity check. Access is refused until it is restored."
+        )
+    return policy
 
 
 def save_policy(policy: dict[str, Any], path: str | None = None) -> None:
     target = Path(path or ACCESS_POLICY_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
+    policy = {**policy, "integrity": _policy_mac(policy.get("users", {}))}
     fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".access-", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(policy, handle, indent=2, sort_keys=True)
     os.chmod(temporary, 0o600)
     os.replace(temporary, target)
 
+
+def _b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64decode(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _token_mac(body: str) -> str:
+    return _b64encode(hmac.new(_signing_key(), b"token:" + body.encode("ascii"), hashlib.sha256).digest())
+
+
+def issue_token(username: str, now: float | None = None) -> str:
+    issued = int(now if now is not None else time.time())
+    payload = json.dumps({"sub": username, "iat": issued, "exp": issued + TOKEN_TTL_SECONDS}, separators=(",", ":"))
+    body = _b64encode(payload.encode("utf-8"))
+    return f"{body}.{_token_mac(body)}"
+
+
+def verify_token(token: str, now: float | None = None) -> str:
+    """Return the account name a valid, unexpired token was issued to, or "" for anything else."""
+    try:
+        body, signature = token.split(".")
+        if not hmac.compare_digest(_token_mac(body), signature):
+            return ""
+        payload = json.loads(_b64decode(body))
+        current = now if now is not None else time.time()
+        if int(payload["exp"]) <= current:
+            return ""
+        return str(payload["sub"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return ""
+
+
+def is_idle_expired(last_seen: float, now: float, timeout_seconds: int = IDLE_TIMEOUT_SECONDS) -> bool:
+    return now - last_seen > timeout_seconds
+
+
+# --- Accounts and sign-in ---------------------------------------------------
 
 def authenticate(username: str, password: str, path: str | None = None) -> bool:
     user = load_policy(path)["users"].get(username.strip().lower())
@@ -90,6 +223,39 @@ def authenticate(username: str, password: str, path: str | None = None) -> bool:
         verify_password(password, _timing_equalizer())
         return False
     return verify_password(password, stored)
+
+
+def sign_in(
+    username: str,
+    password: str,
+    path: str | None = None,
+    audit_path: str | None = None,
+) -> SignInResult:
+    """Check a password, apply the failed-attempt lockout, and issue a session token on success.
+
+    Failed attempts are written to the audit log; the lockout count is read back from it.
+    """
+    name = (username or "").strip().lower()[:64]
+    if name:
+        since = datetime.now(UTC) - timedelta(seconds=LOCKOUT_WINDOW_SECONDS)
+        recent = count_events_since("sign_in_failed", "username", name, since, path=audit_path)
+        if recent >= LOCKOUT_MAX_FAILURES:
+            audit_record("sign_in_blocked", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+            return SignInResult(
+                ok=False, username=name, reason="locked", retry_after_minutes=LOCKOUT_WINDOW_SECONDS // 60
+            )
+
+    if not name or not authenticate(name, password, path):
+        audit_record("sign_in_failed", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+        return SignInResult(ok=False, username=name, reason="invalid")
+
+    if needs_rehash(load_policy(path)["users"][name]["password_hash"]):
+        policy = load_policy(path)
+        policy["users"][name]["password_hash"] = hash_password(password)
+        save_policy(policy, path)
+
+    audit_record("sign_in_succeeded", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+    return SignInResult(ok=True, username=name, token=issue_token(name))
 
 
 def authorize(username: str, workspace_id: str, permission: str, path: str | None = None) -> bool:
@@ -119,14 +285,9 @@ def _normalize_username(raw: str) -> str:
     return name
 
 
-def _check_password_length(password: str) -> None:
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise ValueError(f"Passwords must be at least {MIN_PASSWORD_LENGTH} characters.")
-
-
 def add_user(username: str, password: str, admin: bool = False, path: str | None = None) -> None:
     name = _normalize_username(username)
-    _check_password_length(password)
+    check_password_strength(password, name)
     policy = load_policy(path)
     if name in policy["users"]:
         raise ValueError(
@@ -139,7 +300,7 @@ def add_user(username: str, password: str, admin: bool = False, path: str | None
 def set_password(username: str, password: str, path: str | None = None) -> None:
     """Set or reset an account's password. Existing grants and admin status are kept."""
     name = _normalize_username(username)
-    _check_password_length(password)
+    check_password_strength(password, name)
     policy = load_policy(path)
     if name not in policy["users"]:
         raise ValueError(f"User '{name}' does not exist.")
@@ -225,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
                 grants = ", ".join(f"{ws}({'/'.join(p)})" for ws, p in user["grants"].items()) or "none"
                 flag = " admin" if user["admin"] else ""
                 print(f"{user['username']}{flag}: {grants}")
-    except ValueError as exc:
+    except (ValueError, PolicyIntegrityError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0

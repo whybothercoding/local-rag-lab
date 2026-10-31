@@ -68,7 +68,8 @@ The ingestion pipeline handles multi-format file parsing, character chunking, an
 ### Graph State Schema (`GraphState`)
 * `workspace_id` (`str`): Target workspace bundle name.
 * `session_id` (`str`): Review-session identifier recorded with every audit event (`audit.py`).
-* `principal` (`str`): Authenticated account. The guardrail denies it unless it holds `query` on `workspace_id`; the approval node requires `review` and rejects self-approval (`access.py`).
+* `principal_token` (`str`): HMAC-signed session token from the UI or CLI. The guardrail derives `principal` from it, and a bare account name in the input is ignored.
+* `principal` (`str`): Authenticated account, derived from `principal_token`. The guardrail denies it unless it holds `query` on `workspace_id`; the approval node requires `review` and rejects self-approval (`access.py`).
 * `question` / `original_question` / `sanitized_question` (`str`): Query lifecycle states.
 * `documents` (`List[str]`): Retrieved raw context chunks.
 * `citations` (`List[str]`): Formatted provenance tags (`[chunk_id] source_file`).

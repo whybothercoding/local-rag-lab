@@ -1,13 +1,23 @@
 import streamlit as st
+import time
 import uuid
-import os
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
-from access import allowed_workspaces, authenticate, authorize, is_admin, load_policy
+from access import (
+    PolicyIntegrityError,
+    allowed_workspaces,
+    authorize,
+    is_admin,
+    is_idle_expired,
+    load_policy,
+    sign_in,
+    verify_token,
+)
 from app import workflow, GraphState
 from approve import list_pending_threads
 from checkpointer import get_checkpointer
+from config import MAX_SOURCE_BYTES, UPLOADS_DIR
 from ingest import ingest_workspace
 from redaction import redact_pii
 from workspace_manager import (
@@ -15,8 +25,9 @@ from workspace_manager import (
     create_workspace,
     delete_workspace,
     get_workspace_stats,
-    UPLOADS_DIR,
+    staged_path,
 )
+from pathlib import Path
 
 st.set_page_config(page_title="Local Enterprise Knowledge Hub", layout="wide")
 
@@ -30,24 +41,51 @@ def render_citations(citations):
             st.markdown(f"**[{idx}]** `{citation}`")
 
 
+def _sign_out(notice: str = "") -> None:
+    for key in ("user", "token", "last_seen"):
+        st.session_state.pop(key, None)
+    if notice:
+        st.session_state.notice = notice
+
+
 def login_gate() -> None:
-    """Stops the script until a user is signed in."""
+    """Stops the script until a user holds a valid, unexpired session."""
     if st.session_state.get("user"):
-        return
+        if not verify_token(st.session_state.get("token", "")):
+            _sign_out("Your session has expired. Please sign in again.")
+        elif is_idle_expired(st.session_state.last_seen, time.time()):
+            _sign_out("You were signed out after 30 minutes of inactivity.")
+        else:
+            st.session_state.last_seen = time.time()
+            return
+
     st.title("Local Enterprise Knowledge Hub")
-    if not load_policy()["users"]:
+    if notice := st.session_state.pop("notice", ""):
+        st.info(notice)
+    try:
+        has_accounts = bool(load_policy()["users"])
+    except PolicyIntegrityError as exc:
+        st.error(str(exc))
+        st.stop()
+    if not has_accounts:
         st.error("No accounts exist yet. Create one with: python access.py add-user <name> --admin")
         st.stop()
+
     with st.form("login"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Sign in")
     if submitted:
-        name = username.strip().lower()
-        if authenticate(name, password):
-            st.session_state.user = name
+        result = sign_in(username, password)
+        if result.ok:
+            st.session_state.user = result.username
+            st.session_state.token = result.token
+            st.session_state.last_seen = time.time()
             st.rerun()
-        st.error("Invalid username or password. Forgot it? Ask an administrator to reset it (access.py set-password <name>).")
+        message = result.describe()
+        if result.reason == "invalid":
+            message += " Forgot the password? Ask an administrator to reset it (access.py set-password <name>)."
+        st.error(message)
     st.stop()
 
 
@@ -77,7 +115,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
 
     if approve_clicked or reject_clicked:
         decision = "approved" if approve_clicked else "rejected"
-        resume = {"decision": decision, "approver": user, "reason": reason}
+        resume = {"decision": decision, "approver_token": st.session_state.token, "reason": reason}
         for _ in engine.stream(Command(resume=resume), config=config):
             pass
         if thread_id == st.session_state.thread_id:
@@ -121,7 +159,7 @@ admin = is_admin(user)
 st.sidebar.title("Document Bundles")
 st.sidebar.caption(f"Signed in as **{user}**{' (admin)' if admin else ''}")
 if st.sidebar.button("Sign out"):
-    del st.session_state["user"]
+    _sign_out()
     st.rerun()
 
 all_workspaces = list_workspaces()
@@ -172,17 +210,26 @@ if admin:
     )
 
     if st.sidebar.button(f"Index into '{active_ws}'", use_container_width=True) and uploaded_files:
-        target_dir = os.path.join(UPLOADS_DIR, active_ws)
-        os.makedirs(target_dir, exist_ok=True)
-
+        accepted = 0
         for uf in uploaded_files:
-            with open(os.path.join(target_dir, uf.name), "wb") as f:
-                f.write(uf.getbuffer())
+            if uf.size > MAX_SOURCE_BYTES:
+                st.sidebar.error(f"'{uf.name}' is larger than {MAX_SOURCE_BYTES // (1024 * 1024)} MB and was not saved.")
+                continue
+            try:
+                target = staged_path(active_ws, uf.name)
+            except ValueError as exc:
+                st.sidebar.error(f"'{uf.name}' was not saved: {exc}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(uf.getbuffer())
+            accepted += 1
 
-        with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
-            ingest_workspace(active_ws, target_dir)
-        st.sidebar.success(f"Successfully indexed {len(uploaded_files)} file(s).")
-        st.rerun()
+        if accepted:
+            with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
+                ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
+            st.sidebar.success(f"Successfully indexed {accepted} file(s).")
+            st.rerun()
 
 # --- MAIN CHAT AREA ---
 st.title(f"Workspace: `{active_ws}`")
@@ -216,7 +263,8 @@ with get_checkpointer() as checkpointer:
         inputs: GraphState = {
             "workspace_id": active_ws,
             "session_id": st.session_state.thread_id,
-            "principal": user,
+            # The pipeline verifies this token itself. The plain name is never sent.
+            "principal_token": st.session_state.token,
             # Redacted before submission: LangGraph persists the input in the checkpoint before any node runs.
             "question": redact_pii(user_query),
             "original_question": redact_pii(user_query),

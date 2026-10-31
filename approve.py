@@ -6,7 +6,7 @@ import logging
 from langgraph.types import Command
 
 # Import workflow and checkpointer factory
-from access import authenticate, authorize
+from access import authorize, issue_token, sign_in, verify_token
 from app import workflow
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
@@ -15,6 +15,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("HITL-Operator-CLI")
+
+MAX_SIGN_IN_ATTEMPTS = 3
 
 
 def list_pending_threads(app) -> list[str]:
@@ -65,17 +67,18 @@ def inspect_thread(app, thread_id: str):
     return state
 
 
-def process_decision(app, thread_id: str, decision: str, approver: str, reason: str = ""):
-    """Resumes the graph with the operator's decision and the reviewer identity the audit log records."""
+def process_decision(app, thread_id: str, decision: str, approver_token: str, reason: str = ""):
+    """Resumes the graph with the operator's decision. The reviewer is identified by a signed session token."""
     config = {"configurable": {"thread_id": thread_id}}
     payload = {
         "decision": decision.strip().lower(),
-        "approver": approver.strip(),
+        "approver_token": approver_token,
         "reason": reason.strip(),
     }
     resume_cmd = Command(resume=payload)
 
-    logger.info(f"Submitting '{payload['decision']}' by {payload['approver']} to thread: {thread_id}...")
+    reviewer = verify_token(approver_token) or "unknown"
+    logger.info(f"Submitting '{payload['decision']}' by {reviewer} to thread: {thread_id}...")
     for event in app.stream(resume_cmd, config=config):
         for node_name, state_update in event.items():
             logger.info(f"Post-approval Node Completed: [{node_name}]")
@@ -87,11 +90,8 @@ def process_decision(app, thread_id: str, decision: str, approver: str, reason: 
     print(f"Final Emitted Output:\n{final_state.values.get('generation')}\n")
 
 
-MAX_SIGN_IN_ATTEMPTS = 3
-
-
 def confirm_reviewer(state, preset: str | None) -> str:
-    """Sign the reviewer in with their account password, then check their review grant on this thread's workspace."""
+    """Sign the reviewer in, check their review grant on this thread's workspace, and return a session token."""
     workspace = state.values.get("workspace_id", "")
     print("\nTo record this decision, sign in with the reviewer account.")
     print("Enter the account name and the password set for that account.")
@@ -103,21 +103,24 @@ def confirm_reviewer(state, preset: str | None) -> str:
         name = (preset or input("Account name: ")).strip().lower()
         for attempt in range(1, MAX_SIGN_IN_ATTEMPTS + 1):
             password = getpass.getpass(f"Password for '{name}': ")
-            if authenticate(name, password):
+            result = sign_in(name, password)
+            if result.ok:
                 break
+            if result.reason == "locked":
+                sys.exit(f"{result.describe()} No decision recorded.")
             remaining = MAX_SIGN_IN_ATTEMPTS - attempt
             if remaining == 0:
                 sys.exit("Sign-in failed too many times. No decision recorded.")
-            print(f"Sign-in failed: the account name or password is wrong. Attempts left: {remaining}.")
+            print(f"{result.describe()} Attempts left: {remaining}.")
     except (KeyboardInterrupt, EOFError):
         sys.exit("\nCancelled. No decision recorded; the query is still waiting for review.")
 
-    if not authorize(name, workspace, "review"):
+    if not authorize(result.username, workspace, "review"):
         sys.exit(
-            f"'{name}' signed in but has no review permission on workspace '{workspace}'. "
+            f"'{result.username}' signed in but has no review permission on workspace '{workspace}'. "
             "No decision recorded."
         )
-    return name
+    return issue_token(result.username)
 
 
 def main():
@@ -148,8 +151,8 @@ def main():
         if args.thread and args.action:
             state = inspect_thread(app, args.thread)
             if state:
-                approver = confirm_reviewer(state, args.approver)
-                process_decision(app, args.thread, args.action, approver, args.reason)
+                approver_token = confirm_reviewer(state, args.approver)
+                process_decision(app, args.thread, args.action, approver_token, args.reason)
             return
 
         # Mode 3: Interactive approval
@@ -166,13 +169,13 @@ def main():
         if not state:
             sys.exit(1)
 
-        approver = confirm_reviewer(state, args.approver)
+        approver_token = confirm_reviewer(state, args.approver)
 
         choice = input("Enter decision ('a' for approve / 'r' for reject / 'q' to abort): ").strip().lower()
         if choice in ["a", "approve", "approved"]:
-            process_decision(app, target_thread, "approved", approver, args.reason)
+            process_decision(app, target_thread, "approved", approver_token, args.reason)
         elif choice in ["r", "reject", "rejected"]:
-            process_decision(app, target_thread, "rejected", approver, args.reason)
+            process_decision(app, target_thread, "rejected", approver_token, args.reason)
         else:
             print("Aborted without changes.")
 

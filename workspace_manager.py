@@ -16,6 +16,7 @@ from config import (
     KNOWLEDGE_BASE_DIR as _KNOWLEDGE_BASE_DIR,
 )
 from checkpointer import is_postgres_uri, get_sqlite_path
+from parsers import SUPPORTED_EXTENSIONS
 from sparse_search import delete_sparse_index, has_sparse_index
 
 # Re-exported so tests and ingest can redirect storage without editing config.
@@ -39,6 +40,30 @@ def sanitize_workspace_id(raw_name: str) -> str:
     # Replace any sequence of non-alphanumeric characters with a single underscore
     cleaned = re.sub(r'[^a-z0-9]+', '_', cleaned)
     return cleaned.strip('_')[:_MAX_WORKSPACE_ID].strip('_')
+
+
+def safe_upload_name(raw_name: str) -> str:
+    """Reduce an uploaded filename to a plain name with a supported extension.
+
+    Directory parts, hidden names, control characters, and unsupported types are refused.
+    """
+    name = os.path.basename(raw_name.replace("\\", "/")).strip()
+    if not name or name in {".", ".."} or name.startswith("."):
+        raise ValueError("Invalid file name.")
+    if any(ord(ch) < 32 or ch in '<>:"|?*' for ch in name):
+        raise ValueError(f"File name '{name!r}' contains unsupported characters.")
+    if os.path.splitext(name)[1].lower() not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file type for '{name}'.")
+    return name
+
+
+def staged_path(ws_id: str, raw_name: str) -> Path:
+    """Where an upload for a workspace is staged. Always inside that workspace's upload folder."""
+    base = (Path(UPLOADS_DIR) / ws_id).resolve()
+    target = (base / safe_upload_name(raw_name)).resolve()
+    if target.parent != base:
+        raise ValueError("Invalid file name.")
+    return target
 
 
 def ensure_base_dirs():
@@ -114,6 +139,7 @@ def discover_knowledge_base_workspaces(base_dir: str | None = None) -> list[Tupl
 def sync_all_workspaces(
     base_dir: str | None = None,
     force: bool = False,
+    actor: str = "system",
 ) -> Dict[str, Any]:
     """Scan knowledge_base/ directory and automatically index all discovered workspaces.
 
@@ -123,7 +149,7 @@ def sync_all_workspaces(
     discovered = discover_knowledge_base_workspaces(base_dir)
     results = {}
     for ws_id, dir_path in discovered:
-        results[ws_id] = ingest_workspace(ws_id, dir_path, force=force)
+        results[ws_id] = ingest_workspace(ws_id, dir_path, force=force, actor=actor)
     return results
 
 

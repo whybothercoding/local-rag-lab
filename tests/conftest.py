@@ -11,13 +11,21 @@ import tempfile
 
 # Chroma's anonymous telemetry must never run in tests.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-# Audit events and access policy for tests live in throwaway files, never in the project's data/ directory.
+# Audit log, access policy, and signing key for tests live in throwaway files, never in data/.
 _scratch_dir = tempfile.mkdtemp(prefix="rag-test-")
 atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
 os.environ["AUDIT_DB_PATH"] = os.path.join(_scratch_dir, "audit.db")
 os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.json")
+os.environ["ACCESS_KEY_PATH"] = os.path.join(_scratch_dir, "access.key")
 
 TEST_PASSWORD = "correct-horse-battery"
+
+
+def token_for(name: str) -> str:
+    """A session token for a test account, as the UI or CLI would issue after a successful sign-in."""
+    from access import issue_token
+
+    return issue_token(name)
 
 
 def _seed_access_policy() -> None:

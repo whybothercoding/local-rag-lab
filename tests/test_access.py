@@ -3,7 +3,6 @@ import stat
 
 import pytest
 
-import access
 from access import (
     add_user,
     allowed_workspaces,
@@ -13,9 +12,10 @@ from access import (
     list_users,
     set_grant,
     verify_password,
+    verify_token,
 )
 from audit import list_events
-from conftest import TEST_PASSWORD
+from conftest import TEST_PASSWORD, token_for
 
 
 @pytest.fixture
@@ -108,7 +108,7 @@ def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):
         "question": "What is the Q4 roadmap?",
         "workspace_id": "default",
         "session_id": "s-denied",
-        "principal": "dave",
+        "principal_token": token_for("dave"),
         "telemetry": {},
     })
 
@@ -127,10 +127,11 @@ def test_guardrail_allows_principal_with_query_grant():
         "question": "What is the Q4 roadmap?",
         "workspace_id": "default",
         "session_id": "s-allowed",
-        "principal": "carol",
+        "principal_token": token_for("carol"),
         "telemetry": {},
     })
     assert result["is_safe"] is True
+    assert result["principal"] == "carol"
 
 
 def test_guardrail_denies_anonymous_caller():
@@ -138,6 +139,74 @@ def test_guardrail_denies_anonymous_caller():
 
     result = guardrail_input_node({"question": "hello", "workspace_id": "default", "telemetry": {}})
     assert result["is_safe"] is False
+
+
+def test_guardrail_ignores_a_bare_name_without_a_token():
+    from app import guardrail_input_node
+
+    result = guardrail_input_node({
+        "question": "hello",
+        "workspace_id": "default",
+        "principal": "alice",
+        "telemetry": {},
+    })
+    assert result["is_safe"] is False
+
+
+def test_reviewer_without_grant_cannot_release_an_answer(mocker):
+    from app import human_in_the_loop_node
+
+    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("carol")})
+    result = human_in_the_loop_node({
+        "workspace_id": "default",
+        "principal": "dave",
+        "sanitized_question": "what is the roadmap",
+        "generation": "EU and North American SME logistics.",
+        "citations": [],
+        "history": [],
+        "telemetry": {},
+    })
+    assert "rejected by human compliance" in result["generation"].lower()
+    event = list_events(limit=1, workspace_id="default")[0]
+    assert event["data"]["released"] is False
+    assert "lacks review permission" in event["data"]["reason"]
+
+
+def test_requester_cannot_approve_their_own_query(mocker):
+    from app import human_in_the_loop_node
+
+    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    result = human_in_the_loop_node({
+        "workspace_id": "default",
+        "principal": "bob",
+        "sanitized_question": "what is the roadmap",
+        "generation": "EU and North American SME logistics.",
+        "citations": [],
+        "history": [],
+        "telemetry": {},
+    })
+    assert "rejected by human compliance" in result["generation"].lower()
+    event = list_events(limit=1, workspace_id="default")[0]
+    assert "self-approval" in event["data"]["reason"]
+
+
+def test_reviewer_can_approve_another_users_query(mocker):
+    from app import human_in_the_loop_node
+
+    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    result = human_in_the_loop_node({
+        "workspace_id": "default",
+        "principal": "carol",
+        "sanitized_question": "what is the roadmap",
+        "generation": "EU and North American SME logistics.",
+        "citations": [],
+        "history": [],
+        "telemetry": {},
+    })
+    assert result["generation"] == "EU and North American SME logistics."
+    event = list_events(limit=1, workspace_id="default")[0]
+    assert event["data"]["released"] is True
+    assert event["data"]["approver"] == "bob"
 
 
 @pytest.fixture
@@ -151,7 +220,7 @@ def test_cli_reviewer_signs_in_with_correct_password(mocker, thread_state, capsy
     import approve
 
     mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
-    assert approve.confirm_reviewer(thread_state, "bob") == "bob"
+    assert verify_token(approve.confirm_reviewer(thread_state, "bob")) == "bob"
     assert "Forgot the password" in capsys.readouterr().out
 
 
@@ -159,7 +228,7 @@ def test_cli_reviewer_gets_attempts_left_and_can_retry(mocker, thread_state, cap
     import approve
 
     mocker.patch("approve.getpass.getpass", side_effect=["wrong-password-value", TEST_PASSWORD])
-    assert approve.confirm_reviewer(thread_state, "bob") == "bob"
+    assert verify_token(approve.confirm_reviewer(thread_state, "bob")) == "bob"
     assert "Attempts left: 2" in capsys.readouterr().out
 
 
@@ -213,59 +282,3 @@ def test_adding_an_existing_user_points_to_password_reset(policy_path):
     add_user("erin", TEST_PASSWORD, path=policy_path)
     with pytest.raises(ValueError, match="set-password erin"):
         add_user("erin", TEST_PASSWORD, path=policy_path)
-
-
-def test_reviewer_without_grant_cannot_release_an_answer(mocker):
-    from app import human_in_the_loop_node
-
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver": "carol"})
-    result = human_in_the_loop_node({
-        "workspace_id": "default",
-        "principal": "dave",
-        "sanitized_question": "what is the roadmap",
-        "generation": "EU and North American SME logistics.",
-        "citations": [],
-        "history": [],
-        "telemetry": {},
-    })
-    assert "rejected by human compliance" in result["generation"].lower()
-    event = list_events(limit=1, workspace_id="default")[0]
-    assert event["data"]["released"] is False
-    assert "lacks review permission" in event["data"]["reason"]
-
-
-def test_requester_cannot_approve_their_own_query(mocker):
-    from app import human_in_the_loop_node
-
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver": "bob"})
-    result = human_in_the_loop_node({
-        "workspace_id": "default",
-        "principal": "bob",
-        "sanitized_question": "what is the roadmap",
-        "generation": "EU and North American SME logistics.",
-        "citations": [],
-        "history": [],
-        "telemetry": {},
-    })
-    assert "rejected by human compliance" in result["generation"].lower()
-    event = list_events(limit=1, workspace_id="default")[0]
-    assert "self-approval" in event["data"]["reason"]
-
-
-def test_reviewer_can_approve_another_users_query(mocker):
-    from app import human_in_the_loop_node
-
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver": "bob"})
-    result = human_in_the_loop_node({
-        "workspace_id": "default",
-        "principal": "carol",
-        "sanitized_question": "what is the roadmap",
-        "generation": "EU and North American SME logistics.",
-        "citations": [],
-        "history": [],
-        "telemetry": {},
-    })
-    assert result["generation"] == "EU and North American SME logistics."
-    event = list_events(limit=1, workspace_id="default")[0]
-    assert event["data"]["released"] is True
-    assert event["data"]["approver"] == "bob"

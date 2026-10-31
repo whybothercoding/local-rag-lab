@@ -37,13 +37,14 @@ test-offline:
 # 8. Discover every folder under knowledge_base/ and index it.
 #    Idempotent: unchanged workspaces are skipped.
 sync:
-	./venv/bin/python ingest.py --all
+	@test -n "$(ADMIN)" || (echo "Indexing is an administrative action. Run: make sync ADMIN=<admin account>" && exit 1)
+	./venv/bin/python ingest.py --all --as $(ADMIN)
 
 ingest: sync
 
 # 9. Sync, then launch the UI. A failed sync is reported but does not block the UI.
 ui:
-	-./venv/bin/python ingest.py --all
+	@if [ -n "$(ADMIN)" ]; then ./venv/bin/python ingest.py --all --as $(ADMIN) || echo "Indexing failed; launching the UI anyway."; else echo "Skipping workspace sync. To index knowledge_base/ on launch: make ui ADMIN=<admin account>"; fi
 	./venv/bin/streamlit run ui.py
 
 # 10. Verify the audit hash chain (exits non-zero if any record was altered or removed)

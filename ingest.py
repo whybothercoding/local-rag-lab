@@ -6,6 +6,7 @@ Embeddings are computed before either store is replaced, so a failed
 embedding call leaves the previous index in place.
 """
 import argparse
+import getpass
 import hashlib
 import json
 import logging
@@ -18,6 +19,8 @@ import chromadb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import workspace_manager
+from access import is_admin, sign_in
+from audit import record as audit_record
 from config import MAX_SOURCE_BYTES
 from embedding_provider import embedding_fingerprint, get_embedding_model
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
@@ -147,6 +150,7 @@ def ingest_workspace(
     chunk_size: int = 600,
     chunk_overlap: int = 100,
     force: bool = False,
+    actor: str = "system",
 ) -> IngestResult:
     """Index every supported file under source_dir into one workspace.
 
@@ -268,8 +272,25 @@ def ingest_workspace(
     result.documents = len(raw_docs)
     result.chunks = len(chunks)
     result.indexed_files = [doc["source"] for doc in raw_docs]
+    audit_record(
+        "index_workspace",
+        workspace_id=ws_id,
+        session_id="",
+        data={"actor": actor, "documents": result.documents, "chunks": result.chunks},
+    )
     logger.info("Indexed %s chunks from %s files into %s", result.chunks, result.documents, ws_id)
     return result
+
+
+def authenticate_admin(account: str) -> str:
+    """Sign an administrator in with their password. Indexing is an administrative action."""
+    password = getpass.getpass(f"Password for admin account '{account}': ")
+    result = sign_in(account, password)
+    if not result.ok:
+        raise SystemExit(f"{result.describe()} Indexing refused.")
+    if not is_admin(result.username):
+        raise SystemExit(f"'{result.username}' is not an administrator. Indexing refused.")
+    return result.username
 
 
 def _print_result(result: IngestResult) -> None:
@@ -297,12 +318,15 @@ if __name__ == "__main__":
     parser.add_argument("--dir", required=False, help="Directory of source documents")
     parser.add_argument("--all", action="store_true", help="Auto-discover and sync all workspaces in knowledge_base/")
     parser.add_argument("--force", action="store_true", help="Force re-indexing even if files are unchanged")
+    parser.add_argument("--as", dest="admin", required=True, metavar="ACCOUNT",
+                        help="Administrator account performing the indexing (prompts for its password)")
     args = parser.parse_args()
+    actor = authenticate_admin(args.admin)
 
     if args.all or not args.workspace:
         from workspace_manager import sync_all_workspaces
         print("Discovering and syncing all workspaces in knowledge_base/...")
-        outcomes = sync_all_workspaces(force=args.force)
+        outcomes = sync_all_workspaces(force=args.force, actor=actor)
         if not outcomes:
             print("No workspace directories found under knowledge_base/.")
             sys.exit(0)
@@ -314,7 +338,7 @@ if __name__ == "__main__":
         print("Error: --dir is required when specifying a single --workspace.")
         sys.exit(1)
 
-    outcome = ingest_workspace(args.workspace, args.dir, force=args.force)
+    outcome = ingest_workspace(args.workspace, args.dir, force=args.force, actor=actor)
     _print_result(outcome)
     if not outcome.ok:
         sys.exit(1)

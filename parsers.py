@@ -6,11 +6,26 @@ fails that file only when someone actually uploads one.
 """
 import csv
 import json
+import os
 import re
+import subprocess
+import sys
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
+
+
+class ParseError(ValueError):
+    """A document was refused or could not be read."""
+
+
+PARSE_TIMEOUT_SEC = int(os.getenv("PARSE_TIMEOUT_SEC", "60"))
+PARSER_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
+MAX_PDF_PAGES = 1000
+ZIP_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx", ".xlsm", ".odt", ".epub"})
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 100
 
 
 class _HTMLText(HTMLParser):
@@ -93,6 +108,8 @@ def _extract_pdf(file_path: Path) -> str:
     reader = pypdf.PdfReader(str(file_path))
     if reader.is_encrypted:
         raise ValueError("password-protected PDF; remove the password and upload it again")
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise ParseError(f"PDF has more than {MAX_PDF_PAGES} pages")
     pages = []
     for page in reader.pages:
         text = page.extract_text() or ""
@@ -247,10 +264,72 @@ def unsupported_reason(suffix: str) -> str:
     return f"unsupported type {ext or '(none)'}"
 
 
-def extract_text_from_file(file_path: Path) -> str:
-    """Extract plain text from a supported file. Unknown types return an empty string."""
-    parser = PARSERS.get(file_path.suffix.lower())
+def _check_archive(file_path: Path) -> None:
+    """Refuse office files whose contents would expand far beyond their size on disk (zip bombs)."""
+    try:
+        with zipfile.ZipFile(file_path) as archive:
+            expanded = 0
+            for info in archive.infolist():
+                expanded += info.file_size
+                if expanded > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                    raise ParseError("file expands to more than 200 MB when unpacked")
+                large = info.file_size > 1024 * 1024
+                if large and info.compress_size and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+                    raise ParseError("file has a suspicious compression ratio")
+    except zipfile.BadZipFile as exc:
+        raise ParseError("file is not a valid Office or EPUB archive") from exc
+
+
+def _extract_in_process(file_path: Path) -> str:
+    """Run the matching parser in this process. Called by parser_worker.py, never by the server directly."""
+    suffix = file_path.suffix.lower()
+    parser = PARSERS.get(suffix)
     if parser is None:
         return ""
-    text = parser(file_path)
-    return text.strip()
+    if suffix in ZIP_SUFFIXES:
+        _check_archive(file_path)
+    return parser(file_path).strip()
+
+
+def _limit_child_resources() -> None:
+    """Cap CPU time and address space inside the parser child, where the OS supports it."""
+    import resource
+
+    cpu_seconds = PARSE_TIMEOUT_SEC + 5
+    for kind, limit in (
+        (resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds)),
+        (resource.RLIMIT_AS, (PARSER_MEMORY_LIMIT_BYTES, PARSER_MEMORY_LIMIT_BYTES)),
+    ):
+        try:
+            resource.setrlimit(kind, limit)
+        except (ValueError, OSError):
+            pass
+
+
+def extract_text_from_file(file_path: Path) -> str:
+    """Extract plain text from a supported file. Unknown types return an empty string.
+
+    Parsing runs in a child process with a time limit and resource caps, so a hostile
+    file cannot hang the server or exhaust its memory. Failures raise ParseError.
+    """
+    file_path = Path(file_path)
+    if file_path.suffix.lower() not in PARSERS:
+        return ""
+    worker = Path(__file__).resolve().parent / "parser_worker.py"
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(worker), str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=PARSE_TIMEOUT_SEC,
+            env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ParseError(f"parsing took longer than {PARSE_TIMEOUT_SEC} seconds") from exc
+    if completed.returncode != 0:
+        reasons = completed.stderr.strip().splitlines()
+        raise ParseError(reasons[-1] if reasons else "the document could not be parsed")
+    lines = completed.stdout.strip().splitlines()
+    if not lines:
+        raise ParseError("the parser returned no output")
+    return json.loads(lines[-1])["text"]

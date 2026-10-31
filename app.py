@@ -18,7 +18,7 @@ from config import (
     CHROMA_PATH,
     BM25_DIR,
 )
-from access import authorize
+from access import authorize, verify_token
 from audit import record as audit_record
 from embedding_provider import get_embedding_model
 from llm_provider import get_chat_llm
@@ -29,6 +29,7 @@ from sparse_search import search_sparse_chunks
 class GraphState(TypedDict, total=False):
     workspace_id: str
     session_id: str
+    principal_token: str
     principal: str
     question: str
     original_question: str
@@ -91,7 +92,8 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     raw = state.get("question", "")
     ws_id = state.get("workspace_id", "default")
     session_id = state.get("session_id", "")
-    principal = state.get("principal", "")
+    # Identity comes only from a signed session token. A bare name in the input is ignored.
+    principal = verify_token(str(state.get("principal_token", "")))
     telemetry = dict(state.get("telemetry", {}))
 
     # Authorization comes first: unauthorized callers get no processing and no retrieval.
@@ -144,6 +146,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     return {
         "is_safe": True,
+        "principal": principal,
         "sanitized_question": sanitized,
         "telemetry": telemetry,
     }
@@ -368,11 +371,11 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
 
 
 def _normalize_decision(raw: Any) -> dict[str, str]:
-    """Accept the resume payload as a dict or a bare decision string (older callers)."""
+    """Read the resume payload. The approver is the account a valid session token was issued to."""
     payload = raw if isinstance(raw, dict) else {"decision": raw}
     return {
         "decision": str(payload.get("decision", "")).strip().lower(),
-        "approver": str(payload.get("approver", "")).strip(),
+        "approver": verify_token(str(payload.get("approver_token", ""))),
         "reason": redact_pii(str(payload.get("reason", "")).strip()),
     }
 

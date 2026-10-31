@@ -171,6 +171,25 @@ def list_events(limit: int = 50, workspace_id: str | None = None, path: str | No
     ]
 
 
+def count_events_since(
+    event_type: str,
+    json_field: str,
+    value: str,
+    since: datetime,
+    path: str | None = None,
+) -> int:
+    """Count events of one type whose data field matches a value, recorded at or after a point in time."""
+    conn = _open(path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = ? AND json_extract(data, ?) = ? AND ts >= ?",
+            (event_type, f"$.{json_field}", value, since.isoformat(timespec="microseconds")),
+        ).fetchone()
+        return int(row[0])
+    finally:
+        conn.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify and inspect the audit trail.")
     sub = parser.add_subparsers(dest="command", required=True)

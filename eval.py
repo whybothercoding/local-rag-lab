@@ -29,12 +29,13 @@ os.environ["BM25_DIR"] = str(OUT_DIR / "bm25")
 os.environ["UPLOADS_DIR"] = str(OUT_DIR / "uploads")
 os.environ["AUDIT_DB_PATH"] = str(OUT_DIR / "audit.db")
 os.environ["ACCESS_POLICY_PATH"] = str(OUT_DIR / "access_policy.json")
+os.environ["ACCESS_KEY_PATH"] = str(OUT_DIR / "access.key")
 os.environ["DB_URI"] = f"sqlite:///{OUT_DIR / 'unused_checkpoints.db'}"
 os.environ.setdefault("LLM_PROVIDER", "deterministic")
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from access import save_policy
+from access import issue_token, save_policy
 from app import workflow
 from eval_metrics import (
     check_thresholds,
@@ -80,7 +81,7 @@ def run_case(engine, case: dict) -> dict:
     inputs = {
         "workspace_id": case["workspace"],
         "session_id": thread_id,
-        "principal": case.get("principal", "eval"),
+        "principal_token": issue_token(case.get("principal", "eval")),
         "question": case["question"],
         "original_question": case["question"],
         "sanitized_question": "",

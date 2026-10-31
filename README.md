@@ -101,7 +101,8 @@ make eval          # offline evaluation gate: retrieval, answer, and access-cont
 Put `.md`, `.txt`, `.pdf`, or `.docx` files in one folder per workspace under `knowledge_base/`, then run:
 
 ```bash
-make sync   # index every folder under knowledge_base/; unchanged files are skipped
+make sync ADMIN=alice   # index every folder under knowledge_base/; unchanged files are skipped
+                         # indexing is an administrative action: you are asked for that account's password
 ```
 
 Each folder name becomes a workspace ID (for example `Accounting & Tax` becomes `accounting_tax`). Symlinked files and folders are ignored. Each workspace gets its own ChromaDB collection (`ws_<workspace_id>`) and SQLite FTS5 keyword index (`bm25_indices/<workspace_id>.db`).
@@ -109,8 +110,19 @@ Each folder name becomes a workspace ID (for example `Accounting & Tax` becomes 
 To index a single directory into a named workspace:
 
 ```bash
-python ingest.py --workspace accounting --dir ./knowledge_base/accounting
+python ingest.py --workspace accounting --dir ./knowledge_base/accounting --as alice
 ```
+
+### Security Controls
+
+- **Signed identity.** Signing in issues an HMAC-signed session token that expires after 8 hours. The pipeline verifies the token itself. A bare account name in the input is ignored.
+- **Sign-in throttling.** Five failed sign-ins in 15 minutes lock an account for that window. Failures are written to the audit log, without the password.
+- **Idle timeout.** The UI signs you out after 30 minutes without activity.
+- **Tamper detection.** `access_policy.json` carries an integrity tag. If it is edited outside `access.py`, access is refused until it is restored.
+- **Password policy.** At least 12 characters, not on the bundled denylist (`common_passwords.txt`), and not containing the account name. Hashes use scrypt with N=2^17 and are upgraded automatically at the next sign-in.
+- **Upload hygiene.** Filenames are reduced to a base name with a supported extension. Files stay inside their workspace folder, and UI uploads are capped at the source size limit.
+- **Isolated parsing.** Documents are parsed in a child process with a time limit and memory cap. Office archives with zip-bomb ratios and PDFs over 1,000 pages are refused.
+- **Reproducible dependencies.** `requirements.lock` pins the tested versions (Python 3.14, Linux and macOS wheels resolved). `requirements.txt` keeps the version ranges.
 
 ### Launching the Interactive Web UI
 
