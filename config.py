@@ -26,6 +26,9 @@ CHAT_MODEL = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)
 OLLAMA_MODEL = CHAT_MODEL
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
 
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "fastembed")
+MODELS_DIR = os.getenv("MODELS_DIR", str(ROOT / "models"))
+
 CHROMA_PATH = os.getenv("CHROMA_PATH", str(ROOT / "chroma_data"))
 BM25_DIR = os.getenv("BM25_DIR", str(ROOT / "bm25_indices"))
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", str(ROOT / "uploads"))

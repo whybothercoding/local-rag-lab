@@ -5,10 +5,8 @@ import hashlib
 from typing import TypedDict, List, Dict, Any, Optional
 
 import chromadb
-import pickle
-from rank_bm25 import BM25Okapi
 
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
@@ -20,6 +18,8 @@ from config import (
     CHROMA_PATH,
     BM25_DIR,
 )
+from embedding_provider import get_embedding_model
+from sparse_search import search_sparse_chunks
 
 
 class GraphState(TypedDict, total=False):
@@ -160,7 +160,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     try:
         chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
-        embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+        embeddings = get_embedding_model()
         q_vec = embeddings.embed_query(query)
 
         results = collection.query(query_embeddings=[q_vec], n_results=5)
@@ -178,34 +178,11 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     except Exception:
         pass
 
-    # 2. Sparse retrieval (BM25)
-    bm25_file = os.path.join(BM25_DIR, f"{ws_id}.pkl")
-    if os.path.exists(bm25_file):
-        try:
-            with open(bm25_file, "rb") as f:
-                bm25_data = pickle.load(f)
-
-            bm25 = bm25_data["bm25"]
-            bm25_chunks = bm25_data["chunks"]
-            bm25_metas = bm25_data.get("metadatas", [])
-            bm25_ids = bm25_data.get("ids", [])
-
-            tokenized_query = query.lower().split()
-            scores = bm25.get_scores(tokenized_query)
-            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:5]
-
-            for idx in top_indices:
-                if scores[idx] > 0:
-                    cid = bm25_ids[idx] if idx < len(bm25_ids) else f"{ws_id}_sparse_{idx}"
-                    meta = bm25_metas[idx] if idx < len(bm25_metas) else {}
-                    src = meta.get("source", "document")
-                    sparse_candidates.append({
-                        "id": cid,
-                        "content": bm25_chunks[idx],
-                        "citation": f"[{cid}] {src}"
-                    })
-        except Exception:
-            pass
+    # 2. Sparse retrieval (Safe SQLite FTS5 with BM25 ranking & legacy fallback)
+    try:
+        sparse_candidates = search_sparse_chunks(ws_id, query, top_n=5, base_dir=BM25_DIR)
+    except Exception:
+        sparse_candidates = []
 
     # 3. Fuse with Reciprocal Rank Fusion (RRF)
     fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=3)

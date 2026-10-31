@@ -13,6 +13,8 @@ from config import (
     DB_URI as _DB_URI,
     UPLOADS_DIR as _UPLOADS_DIR,
 )
+from checkpointer import is_postgres_uri, get_sqlite_path
+from sparse_search import delete_sparse_index, has_sparse_index
 
 # Re-exported so tests and ingest can redirect storage without editing config.
 CHROMA_PATH = _CHROMA_PATH
@@ -58,10 +60,12 @@ def list_workspaces() -> List[str]:
     except Exception as exc:
         logger.warning("Could not list Chroma collections: %s", exc)
 
-    # 2. Discover serialized BM25 indices
+    # 2. Discover serialized sparse indices (SQLite FTS5 and legacy PKL)
     if os.path.exists(BM25_DIR):
         for f in os.listdir(BM25_DIR):
-            if f.endswith(".pkl"):
+            if f.endswith(".db") and not f.endswith(("-wal", "-shm")):
+                workspaces.add(f[:-3])
+            elif f.endswith(".pkl"):
                 workspaces.add(f[:-4])
 
     # 3. Discover staged upload folders
@@ -114,30 +118,35 @@ def delete_workspace(raw_name: str) -> bool:
     except Exception as exc:
         logger.warning("Could not delete Chroma collection for %s: %s", ws_id, exc)
 
-    # 2. Delete BM25 pickle
-    bm25_file = os.path.join(BM25_DIR, f"{ws_id}.pkl")
-    if os.path.exists(bm25_file):
-        try:
-            os.remove(bm25_file)
-        except OSError as exc:
-            logger.warning("Could not delete BM25 index for %s: %s", ws_id, exc)
+    # 2. Delete sparse index (SQLite FTS5 and legacy PKL)
+    delete_sparse_index(ws_id, base_dir=BM25_DIR)
 
     # 3. Delete uploaded source files
     upload_path = os.path.join(UPLOADS_DIR, ws_id)
     if os.path.exists(upload_path):
         shutil.rmtree(upload_path, ignore_errors=True)
 
-    # 4. Clean up Postgres checkpoint records for this workspace prefix
-    try:
-        with ConnectionPool(conninfo=DB_URI, max_size=2, open=True, kwargs={"autocommit": True}) as pool:
-            with pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-                    cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-                    cur.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-    except Exception as exc:
-        # File and vector deletion already happened. A down database should not undo that.
-        logger.warning("Could not delete checkpoints for %s: %s", ws_id, exc)
+    # 4. Clean up checkpoint records for this workspace prefix
+    if is_postgres_uri(DB_URI):
+        try:
+            with ConnectionPool(conninfo=DB_URI, max_size=2, open=True, kwargs={"autocommit": True}) as pool:
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
+                        cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
+                        cur.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
+        except Exception as exc:
+            logger.warning("Could not delete checkpoints for %s: %s", ws_id, exc)
+    else:
+        try:
+            sqlite_db = get_sqlite_path(DB_URI)
+            if os.path.exists(sqlite_db):
+                import sqlite3
+                with sqlite3.connect(sqlite_db) as conn:
+                    conn.execute("DELETE FROM checkpoints WHERE thread_id LIKE ?;", (f"ui-{ws_id}-%",))
+                    conn.execute("DELETE FROM writes WHERE thread_id LIKE ?;", (f"ui-{ws_id}-%",))
+        except Exception as exc:
+            logger.warning("Could not delete SQLite checkpoints for %s: %s", ws_id, exc)
 
     return True
 
@@ -157,9 +166,8 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("Could not read chunk count for %s: %s", ws_id, exc)
 
-    # BM25 presence
-    bm25_file = os.path.join(BM25_DIR, f"{ws_id}.pkl")
-    bm25_indexed = os.path.exists(bm25_file)
+    # Sparse index presence
+    bm25_indexed = has_sparse_index(ws_id, base_dir=BM25_DIR)
 
     # Source files in staging
     upload_path = os.path.join(UPLOADS_DIR, ws_id)

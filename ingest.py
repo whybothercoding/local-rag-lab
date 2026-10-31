@@ -14,13 +14,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import chromadb
-from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from rank_bm25 import BM25Okapi
 
 import workspace_manager
-from config import EMBED_MODEL, MAX_SOURCE_BYTES, OLLAMA_BASE_URL
+from config import MAX_SOURCE_BYTES
+from embedding_provider import get_embedding_model
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
+from sparse_search import index_sparse_chunks
 from workspace_manager import ensure_base_dirs, sanitize_workspace_id
 
 logger = logging.getLogger("ingest")
@@ -154,12 +154,12 @@ def ingest_workspace(
         return result
 
     try:
-        embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+        embeddings = get_embedding_model()
         vectors = embeddings.embed_documents(chunks)
     except Exception as exc:
         logger.exception("Embedding failed for workspace %s", ws_id)
         result.error = (
-            f"Embedding failed with model '{EMBED_MODEL}': {exc}. "
+            f"Embedding calculation failed: {exc}. "
             "The existing index was not changed."
         )
         return result
@@ -179,26 +179,12 @@ def ingest_workspace(
         result.error = f"Vector index write failed: {exc}"
         return result
 
-    tokenized_corpus = [chunk.lower().split() for chunk in chunks]
-    bm25_data = {
-        "bm25": BM25Okapi(tokenized_corpus),
-        "chunks": chunks,
-        "metadatas": metadatas,
-        "ids": chunk_ids,
-    }
-    bm25_path = os.path.join(bm25_dir, f"{ws_id}.pkl")
-    temporary = bm25_path + ".tmp"
+    # 2. Write SQLite FTS5 safe keyword index
     try:
-        with open(temporary, "wb") as handle:
-            pickle.dump(bm25_data, handle)
-        os.replace(temporary, bm25_path)
+        sources = [m.get("source", "document") for m in metadatas]
+        index_sparse_chunks(ws_id, chunk_ids, sources, chunks, base_dir=bm25_dir)
     except Exception as exc:
-        logger.exception("BM25 write failed for workspace %s", ws_id)
-        if os.path.exists(temporary):
-            try:
-                os.remove(temporary)
-            except OSError:
-                pass
+        logger.exception("FTS5 keyword write failed for workspace %s", ws_id)
         result.error = f"Keyword index write failed: {exc}"
         return result
 
