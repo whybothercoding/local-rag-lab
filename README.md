@@ -1,27 +1,73 @@
 # Local Enterprise RAG Lab
 
-An enterprise-ready, locally-hosted Compound AI retrieval and compliance engine built with **LangGraph**, **Ollama (`qwen2.5-coder:7b`)**, **ChromaDB**, **BM25**, and **PostgreSQL**.
+An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen2.5-coder:7b`)**, **ChromaDB**, **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
 
-This architecture guarantees complete data sovereignty by running 100% locally with no third-party API dependencies. It incorporates advanced agentic Self-RAG loops, multi-tenant knowledge workspace isolation, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
-
----
-
-## Key Capabilities
-
-- **100% Air-Gapped Local Inference**: Powered by local Ollama instances for embeddings and code/text generation.
-- **Multi-Tenant Knowledge Bundles**: Create, isolate, switch, and delete knowledge domains (e.g., `accounting`, `strategy`, `legal`) with zero cross-tenant vector or index leakage.
-- **Multi-Format Document Parsing**: Native extraction and recursive chunking for `.md`, `.txt`, `.pdf` (`pypdf`), and `.docx` (`python-docx`).
-- **Hybrid Dense + Sparse Retrieval**: Fuses semantic vector search (ChromaDB) with keyword precision (BM25Okapi).
-- **Self-RAG Corrective Evaluation**:
-  - Heuristic adversarial prompt injection detection and automatic PII masking (emails, phone numbers).
-  - SHA-256 state-scoped semantic query caching.
-  - LLM-grounded document grading, hallucination detection, and automatic query re-writing with circuit-breaker protection (max 2 retries).
-- **Durable Checkpointing & HITL Review**: LangGraph state graph saved to a PostgreSQL database via `psycopg-pool`, supporting human review interrupts via Streamlit UI or terminal CLI (`approve.py`).
-- **Visual Source Provenance**: Expandable UI citation drawers showing exact document origins and chunk keys for auditability.
+Designed for complete data sovereignty, this system operates **100% air-gapped** with zero external network requests during inference. It integrates multi-tenant knowledge workspaces, self-reflective corrective RAG loops, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
 
 ---
 
-## Architecture
+## Implemented AI Engineering Concepts
+
+This repository serves as a reference implementation for key AI engineering patterns and production RAG architectures:
+
+### 1. Compound AI Systems Architecture
+Rather than treating LLM calls as a monolithic black box, the system orchestrates specialized, modular components: deterministic guardrails, semantic caching, intent routers, hybrid retrievers, document & hallucination graders, response generators, and compliance checkpoints.
+
+### 2. Cyclic Agentic State Machines (LangGraph)
+Uses **LangGraph** to model the RAG pipeline as a directed state graph (`GraphState`) featuring conditional branching, state cycles (retries and query rewriting loops), and durable execution interruptions.
+
+### 3. Self-Reflective RAG (Self-RAG)
+Implements dynamic self-assessment loops to verify output quality before answers are finalized:
+* **Document Relevance Grading (`grade_docs`)**: Evaluates whether retrieved chunks contain sufficient relevant information to answer the question.
+* **Hallucination Detection (`grade_hallucination`)**: Validates that generated statements are factually grounded in the retrieved citations.
+* **Answer Relevance Grading (`grade_relevance`)**: Assesses whether the final answer directly addresses the original user prompt.
+
+### 4. Corrective RAG (CRAG) & Adaptive Query Rewriting
+When retrieved documents fail relevance grading or an answer is found irrelevant, the pipeline autonomously reformulates the user query (`rewrite`) and retries retrieval. An integrated **circuit breaker** caps retries at 2 to prevent infinite cycles.
+
+### 5. Hybrid Retrieval (Dense Semantic + Sparse Lexical Fusion)
+Combines dense vector embeddings with sparse keyword search:
+* **Dense Retrieval**: Cosine similarity via [ChromaDB](file:///Users/theo.dev/Documents/misc/local-rag-lab/chroma_data) and fast local embeddings (ONNX `bge-small-en-v1.5`).
+* **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25Okapi for exact matches, technical acronyms, and identifiers.
+* **Fusion**: Merges candidate sets to ensure both broad semantic recall and high-precision keyword matching.
+
+### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
+To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:
+* Cosine similarity cutoff ($\ge 0.65$) or query token keyword coverage ($\ge 40\%$).
+* If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
+
+### 7. State-Scoped Semantic Caching & Fingerprinting
+* Query responses are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{index_fingerprint}:{query}")`.
+* Re-indexing or updating documents automatically updates the fingerprint, ensuring instant cache invalidation with zero stale data served.
+
+### 8. Dynamic Intent Classification & Routing
+An intent router classifies incoming queries into **domain RAG** vs. conversational **chitchat**, bypassing vector retrieval for general interactions to conserve compute and avoid noise.
+
+### 9. AI Safety & Input Guardrails
+* **Adversarial Prompt Injection Defense**: Pre-retrieval heuristics detect and reject jailbreak attempts, delimiter manipulation, and system prompt override attempts.
+* **Automated PII Redaction**: Regex-based masking for emails and telephone numbers runs prior to LLM processing and before writing entries to persistent audit logs.
+
+### 10. Human-in-the-Loop (HITL) Compliance & Dual-Control Gates
+* The state graph pauses before answer release at a compliance checkpoint node.
+* **Dual-Control Enforcement**: Reviewers must authenticate to approve or reject responses, and requesters are strictly prohibited from approving their own queries.
+* Workflows can be resumed via either the web interface or terminal CLI (`approve.py`).
+
+### 11. Deterministic Source Provenance & Citations
+Every answer sentence is tied back to traceable chunk keys (`[workspace_doc_chunk]`) and original source files, rendered in the UI with expandable citation cards for instant auditability.
+
+### 12. Offline Benchmarking & LLM-as-a-Judge Evaluation Gate
+An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval precision, keyword recall, groundedness, answer rate, and abstention accuracy against golden evaluation datasets (`eval/golden.json`), with optional LLM-as-a-judge support checks.
+
+### 13. Multi-Tenant Knowledge Isolation
+Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
+
+### 14. Model Weight Pinning & Graceful Degradation
+* Embedding weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
+* If the primary LLM or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
+
+---
+
+## Architecture Flow
 
 ```
 [START]
@@ -32,7 +78,7 @@ This architecture guarantees complete data sovereignty by running 100% locally w
    │ (miss)
 [router] ──(chitchat)──> [chitchat] ──> [END]
    │ (rag)
-[retrieve] (Hybrid ChromaDB Dense + BM25 Sparse)
+[retrieve] (Hybrid ChromaDB Dense + SQLite FTS5 / BM25 Sparse)
    │
 [grade_docs] ──(rewrite)──> [rewrite] ──> [retrieve]
    │ (approved / max retries)
@@ -49,140 +95,152 @@ This architecture guarantees complete data sovereignty by running 100% locally w
 
 ---
 
-## Quickstart
+## Usage Instructions
 
-### Prerequisites
+### 1. Prerequisites & Environment Setup
 
-- **Python**: `>= 3.11` (tested on 3.11–3.14)
-- Nothing else for the default setup. SQLite, ONNX embeddings, and the built-in synthesizer need no services.
-- Network access is needed **once**, for `make models`.
-
-Optional backends:
-- **PostgreSQL checkpoints**: `make up`, then set `DB_URI=postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints`.
-- **Ollama chat model**: `make ollama-pull`. The app uses it automatically when `localhost:11434` responds, and otherwise uses the built-in synthesizer.
-
-### 1. Setup
+* **Python**: `>= 3.11` (tested up to 3.14)
+* **Ollama** (optional, recommended for local generative LLM): `ollama pull qwen2.5-coder:7b`
+* **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
 ```bash
-make setup    # virtual environment and pure-Python dependencies
-make models   # one-time: download the embedding model and verify its SHA-256 pins
-```
+# 1. Create virtual environment and install dependencies
+make setup
 
-After this step the application runs with no network access. `make verify-models` re-checks the cached weights offline.
+# 2. Download and verify pinned embedding models (requires network once)
+make models
 
-### 2. Create Accounts and Grant Access
-
-The app will not serve anyone until at least one account exists. Passwords are stored as scrypt hashes.
-
-```bash
-python access.py add-user alice --admin                 # administrator: creates and indexes workspaces
-python access.py add-user bob                           # analyst
-python access.py grant bob accounting --perms query,review
-python access.py list
-python access.py set-password bob                       # forgotten or shared password? reset it here
-```
-
-Permissions are per workspace. `query` allows asking questions. `review` allows approving or rejecting answers, but never one's own. Access is denied by default.
-
-### 3. Verify System Health
-
-```bash
-make test          # full suite (PostgreSQL test runs when a server is reachable)
-make test-offline  # same suite with every outbound connection blocked
-make eval          # offline evaluation gate: retrieval, answer, and access-control metrics
+# 3. Verify cached model weights offline
+make verify-models
 ```
 
 ---
 
-## Usage
+### 2. User Accounts & Role-Based Access Control (RBAC)
 
-### Ingesting Documents via CLI
-
-Put `.md`, `.txt`, `.pdf`, or `.docx` files in one folder per workspace under `knowledge_base/`, then run:
+The system denies all access by default until accounts and workspace permissions are granted. Passwords are encrypted using **scrypt** with automatic hash upgrades.
 
 ```bash
-make sync ADMIN=alice   # index every folder under knowledge_base/; unchanged files are skipped
-                         # indexing is an administrative action: you are asked for that account's password
+# Create an administrator account (required for indexing and sync)
+python access.py add-user alice --admin
+
+# Create standard analyst accounts
+python access.py add-user bob
+python access.py add-user charlie
+
+# Grant workspace-specific permissions ('query', 'review', or both)
+python access.py grant bob accounting --perms query,review
+python access.py grant charlie accounting --perms query
+
+# List accounts and assigned permissions (never displays hashes)
+make users
+# or: python access.py list
+
+# Reset an account password
+python access.py set-password bob
 ```
 
-Each folder name becomes a workspace ID (for example `Accounting & Tax` becomes `accounting_tax`). Symlinked files and folders are ignored. Each workspace gets its own ChromaDB collection (`ws_<workspace_id>`) and SQLite FTS5 keyword index (`bm25_indices/<workspace_id>.db`).
+---
 
-To index a single directory into a named workspace:
+### 3. Document Ingestion & Workspace Sync
+
+Place `.md`, `.txt`, `.pdf`, or `.docx` files in dedicated folders under `knowledge_base/<workspace>/`.
 
 ```bash
+# Sync all workspace directories (requires admin credentials)
+make sync ADMIN=alice
+
+# Or ingest a single directory into a target workspace
 python ingest.py --workspace accounting --dir ./knowledge_base/accounting --as alice
 ```
 
-### Answer Quality Controls
+* Workspaces are automatically sanitized (e.g., `Accounting & Tax` becomes `accounting_tax`).
+* Generates Chroma collections (`ws_<workspace_id>`) and SQLite FTS5 keyword indexes (`bm25_indices/<workspace_id>.db`).
+* Idempotent: unchanged files are automatically skipped based on SHA-256 manifests.
 
-- **Abstention.** Retrieval passes evidence on only if the best chunk is similar enough to the question (cosine ≥ 0.65) or covers enough of its content words (≥ 40%). Otherwise the assistant says it could not find documentation instead of answering from unrelated text.
-- **Cache invalidation.** Cached answers are keyed by workspace, query, and the workspace's index fingerprint. Re-indexing invalidates them. The cache lives in memory and is cleared on restart.
-- **Visible degradation.** If the vector store, keyword index, or model is unavailable, the answer carries a warning. A model failure produces a labeled extractive answer. Nothing silently falls back.
-- **Rejections as feedback.** `make audit-feedback` lists answers reviewers declined, with their reasons.
-- **Local OpenAI-compatible model.** Set `LLM_PROVIDER=openai` and `LOCAL_LLM_URL` to use LM Studio, vLLM, or llama.cpp servers.
-- **Measured.** `make eval` gates answer rate, retrieval, keyword recall, groundedness, abstention, and security on a held-out split. See `eval/README.md`.
+---
 
-### Data Governance
+### 4. Interactive Web Application
 
-- **Encryption at rest.** Audit payloads and checkpoint state are sealed with AES-256-GCM (`cryptography`). Each sealed audit payload is bound to its own row, so moving it elsewhere makes it unreadable.
-- **Keys.** `data/data.key` encrypts the data stores and keys the audit chain. `data/access.key` signs sessions and the access policy. Keep backup copies of both in a custody separate from the backups. Losing `data.key` makes the audit log and checkpoints unreadable, and that is intended.
-- **Tamper evidence.** The audit chain is keyed, so an edited log cannot be re-hashed to look intact without the data key. Truncation of the newest records is caught by signed **anchors**: run `make audit-anchor` on a schedule and copy `data/audit_anchors.jsonl` off the host.
-- **Retention: six months.** `make retention` deletes audit records and idle checkpoint threads older than 183 days. Each run is recorded in the chain, so the gap is visible. Threads awaiting human review are never deleted. Set `RETENTION_DAYS` to change the period. Nothing is archived by default. If longer retention is required, change the period rather than keeping copies.
-- **Backups.** `make backup` writes a consistent copy of the audit log, anchors, checkpoints, and access policy, with a checksum manifest and no keys. `make backup-verify DIR=...` checks the copy, including the chain and anchors. Vector and keyword indexes are not backed up: rebuild them with `make sync`.
-- **Administrator view.** The sidebar's audit panel verifies the chain and anchors, shows recent events, and exports the log. Each export is recorded.
-- **Not covered.** Chroma and SQLite FTS5 indexes hold document text in plain form. Protect them with full-disk encryption on the host. PostgreSQL retention needs your DBA tooling.
-
-### Security Controls
-
-- **Signed identity.** Signing in issues an HMAC-signed session token that expires after 8 hours. The pipeline verifies the token itself. A bare account name in the input is ignored.
-- **Sign-in throttling.** Five failed sign-ins in 15 minutes lock an account for that window. Failures are written to the audit log, without the password.
-- **Idle timeout.** The UI signs you out after 30 minutes without activity.
-- **Tamper detection.** `access_policy.json` carries an integrity tag. If it is edited outside `access.py`, access is refused until it is restored.
-- **Password policy.** At least 12 characters, not on the bundled denylist (`common_passwords.txt`), and not containing the account name. Hashes use scrypt with N=2^17 and are upgraded automatically at the next sign-in.
-- **Upload hygiene.** Filenames are reduced to a base name with a supported extension. Files stay inside their workspace folder, and UI uploads are capped at the source size limit.
-- **Isolated parsing.** Documents are parsed in a child process with a time limit and memory cap. Office archives with zip-bomb ratios and PDFs over 1,000 pages are refused.
-- **Reproducible dependencies.** `requirements.lock` pins the tested versions (Python 3.14, Linux and macOS wheels resolved). `requirements.txt` keeps the version ranges.
-
-### Launching the Interactive Web UI
-
-Launch the Streamlit interface:
+Launch the Streamlit web interface:
 
 ```bash
+make ui ADMIN=alice
+# Or launch without re-indexing:
 make ui
-# Or: streamlit run ui.py
 ```
 
-From the web browser (`http://localhost:8501`), you can:
-- **Switch Bundles**: Select an active workspace from the sidebar.
-- **Create / Delete Bundles**: Manage staging folders, indices, and vector collections directly.
-- **Upload Documents**: Drag and drop `.pdf`, `.docx`, `.txt`, and `.md` files to index them on the fly.
+Open `http://localhost:8501` in your browser:
+1. **Sign In**: Authenticate with your username and password to obtain an HMAC-signed session token.
+2. **Select Workspace**: Switch between permitted workspaces in the sidebar.
+3. **Ask Questions**: Submit natural language queries.
+4. **Inspect Citations**: Expand citation cards beneath responses to verify exact chunk origins and document text.
+5. **Human Review Drawer**: If an answer requires compliance sign-off, authorized reviewers can approve or reject the output directly in the UI.
 
-### Audit Trail
+---
 
-Every query, groundedness check, retrieval, and human decision is written to `data/audit.db` (override with `AUDIT_DB_PATH`).
+### 5. Compliance CLI Review (`approve.py`)
 
-- **Append-only and hash-chained.** Each record commits to the one before it, and `UPDATE` and `DELETE` are rejected by triggers. Editing or removing any row breaks verification from that point on.
-- **Redacted by default.** Emails and phone numbers are masked before anything is written.
-- **Attributed decisions.** Reviewers must enter a reviewer ID to approve or reject. An approval without one is recorded as a rejection and is not released.
-- **Fail-closed.** If an event cannot be written, the answer is not released.
-- **Verify:** `make audit-verify` exits non-zero when the chain is broken. Recent events: `make audit-tail`.
-- **Known limit:** the chain cannot detect truncation of the newest records. Copy the output of `python audit.py head` to an external store on a schedule to close that gap.
-- **Review Citations**: Inspect expandable source citation drawers beneath responses.
-- **Approve / Reject Outputs**: Handle compliance review checkpoints interactively when answers trigger review gates.
-
-### Compliance CLI (`approve.py`)
-
-Check and resume paused HITL checkpoint threads from the terminal. Every decision requires the reviewer's account and password, and the account must hold `review` on the thread's workspace:
+Pending Human-in-the-Loop review threads can also be managed directly from the terminal. Reviewers must authenticate and have the `review` permission:
 
 ```bash
-# Inspect all threads currently waiting for human compliance
+# List all threads awaiting compliance approval
 python approve.py --list
 
-# Approve a paused thread (prompts for the reviewer's password)
-python approve.py --thread ui-accounting-abc123 --action approved --approver bob --reason "Checked against policy"
+# Approve a paused thread
+python approve.py --thread ui-accounting-uuid --action approved --approver bob --reason "Verified against policy"
 
 # Reject a paused thread
-python approve.py --thread ui-accounting-abc123 --action rejected --approver bob
+python approve.py --thread ui-accounting-uuid --action rejected --approver bob --reason "Outdated policy cited"
+```
+
+---
+
+### 6. Security, Auditing & Governance Operations
+
+All system events (queries, guardrail checks, retrievals, and human decisions) are committed to a tamper-evident, append-only SQLite audit log (`data/audit.db`) with AES-256-GCM encrypted payloads.
+
+```bash
+# Verify the cryptographic HMAC audit hash chain
+make audit-verify
+
+# Inspect the 20 most recent audit events
+make audit-tail
+
+# Inspect answers rejected by human reviewers along with reasons
+make audit-feedback
+
+# Anchor the audit head hash (run periodically to detect truncation)
+make audit-anchor
+
+# Apply data retention policy (prunes audit logs and idle threads > 183 days)
+make retention
+
+# Create a consistent, checksummed snapshot backup (keys excluded)
+make backup
+
+# Verify a backup manifest and audit chain
+make backup-verify DIR=backups/backup-<timestamp>
+```
+
+---
+
+### 7. Evaluation & Test Suite
+
+Verify system health, offline compliance, and retrieval quality:
+
+```bash
+# Run full unit and integration test suite (150+ tests)
+make test
+
+# Run test suite with all outbound sockets blocked
+make test-offline
+
+# Run offline RAG benchmark evaluation (eval/golden.json)
+make eval
+
+# Run evaluation with local Ollama LLM-as-a-judge support checks
+make eval-judge
 ```
 
 ---
@@ -191,24 +249,30 @@ python approve.py --thread ui-accounting-abc123 --action rejected --approver bob
 
 ```text
 local-rag-lab/
-├── app.py                   # LangGraph state machine, nodes, and Self-RAG conditional routes
-├── workspace_manager.py     # Multi-tenant workspace lifecycle and storage isolation logic
+├── app.py                   # LangGraph state machine, nodes, Self-RAG conditional routes
+├── workspace_manager.py     # Multi-tenant workspace isolation and collection lifecycle
 ├── ingest.py                # Multi-format document parser (.md, .txt, .pdf, .docx) & indexer
-├── ui.py                    # Streamlit web application with citation drawers & HITL gates
+├── parsers.py               # Document parsing implementations (pypdf, docx, html/txt)
+├── parser_worker.py         # Sandboxed child process parser with time/memory caps
+├── sparse_search.py         # SQLite FTS5 / BM25Okapi sparse lexical search engine
+├── embedding_provider.py    # Local ONNX FastEmbed embedding engine
+├── llm_provider.py          # Ollama and local OpenAI-compatible chat model connectors
+├── model_integrity.py       # SHA-256 model weight pinning and offline integrity checks
+├── access.py                # RBAC user accounts, scrypt hashing, signed session tokens
 ├── approve.py               # CLI tool for inspecting and resolving HITL review threads
-├── access.py                # Local accounts, password hashing, and per-workspace grants
-├── audit.py                 # Hash-chained, append-only audit trail and verifier
-├── eval.py                  # Offline evaluation gate over eval/corpus and eval/golden.json
-├── export_graph.py          # Script generating Mermaid and PNG graph diagrams
-├── requirements.txt         # Pinned top-level Python dependencies
-├── Makefile                 # Unified setup, test, ingest, and execution workflows
-├── Modelfile                # Local Ollama model parameters specification
-├── docker-compose.yml       # Local PostgreSQL checkpoint database container config
-├── pytest.ini               # Pytest configuration and test paths
-├── .env.example             # Environment variable template
-├── docs/                    # Architecture diagrams and benchmark documents
-├── knowledge_base/          # Pre-packaged sample workspace document domains
-└── tests/                   # Full test suite (engine, parsers, workspaces, integration)
+├── audit.py                 # Append-only, hash-chained tamper-evident audit logger
+├── vault.py                 # AES-256-GCM data sealing and state encryption at rest
+├── retention.py             # Audit log and idle checkpoint thread retention manager
+├── backup.py                # Checksummed backup creation and verification utility
+├── redaction.py             # Automated PII detection and regex masking
+├── ui.py                    # Streamlit web application with citation drawers & review UI
+├── eval.py                  # Offline evaluation benchmark runner
+├── eval_metrics.py          # RAG evaluation metrics (precision, recall, groundedness)
+├── Makefile                 # Unified setup, test, sync, UI, and audit workflows
+├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints
+├── eval/                    # Golden test dataset and benchmark corpus
+├── knowledge_base/          # Multi-tenant knowledge base folders
+└── tests/                   # Comprehensive test suite (150+ unit and integration tests)
 ```
 
 ---

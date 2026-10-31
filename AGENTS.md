@@ -1,112 +1,77 @@
-# AGENTS.md — Local Enterprise Knowledge Hub Specification
+# Agent Guidelines & Architecture Reference
 
-This document provides system instructions, architectural design details, and agent execution guidelines for the **Local Enterprise RAG Lab** Compound AI system.
-
----
-
-## 1. System Overview
-
-The engine is a fully local, multi-tenant Compound AI system implementing Self-RAG, Corrective RAG (CRAG), and Human-in-the-Loop (HITL) compliance gates. 
-
-* **LLM Engine**: Ollama (`qwen2.5-coder:7b`) for generation and embeddings (`OLLAMA_BASE_URL=http://localhost:11434`).
-* **Vector & Sparse Stores**: ChromaDB (dense vectors) + `rank-bm25` (sparse BM25Okapi).
-* **State & Persistence**: LangGraph state graph with durable PostgreSQL checkpointer (`psycopg-pool`).
-* **Multi-Tenancy**: Isolated workspace bundles for knowledge isolation and dynamic switching.
+Instructions and engineering standards for AI assistants and coding agents working on the **Local Enterprise RAG Lab** codebase.
 
 ---
 
-## 2. Multi-Tenant Workspace Architecture
+## 1. Project Overview & Invariants
 
-Workspaces partition knowledge bases to prevent cross-tenant data leakage:
+Local Enterprise RAG Lab is a fully local, air-gapped Compound AI retrieval and compliance engine.
 
-* **Sanitization**: Names are normalized via `sanitize_workspace_id()` to alphanumeric slugs with single underscores (e.g., `accounting_2026`).
-* **ChromaDB**: Named vector collections prefixed with `ws_<workspace_id>`.
-* **Sparse Index**: Pickled BM25 structures stored at `bm25_indices/<workspace_id>.pkl`.
-* **Staging Area**: Uploaded raw documents stored under `uploads/<workspace_id>/`.
-* **Semantic Cache**: State-keyed by workspace slug (`hashlib.sha256(f"{workspace_id}:{query}".encode())`).
-* **Thread Tracking**: Persistent sessions isolated via `ui-<workspace_id>-<uuid>` thread IDs.
+* **No External Network**: Inference and pipelines must run 100% offline. Network access is permitted only during initial model download (`make models`).
+* **Core Stack**: Python 3.11–3.14, LangGraph, Ollama (`qwen2.5-coder:7b`) / ONNX FastEmbed, ChromaDB, SQLite FTS5 / BM25, SQLite / PostgreSQL (`psycopg-pool`), Streamlit.
+* **Fail-Closed Security**: RBAC authorization, signed session tokens (`principal_token`), tamper-evident hash-chained audit logging, AES-256-GCM state encryption at rest.
 
 ---
 
-## 3. Supported Ingestion Pipeline (`ingest.py`)
-
-The ingestion pipeline handles multi-format file parsing, character chunking, and synchronous index generation:
-
-* **Supported Formats**:
-  * `.md` & `.txt`: Raw UTF-8 extraction.
-  * `.pdf`: Page-by-page extraction via `pypdf`.
-  * `.docx`: Structural paragraph parsing via `python-docx`.
-* **Chunking**: `RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)`.
-* **Chunk Metadata**: Each chunk stores `{"source": filename, "workspace": ws_id, "id": f"{ws_id}_{doc_idx}_{chunk_idx}"}`.
-
----
-
-## 4. LangGraph Agent Workflow
-
-[START]
-│
-[guardrail] ──(fail)──> [END] (Prompt Injection / Adversarial)
-│ (pass)
-[cache_lookup] ──(hit)──> [END]
-│ (miss)
-[router] ──(chitchat)──> [chitchat] ──> [END]
-│ (rag)
-[retrieve] (Hybrid Dense + Sparse)
-│
-[grade_docs] ──(rewrite / max retries)──> [rewrite] ──> [retrieve]
-│ (approved)
-[generate]
-│
-[grade_hallucination] ──(retry)──> [generate]
-│ (grounded)
-[grade_relevance] ──(irrelevant)──> [rewrite]
-│ (relevant)
-[human_approval] (HITL Compliance Interruption)
-│
-[END]
-
-### Graph State Schema (`GraphState`)
-* `workspace_id` (`str`): Target workspace bundle name.
-* `session_id` (`str`): Review-session identifier recorded with every audit event (`audit.py`).
-* Audit payloads and checkpoint state are sealed at rest (`vault.py`). The audit chain is keyed, not a plain hash. Retention runs via `retention.py` (183 days by default).
-* `degraded` (`List[str]`): Reduced-mode notes (unavailable indexes, model fallback) shown with the answer.
-* `principal_token` (`str`): HMAC-signed session token from the UI or CLI. The guardrail derives `principal` from it, and a bare account name in the input is ignored.
-* `principal` (`str`): Authenticated account, derived from `principal_token`. The guardrail denies it unless it holds `query` on `workspace_id`; the approval node requires `review` and rejects self-approval (`access.py`).
-* `question` / `original_question` / `sanitized_question` (`str`): Query lifecycle states.
-* `documents` (`List[str]`): Retrieved raw context chunks.
-* `citations` (`List[str]`): Formatted provenance tags (`[chunk_id] source_file`).
-* `generation` (`str`): Current response or compliance rejection text.
-* `intent` (`str`): Routing classification (`rag` vs `chitchat`).
-* `cache_hit` (`bool`): Direct semantic cache bypass flag.
-* `is_safe` (`bool`): Input guardrail security gate.
-* `grade_status` / `hallucination_status` / `relevance_status` (`str`): Self-RAG evaluation flags.
-* `retry_count` (`int`): Retries counter with circuit breaker capped at 2.
-* `history` (`List[str]`): Rolling conversation memory.
-* `telemetry` (`Dict[str, Any]`): Latency, token metrics, and execution diagnostics.
-
----
-
-## 5. UI & Traceability (`ui.py`)
-
-* **Workspace Selector**: Sidebar selector dynamically scans directories and Chroma collections.
-* **Bundle Creation & Deletion**: Staged file purge, Chroma collection deletion, and BM25 index cleanup.
-* **In-App Ingestion**: Multi-file uploader supporting `.md`, `.txt`, `.pdf`, `.docx`.
-* **Visual Citations**: Expandable citation cards (`render_citations()`) rendered below both streaming responses and past conversation turns.
-* **HITL Action Drawer**: Halts on compliance approval gate with interactive review buttons.
-
----
-
-## 6. Developer Workflows & Commands
+## 2. Essential Commands
 
 ```bash
-# Create venv and install pure-Python dependencies (no Docker or model daemon required)
-make setup
+# Setup & Models
+make setup                  # Create venv and install dependencies
+make models                 # Download & verify pinned embedding weights (requires network)
+make verify-models          # Verify model SHA-256 integrity offline
 
-# Run the test suite (15 tests: engine, workspace manager, file parsers, integration)
-make test
+# Testing & Evaluation
+make test                   # Run full test suite (pytest -v)
+make test-offline           # Run test suite with network sockets blocked (RAG_OFFLINE=1)
+make eval                   # Run offline RAG benchmark evaluation (eval/golden.json)
+make eval-judge             # Evaluation with Ollama LLM-as-a-judge support checks
 
-# Discover and index every workspace folder under knowledge_base/ (idempotent)
-make sync
+# Ingestion & UI
+make sync ADMIN=<user>      # Ingest/sync knowledge_base/ directories into indexes
+make ui                     # Run Streamlit frontend application
 
-# Launch Streamlit interface
-make ui
+# Security & Governance
+make audit-verify           # Verify append-only HMAC-keyed audit chain
+make audit-tail             # View recent audit events
+make retention              # Apply audit and checkpoint data retention policy
+make backup                 # Create encrypted snapshot of audit, checkpoints, and policy
+```
+
+---
+
+## 3. Architecture & LangGraph Pipeline
+
+Graph execution in [`app.py`](file:///Users/theo.dev/Documents/misc/local-rag-lab/app.py) follows a cyclic Self-RAG state machine:
+
+```
+[START] ──> [guardrail] ──(pass)──> [cache_lookup] ──(miss)──> [router]
+                 │                        │                        ├──(chitchat)──> [chitchat] ──> [END]
+              (fail)                    (hit)                      └──(rag)──> [retrieve]
+                 │                        │                                       │
+                 ▼                        ▼                                  [grade_docs] ──(rewrite)──┐
+               [END]                    [END]                                     │ (pass)             │
+                                                                             [generate] <──────────────┘
+                                                                                  │
+                                                                       [grade_hallucination] ──(retry)──┐
+                                                                                  │ (grounded)          │
+                                                                          [grade_relevance]             │
+                                                                           ├──(irrelevant)──> [rewrite] ┘
+                                                                           └──(relevant)──> [human_approval] ──> [END]
+```
+
+### State & Tenancy Invariants
+* **State Schema**: `GraphState` ([`app.py`](file:///Users/theo.dev/Documents/misc/local-rag-lab/app.py)).
+* **Workspaces**: Sanitized slugs (`ws_<workspace_id>`). Each workspace maintains its own Chroma collection and SQLite FTS5 index. Never allow cross-workspace data retrieval.
+* **Human-in-the-Loop**: Review interrupt triggers before answer release. Self-approval is strictly forbidden (requester $\neq$ approver).
+* **Graceful Degradation**: If dense search or LLM fails, return labeled warnings or extractive fallback; never fail silently.
+
+---
+
+## 4. Coding & Security Rules
+
+* **Type Hints & Contracts**: Maintain PEP 484 type annotations and docstrings across modules.
+* **Access Control**: All entry points must validate caller identity through `principal_token` and workspace permissions via [`access.py`](file:///Users/theo.dev/Documents/misc/local-rag-lab/access.py).
+* **Sanitization & Redaction**: Sanitize file paths, reject path traversal, enforce zip-bomb/PDF page limits, and mask PII (email/phone) before persisting logs or prompt contexts.
+* **Testing**: Any modification or new feature must include comprehensive unit/integration tests in [`tests/`](file:///Users/theo.dev/Documents/misc/local-rag-lab/tests).
