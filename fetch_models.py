@@ -7,6 +7,7 @@ Use `--verify-only` to check an existing cache without any network access.
 """
 import argparse
 import os
+from pathlib import Path
 import sys
 
 # This script is the only place network access is re-enabled. It must be set before
@@ -29,6 +30,9 @@ def fetch_model(model_name: str = FASTEMBED_MODEL, cache_dir: str = MODELS_DIR):
         cache_dir=cache_dir,
         allow_patterns=list(spec["files"]),
     )
+    ref_dir = Path(cache_dir) / f"models--{spec['repo'].replace('/', '--')}" / "refs"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "main").write_text(spec["revision"], encoding="utf-8")
     return verify_model(model_name, cache_dir)
 
 

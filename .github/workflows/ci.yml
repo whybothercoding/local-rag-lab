@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: Test suite (online and offline)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       DB_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
@@ -31,10 +31,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: "pip"
@@ -45,7 +45,7 @@ jobs:
           pip install -r requirements.lock
 
       - name: Restore embedding model cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: models
           key: embedding-model-${{ hashFiles('model_integrity.py') }}

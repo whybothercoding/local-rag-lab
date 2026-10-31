@@ -39,11 +39,12 @@ class LocalFastEmbeddings(Embeddings):
     def model(self):
         cache_key = f"{self.model_name}:{self.cache_dir}"
         if cache_key not in _FASTEMBED_CACHE:
-            verify_model(self.model_name, self.cache_dir)
+            verified_path = verify_model(self.model_name, self.cache_dir)
             from fastembed import TextEmbedding
             _FASTEMBED_CACHE[cache_key] = TextEmbedding(
                 model_name=self.model_name,
                 cache_dir=self.cache_dir,
+                specific_model_path=str(verified_path),
             )
         return _FASTEMBED_CACHE[cache_key]
 
