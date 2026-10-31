@@ -34,6 +34,7 @@ from typing import Any
 from audit import count_events_since
 from audit import record as audit_record
 from config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
+from vault import load_or_create_key
 from workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review")
@@ -132,18 +133,8 @@ def check_password_strength(password: str, username: str = "") -> None:
 # --- Signing key, policy integrity, and session tokens ----------------------
 
 def _signing_key(path: str | None = None) -> bytes:
-    """Load the local signing key, creating it with owner-only permissions on first use."""
-    target = Path(path or ACCESS_KEY_PATH)
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(secrets.token_bytes(32))
-    return target.read_bytes()
+    """The local signing key for tokens and the policy tag. Created with owner-only permissions on first use."""
+    return load_or_create_key(path or ACCESS_KEY_PATH)
 
 
 def _policy_mac(users: dict[str, Any]) -> str:
@@ -238,15 +229,17 @@ def sign_in(
     name = (username or "").strip().lower()[:64]
     if name:
         since = datetime.now(UTC) - timedelta(seconds=LOCKOUT_WINDOW_SECONDS)
-        recent = count_events_since("sign_in_failed", "username", name, since, path=audit_path)
+        recent = count_events_since("sign_in_failed", name, since, path=audit_path)
         if recent >= LOCKOUT_MAX_FAILURES:
-            audit_record("sign_in_blocked", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+            audit_record("sign_in_blocked", workspace_id="", session_id="", data={"username": name},
+                         subject=name, path=audit_path)
             return SignInResult(
                 ok=False, username=name, reason="locked", retry_after_minutes=LOCKOUT_WINDOW_SECONDS // 60
             )
 
     if not name or not authenticate(name, password, path):
-        audit_record("sign_in_failed", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+        audit_record("sign_in_failed", workspace_id="", session_id="", data={"username": name},
+                     subject=name, path=audit_path)
         return SignInResult(ok=False, username=name, reason="invalid")
 
     if needs_rehash(load_policy(path)["users"][name]["password_hash"]):
@@ -254,7 +247,8 @@ def sign_in(
         policy["users"][name]["password_hash"] = hash_password(password)
         save_policy(policy, path)
 
-    audit_record("sign_in_succeeded", workspace_id="", session_id="", data={"username": name}, path=audit_path)
+    audit_record("sign_in_succeeded", workspace_id="", session_id="", data={"username": name},
+                 subject=name, path=audit_path)
     return SignInResult(ok=True, username=name, token=issue_token(name))
 
 

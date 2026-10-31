@@ -14,6 +14,9 @@ rank-bm25>=0.2.2
 pypdf>=5.0.0
 python-docx>=1.1.0
 
+# Encryption at rest (AES-256-GCM for audit payloads and checkpoint state)
+cryptography>=43.0.0
+
 # Database & Checkpointing
 langgraph-checkpoint-sqlite>=3.1.0
 psycopg[binary]>=3.2.0

@@ -1,4 +1,5 @@
 import streamlit as st
+import json
 import time
 import uuid
 from langchain_core.runnables import RunnableConfig
@@ -15,6 +16,7 @@ from access import (
     verify_token,
 )
 from app import workflow, GraphState
+from audit import export_events, list_events, record, verify_anchors, verify_chain
 from approve import list_pending_threads
 from checkpointer import get_checkpointer
 from config import MAX_SOURCE_BYTES, UPLOADS_DIR
@@ -169,6 +171,32 @@ st.sidebar.caption(f"Signed in as **{user}**{' (admin)' if admin else ''}")
 if st.sidebar.button("Sign out"):
     _sign_out()
     st.rerun()
+
+# The audit panel comes before the workspace check, so an administrator without grants can still reach it.
+if admin:
+    with st.sidebar.expander("Audit log (administrators)"):
+        if st.button("Verify chain and anchors"):
+            chain_ok, bad_seq, count = verify_chain()
+            if chain_ok:
+                st.success(f"Chain intact: {count} records.")
+            else:
+                st.error(f"Chain broken at seq {bad_seq}.")
+            anchors_ok, problems, anchor_count = verify_anchors()
+            if anchor_count == 0:
+                st.info("No anchors yet. Run make audit-anchor, then copy data/audit_anchors.jsonl off the host.")
+            elif anchors_ok:
+                st.success(f"{anchor_count} anchors match the log.")
+            for problem in problems:
+                st.error(problem)
+        st.caption("Most recent events (payloads decrypted for administrators):")
+        for event in list_events(limit=10):
+            st.caption(f"{event['ts'][:19]} · {event['event_type']} · {event['workspace_id'] or '-'}")
+        if st.button("Prepare export"):
+            export = export_events()
+            # Exporting decrypted records is itself recorded in the chain.
+            record("audit_export", workspace_id="", session_id="", data={"actor": user, "records": len(export)})
+            payload = "\n".join(json.dumps(event, sort_keys=True) for event in export)
+            st.download_button("Download audit export (JSON lines)", payload, file_name="audit-export.jsonl")
 
 all_workspaces = list_workspaces()
 if admin and not all_workspaces:

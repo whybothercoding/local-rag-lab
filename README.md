@@ -122,6 +122,16 @@ python ingest.py --workspace accounting --dir ./knowledge_base/accounting --as a
 - **Local OpenAI-compatible model.** Set `LLM_PROVIDER=openai` and `LOCAL_LLM_URL` to use LM Studio, vLLM, or llama.cpp servers.
 - **Measured.** `make eval` gates answer rate, retrieval, keyword recall, groundedness, abstention, and security on a held-out split. See `eval/README.md`.
 
+### Data Governance
+
+- **Encryption at rest.** Audit payloads and checkpoint state are sealed with AES-256-GCM (`cryptography`). Each sealed audit payload is bound to its own row, so moving it elsewhere makes it unreadable.
+- **Keys.** `data/data.key` encrypts the data stores and keys the audit chain. `data/access.key` signs sessions and the access policy. Keep backup copies of both in a custody separate from the backups. Losing `data.key` makes the audit log and checkpoints unreadable, and that is intended.
+- **Tamper evidence.** The audit chain is keyed, so an edited log cannot be re-hashed to look intact without the data key. Truncation of the newest records is caught by signed **anchors**: run `make audit-anchor` on a schedule and copy `data/audit_anchors.jsonl` off the host.
+- **Retention: six months.** `make retention` deletes audit records and idle checkpoint threads older than 183 days. Each run is recorded in the chain, so the gap is visible. Threads awaiting human review are never deleted. Set `RETENTION_DAYS` to change the period. Nothing is archived by default. If longer retention is required, change the period rather than keeping copies.
+- **Backups.** `make backup` writes a consistent copy of the audit log, anchors, checkpoints, and access policy, with a checksum manifest and no keys. `make backup-verify DIR=...` checks the copy, including the chain and anchors. Vector and keyword indexes are not backed up: rebuild them with `make sync`.
+- **Administrator view.** The sidebar's audit panel verifies the chain and anchors, shows recent events, and exports the log. Each export is recorded.
+- **Not covered.** Chroma and SQLite FTS5 indexes hold document text in plain form. Protect them with full-disk encryption on the host. PostgreSQL retention needs your DBA tooling.
+
 ### Security Controls
 
 - **Signed identity.** Signing in issues an HMAC-signed session token that expires after 8 hours. The pipeline verifies the token itself. A bare account name in the input is ignored.

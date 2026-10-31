@@ -45,6 +45,12 @@ KNOWLEDGE_BASE_DIR = os.getenv("KNOWLEDGE_BASE_DIR", str(ROOT / "knowledge_base"
 AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", str(ROOT / "data" / "audit.db"))
 ACCESS_POLICY_PATH = os.getenv("ACCESS_POLICY_PATH", str(ROOT / "access_policy.json"))
 ACCESS_KEY_PATH = os.getenv("ACCESS_KEY_PATH", str(ROOT / "data" / "access.key"))
+# Encrypts audit payloads and checkpoint state. Keep its backup custody separate from the backups themselves.
+DATA_KEY_PATH = os.getenv("DATA_KEY_PATH", str(ROOT / "data" / "data.key"))
+ANCHOR_PATH = os.getenv("ANCHOR_PATH", str(ROOT / "data" / "audit_anchors.jsonl"))
+# Audit records and idle checkpoint threads older than this are deleted. Six months.
+RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "183"))
+BACKUP_DIR = os.getenv("BACKUP_DIR", str(ROOT / "backups"))
 
 # Relevance gate: retrieval abstains unless the best chunk clears one of these. Calibrated on the
 # eval calibration split; see eval/README.md.

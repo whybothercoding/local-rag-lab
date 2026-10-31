@@ -35,6 +35,8 @@ os.environ["UPLOADS_DIR"] = str(OUT_DIR / "uploads")
 os.environ["AUDIT_DB_PATH"] = str(OUT_DIR / "audit.db")
 os.environ["ACCESS_POLICY_PATH"] = str(OUT_DIR / "access_policy.json")
 os.environ["ACCESS_KEY_PATH"] = str(OUT_DIR / "access.key")
+os.environ["DATA_KEY_PATH"] = str(OUT_DIR / "data.key")
+os.environ["ANCHOR_PATH"] = str(OUT_DIR / "audit_anchors.jsonl")
 os.environ["DB_URI"] = f"sqlite:///{OUT_DIR / 'unused_checkpoints.db'}"
 os.environ.setdefault("LLM_PROVIDER", "deterministic")
 

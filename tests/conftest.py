@@ -19,6 +19,10 @@ atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
 os.environ["AUDIT_DB_PATH"] = os.path.join(_scratch_dir, "audit.db")
 os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.json")
 os.environ["ACCESS_KEY_PATH"] = os.path.join(_scratch_dir, "access.key")
+os.environ["DATA_KEY_PATH"] = os.path.join(_scratch_dir, "data.key")
+os.environ["ANCHOR_PATH"] = os.path.join(_scratch_dir, "audit_anchors.jsonl")
+os.environ["BACKUP_DIR"] = os.path.join(_scratch_dir, "backups")
+os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')}"
 # Tests never depend on a running model server; the deterministic synthesizer keeps answers reproducible.
 os.environ["LLM_PROVIDER"] = "deterministic"
 

@@ -19,6 +19,9 @@ data/
 *.db-wal
 *.db-shm
 
+# Backups hold governance data; keys are never copied into them
+backups/
+
 # Local accounts (password hashes) and offline evaluation output
 access_policy.json
 eval/out/

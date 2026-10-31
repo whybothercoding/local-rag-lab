@@ -1,4 +1,4 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback users eval eval-judge clean
+.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users eval eval-judge clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -54,6 +54,23 @@ audit-verify:
 # 11. Show the 20 most recent audit events
 audit-tail:
 	./venv/bin/python audit.py tail -n 20
+
+# 15. Anchor the audit head hash. Run on a schedule and copy data/audit_anchors.jsonl off the host.
+audit-anchor:
+	./venv/bin/python audit.py anchor
+
+# 16. Apply the retention policy (183 days by default) to audit records and idle checkpoint threads
+retention:
+	./venv/bin/python retention.py
+
+# 17. Consistent, checksummed backup of the audit log, checkpoints, anchors, and policy (keys excluded)
+backup:
+	./venv/bin/python backup.py create
+
+# 18. Verify a backup: make backup-verify DIR=backups/backup-<timestamp>
+backup-verify:
+	@test -n "$(DIR)" || (echo "Set DIR=<backup directory>" && exit 1)
+	./venv/bin/python backup.py verify $(DIR)
 
 # 12. List accounts and workspace grants (never password hashes)
 users:
