@@ -1,11 +1,11 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail clean
+.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail users eval clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
 	python3 -m venv venv
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install -r requirements.txt
-	@echo "Setup complete. Run 'make models' once (needs network), add documents under knowledge_base/<workspace>/, then run 'make ui'."
+	@echo "Setup complete. Run 'make models' once (needs network), add documents under knowledge_base/<workspace>/, create accounts with 'python access.py add-user <name> --admin', then run 'make ui'."
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
 models:
@@ -54,7 +54,15 @@ audit-verify:
 audit-tail:
 	./venv/bin/python audit.py tail -n 20
 
-# 12. Clean caches and test artifacts
+# 12. List accounts and workspace grants (never password hashes)
+users:
+	./venv/bin/python access.py list
+
+# 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
+eval:
+	./venv/bin/python eval.py
+
+# 14. Clean caches and test artifacts
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf .pytest_cache .coverage

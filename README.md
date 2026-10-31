@@ -70,11 +70,25 @@ make models   # one-time: download the embedding model and verify its SHA-256 pi
 
 After this step the application runs with no network access. `make verify-models` re-checks the cached weights offline.
 
-### 2. Verify System Health
+### 2. Create Accounts and Grant Access
+
+The app will not serve anyone until at least one account exists. Passwords are stored as scrypt hashes.
+
+```bash
+python access.py add-user alice --admin                 # administrator: creates and indexes workspaces
+python access.py add-user bob                           # analyst
+python access.py grant bob accounting --perms query,review
+python access.py list
+```
+
+Permissions are per workspace. `query` allows asking questions. `review` allows approving or rejecting answers, but never one's own. Access is denied by default.
+
+### 3. Verify System Health
 
 ```bash
 make test          # full suite (PostgreSQL test runs when a server is reachable)
 make test-offline  # same suite with every outbound connection blocked
+make eval          # offline evaluation gate: retrieval, answer, and access-control metrics
 ```
 
 ---
@@ -126,17 +140,17 @@ Every query, groundedness check, retrieval, and human decision is written to `da
 
 ### Compliance CLI (`approve.py`)
 
-When running automated pipelines or backend workers, check and resume paused HITL checkpoint threads via terminal:
+Check and resume paused HITL checkpoint threads from the terminal. Every decision requires the reviewer's account and password, and the account must hold `review` on the thread's workspace:
 
 ```bash
 # Inspect all threads currently waiting for human compliance
 python approve.py --list
 
-# Review and approve a paused thread
-python approve.py --thread ui-accounting-abc123 --action approve
+# Approve a paused thread (prompts for the reviewer's password)
+python approve.py --thread ui-accounting-abc123 --action approved --approver bob --reason "Checked against policy"
 
 # Reject a paused thread
-python approve.py --thread ui-accounting-abc123 --action reject
+python approve.py --thread ui-accounting-abc123 --action rejected --approver bob
 ```
 
 ---
@@ -150,6 +164,9 @@ local-rag-lab/
 ├── ingest.py                # Multi-format document parser (.md, .txt, .pdf, .docx) & indexer
 ├── ui.py                    # Streamlit web application with citation drawers & HITL gates
 ├── approve.py               # CLI tool for inspecting and resolving HITL review threads
+├── access.py                # Local accounts, password hashing, and per-workspace grants
+├── audit.py                 # Hash-chained, append-only audit trail and verifier
+├── eval.py                  # Offline evaluation gate over eval/corpus and eval/golden.json
 ├── export_graph.py          # Script generating Mermaid and PNG graph diagrams
 ├── requirements.txt         # Pinned top-level Python dependencies
 ├── Makefile                 # Unified setup, test, ingest, and execution workflows

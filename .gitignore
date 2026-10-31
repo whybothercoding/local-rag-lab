@@ -19,6 +19,10 @@ data/
 *.db-wal
 *.db-shm
 
+# Local accounts (password hashes) and offline evaluation output
+access_policy.json
+eval/out/
+
 # Pytest & coverage caches
 .pytest_cache/
 .coverage

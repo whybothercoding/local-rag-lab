@@ -18,6 +18,7 @@ from config import (
     CHROMA_PATH,
     BM25_DIR,
 )
+from access import authorize
 from audit import record as audit_record
 from embedding_provider import get_embedding_model
 from llm_provider import get_chat_llm
@@ -28,6 +29,7 @@ from sparse_search import search_sparse_chunks
 class GraphState(TypedDict, total=False):
     workspace_id: str
     session_id: str
+    principal: str
     question: str
     original_question: str
     sanitized_question: str
@@ -89,7 +91,24 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     raw = state.get("question", "")
     ws_id = state.get("workspace_id", "default")
     session_id = state.get("session_id", "")
+    principal = state.get("principal", "")
     telemetry = dict(state.get("telemetry", {}))
+
+    # Authorization comes first: unauthorized callers get no processing and no retrieval.
+    if not authorize(principal, ws_id, "query"):
+        denied_query = redact_pii(raw)
+        audit_record(
+            "access_denied",
+            workspace_id=ws_id,
+            session_id=session_id,
+            data={"principal": principal, "permission": "query", "query": denied_query},
+        )
+        return {
+            "is_safe": False,
+            "generation": "[ACCESS DENIED: this account is not authorized for the selected workspace.]",
+            "sanitized_question": denied_query,
+            "telemetry": telemetry,
+        }
 
     adversarial_patterns = [
         r"ignore previous instructions",
@@ -370,10 +389,18 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     history = list(state.get("history", []))
 
     approved = review["decision"] == "approved"
+    ws_id = state.get("workspace_id", "default")
     if approved and not review["approver"]:
         # An approval with no accountable reviewer is not released.
         approved = False
         review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: no approver identity"]))
+    if approved and review["approver"] == state.get("principal", ""):
+        # Separation of duties: the requester cannot approve their own query.
+        approved = False
+        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: self-approval"]))
+    if approved and not authorize(review["approver"], ws_id, "review"):
+        approved = False
+        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver lacks review permission"]))
 
     # Written before the answer is released, so a failed write releases nothing.
     audit_record(

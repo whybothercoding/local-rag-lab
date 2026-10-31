@@ -11,10 +11,34 @@ import tempfile
 
 # Chroma's anonymous telemetry must never run in tests.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-# Audit events from tests go to a throwaway file, never to the project's data/ directory.
-_audit_dir = tempfile.mkdtemp(prefix="rag-audit-")
-atexit.register(shutil.rmtree, _audit_dir, ignore_errors=True)
-os.environ["AUDIT_DB_PATH"] = os.path.join(_audit_dir, "audit.db")
+# Audit events and access policy for tests live in throwaway files, never in the project's data/ directory.
+_scratch_dir = tempfile.mkdtemp(prefix="rag-test-")
+atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
+os.environ["AUDIT_DB_PATH"] = os.path.join(_scratch_dir, "audit.db")
+os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.json")
+
+TEST_PASSWORD = "correct-horse-battery"
+
+
+def _seed_access_policy() -> None:
+    from access import add_user, set_grant
+
+    add_user("alice", TEST_PASSWORD, admin=True)
+    set_grant("alice", "default", ["query", "review"])
+    set_grant("alice", "ops", ["query", "review"])
+    set_grant("alice", "accounting", ["query", "review"])
+
+    add_user("bob", TEST_PASSWORD)
+    set_grant("bob", "default", ["query", "review"])
+    set_grant("bob", "ops", ["query", "review"])
+
+    add_user("carol", TEST_PASSWORD)
+    set_grant("carol", "default", ["query"])
+
+    add_user("dave", TEST_PASSWORD)
+
+
+_seed_access_policy()
 
 if os.getenv("RAG_OFFLINE") == "1":
     _original_connect = socket.socket.connect

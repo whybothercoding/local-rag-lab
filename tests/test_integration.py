@@ -7,7 +7,8 @@ from langchain_core.runnables import RunnableConfig
 from app import workflow, DB_URI, GraphState
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
-REVIEW = {"decision": "approved", "approver": "integration-test", "reason": "automated check"}
+# The requester (carol) and the reviewer (bob) are different accounts, as separation of duties requires.
+REVIEW = {"decision": "approved", "approver": "bob", "reason": "automated check"}
 
 
 def is_postgres_available() -> bool:
@@ -32,6 +33,7 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path):
         inputs: GraphState = {
             "workspace_id": "default",
             "session_id": "test-sqlite-thread-001",
+            "principal": "carol",
             "question": "What is our company rollback SLA?",
             "original_question": "What is our company rollback SLA?",
             "sanitized_question": "",
@@ -81,6 +83,7 @@ def test_full_pipeline_to_postgres_and_approve_cli():
         inputs: GraphState = {
             "workspace_id": "default",
             "session_id": "test-integration-thread-001",
+            "principal": "carol",
             "question": "What is our company rollback SLA?",
             "original_question": "What is our company rollback SLA?",
             "sanitized_question": "",

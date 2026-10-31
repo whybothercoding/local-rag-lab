@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import sys
 import argparse
+import getpass
 import logging
 from langgraph.types import Command
 
 # Import workflow and checkpointer factory
+from access import authenticate, authorize
 from app import workflow
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
@@ -85,12 +87,24 @@ def process_decision(app, thread_id: str, decision: str, approver: str, reason: 
     print(f"Final Emitted Output:\n{final_state.values.get('generation')}\n")
 
 
+def confirm_reviewer(state, preset: str | None) -> str:
+    """Authenticate the reviewer by password and check their review grant on the thread's workspace."""
+    name = (preset or input("Reviewer ID: ")).strip().lower()
+    password = getpass.getpass(f"Password for {name}: ")
+    if not authenticate(name, password):
+        sys.exit("Authentication failed. No decision recorded.")
+    workspace = state.values.get("workspace_id", "")
+    if not authorize(name, workspace, "review"):
+        sys.exit(f"'{name}' has no review permission on workspace '{workspace}'. No decision recorded.")
+    return name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Human-in-the-Loop CLI Operator for Checkpoints")
     parser.add_argument("--list", action="store_true", help="List all threads awaiting human review")
     parser.add_argument("--thread", type=str, help="Thread ID to inspect or approve/reject")
     parser.add_argument("--action", type=str, choices=["approved", "rejected"], help="Decision action to apply")
-    parser.add_argument("--approver", type=str, help="Reviewer identity recorded in the audit log (required to decide)")
+    parser.add_argument("--approver", type=str, help="Reviewer account; you will be asked for its password")
     parser.add_argument("--reason", type=str, default="", help="Optional reason recorded in the audit log")
     args = parser.parse_args()
 
@@ -111,11 +125,10 @@ def main():
 
         # Mode 2: Direct approval/rejection via CLI args
         if args.thread and args.action:
-            if not args.approver:
-                parser.error("--approver is required when approving or rejecting")
             state = inspect_thread(app, args.thread)
             if state:
-                process_decision(app, args.thread, args.action, args.approver, args.reason)
+                approver = confirm_reviewer(state, args.approver)
+                process_decision(app, args.thread, args.action, approver, args.reason)
             return
 
         # Mode 3: Interactive approval
@@ -132,10 +145,7 @@ def main():
         if not state:
             sys.exit(1)
 
-        approver = args.approver or input("Reviewer ID (recorded in the audit log): ").strip()
-        if not approver:
-            print("A reviewer ID is required. Aborted without changes.")
-            sys.exit(1)
+        approver = confirm_reviewer(state, args.approver)
 
         choice = input("Enter decision ('a' for approve / 'r' for reject / 'q' to abort): ").strip().lower()
         if choice in ["a", "approve", "approved"]:
