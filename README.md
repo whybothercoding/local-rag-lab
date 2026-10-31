@@ -53,42 +53,28 @@ This architecture guarantees complete data sovereignty by running 100% locally w
 
 ### Prerequisites
 
-- **Python**: `>= 3.11` (Tested on 3.11–3.14)
-- **Docker & Docker Compose**: For local PostgreSQL checkpoint storage
-- **Ollama**: Installed and running locally (`http://localhost:11434`)
+- **Python**: `>= 3.11` (tested on 3.11–3.14)
+- Nothing else for the default setup. SQLite, ONNX embeddings, and the built-in synthesizer need no services.
+- Network access is needed **once**, for `make models`.
 
-### 1. One-Command Setup
+Optional backends:
+- **PostgreSQL checkpoints**: `make up`, then set `DB_URI=postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints`.
+- **Ollama chat model**: `make ollama-pull`. The app uses it automatically when `localhost:11434` responds, and otherwise uses the built-in synthesizer.
 
-Run the automated setup target in the `Makefile` to create the virtual environment, install dependencies, spin up PostgreSQL, and pull the required model:
-
-```bash
-make setup
-```
-
-Alternatively, perform the steps manually:
+### 1. Setup
 
 ```bash
-# 1. Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Launch PostgreSQL checkpoint container
-docker compose up -d
-
-# 4. Pull LLM weights
-ollama pull qwen2.5-coder:7b
+make setup    # virtual environment and pure-Python dependencies
+make models   # one-time: download the embedding model and verify its SHA-256 pins
 ```
+
+After this step the application runs with no network access. `make verify-models` re-checks the cached weights offline.
 
 ### 2. Verify System Health
 
-Run the full automated test suite (15 unit and integration tests covering engine nodes, workspace isolation, parser extractors, and database checkpoints):
-
 ```bash
-make test
-# Or: pytest -v
+make test          # full suite (PostgreSQL test runs when a server is reachable)
+make test-offline  # same suite with every outbound connection blocked
 ```
 
 ---
@@ -97,18 +83,19 @@ make test
 
 ### Ingesting Documents via CLI
 
-Ingest folders of `.md`, `.txt`, `.pdf`, or `.docx` documents into separate isolated workspaces:
+Put `.md`, `.txt`, `.pdf`, or `.docx` files in one folder per workspace under `knowledge_base/`, then run:
 
 ```bash
-# Ingest pre-bundled sample domains
-make ingest
-
-# Or ingest custom directories into custom workspace bundles
-python ingest.py --workspace accounting --dir ./knowledge_base/accounting
-python ingest.py --workspace strategy --dir ./knowledge_base/strategy
+make sync   # index every folder under knowledge_base/; unchanged files are skipped
 ```
 
-Each workspace creates an isolated ChromaDB collection (`ws_<workspace_id>`) and a serialized BM25 index (`bm25_indices/<workspace_id>.pkl`).
+Each folder name becomes a workspace ID (for example `Accounting & Tax` becomes `accounting_tax`). Symlinked files and folders are ignored. Each workspace gets its own ChromaDB collection (`ws_<workspace_id>`) and SQLite FTS5 keyword index (`bm25_indices/<workspace_id>.db`).
+
+To index a single directory into a named workspace:
+
+```bash
+python ingest.py --workspace accounting --dir ./knowledge_base/accounting
+```
 
 ### Launching the Interactive Web UI
 

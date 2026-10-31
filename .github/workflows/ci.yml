@@ -8,8 +8,11 @@ on:
 
 jobs:
   test:
-    name: Pytest & Integration Suite
+    name: Test suite (online and offline)
     runs-on: ubuntu-latest
+
+    env:
+      DB_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
 
     services:
       postgres:
@@ -41,9 +44,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run test suite
+      - name: Restore embedding model cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: embedding-model-${{ hashFiles('model_integrity.py') }}
+
+      - name: Fetch and verify pinned model weights
+        run: python fetch_models.py
+
+      - name: Run test suite (PostgreSQL integration included)
+        run: pytest -v
+
+      - name: Run test suite with all outbound network blocked
         env:
-          DB_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
-          OLLAMA_BASE_URL: http://localhost:11434
-        run: |
-          pytest -v
+          RAG_OFFLINE: "1"
+        run: pytest -v

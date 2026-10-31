@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-import os
+"""Export the LangGraph topology to docs/architecture.mmd and, when possible, docs/architecture.png.
+
+The .mmd file is the source of truth and is written without network access.
+PNG rendering uses a locally installed Mermaid CLI (`mmdc`, or the path in MERMAID_CLI).
+No diagram is ever sent to a remote renderer.
+"""
 import logging
+import os
+import shutil
+import subprocess
+
 from langgraph.checkpoint.memory import MemorySaver
 
-# Import the workflow state graph from app.py
 from app import workflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
@@ -12,20 +20,29 @@ logger = logging.getLogger("GraphExporter")
 OUTPUT_DIR = "./docs"
 MERMAID_FILE = os.path.join(OUTPUT_DIR, "architecture.mmd")
 PNG_FILE = os.path.join(OUTPUT_DIR, "architecture.png")
+MMDC_TIMEOUT_SEC = 120
+
+
+def render_png_locally(source: str, target: str) -> bool:
+    """Render the Mermaid file to PNG with a local CLI. Returns False if no CLI is installed."""
+    mmdc = shutil.which(os.getenv("MERMAID_CLI", "mmdc"))
+    if mmdc is None:
+        logger.info(
+            "PNG skipped: Mermaid CLI not found. Install with 'npm install -g @mermaid-js/mermaid-cli'. "
+            "The .mmd file renders natively on GitHub without it."
+        )
+        return False
+    subprocess.run([mmdc, "-i", source, "-o", target], check=True, timeout=MMDC_TIMEOUT_SEC)
+    return True
 
 
 def export_mermaid_diagram():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    # 1. Compile the graph with a dummy in-memory checkpointer for static analysis
+
     logger.info("Compiling StateGraph for topology extraction...")
     compiled_app = workflow.compile(checkpointer=MemorySaver())
+    mermaid_code = compiled_app.get_graph().draw_mermaid()
 
-    # 2. Extract Mermaid syntax using LangGraph's visual graph helper
-    drawable_graph = compiled_app.get_graph()
-    mermaid_code = drawable_graph.draw_mermaid()
-
-    # 3. Write Mermaid syntax (.mmd) to disk
     logger.info(f"Writing Mermaid definition to {MERMAID_FILE}...")
     with open(MERMAID_FILE, "w", encoding="utf-8") as f:
         f.write(mermaid_code)
@@ -35,18 +52,11 @@ def export_mermaid_diagram():
     print("=" * 60)
     print(f"File: {MERMAID_FILE}\n")
 
-    # 4. Attempt PNG export via Mermaid rendering engine
     try:
-        logger.info(f"Rendering binary PNG to {PNG_FILE}...")
-        png_bytes = drawable_graph.draw_mermaid_png()
-        with open(PNG_FILE, "wb") as f:
-            f.write(png_bytes)
-        print(f"Rendered image saved: {PNG_FILE}")
-    except Exception as exc:
-        logger.warning(
-            f"PNG rendering skipped: {exc}. "
-            f"The .mmd file is available to paste directly into https://mermaid.live or GitHub Markdown."
-        )
+        if render_png_locally(MERMAID_FILE, PNG_FILE):
+            print(f"Rendered image saved: {PNG_FILE}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning(f"PNG rendering failed: {exc}. The .mmd file is still up to date.")
 
 
 if __name__ == "__main__":

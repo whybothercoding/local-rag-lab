@@ -12,6 +12,11 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
+# Runtime never contacts a model hub or telemetry endpoint. Only fetch_models.py may download,
+# and it re-enables network access itself before huggingface_hub is imported.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"
 POSTGRES_DB_URI = "postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints"
