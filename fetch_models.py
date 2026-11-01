@@ -16,7 +16,7 @@ os.environ["HF_HUB_OFFLINE"] = "0"
 
 from huggingface_hub import snapshot_download
 
-from config import FASTEMBED_MODEL, MODELS_DIR
+from config import FASTEMBED_MODEL, MODELS_DIR, RERANKER_MODEL
 from model_integrity import PINNED_MODELS, ModelIntegrityError, verify_model
 
 
@@ -42,12 +42,15 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        models_to_check = [FASTEMBED_MODEL, RERANKER_MODEL]
         if args.verify_only:
-            path = verify_model(FASTEMBED_MODEL, MODELS_DIR)
-            print(f"Model '{FASTEMBED_MODEL}' verified offline at {path}")
+            for m in models_to_check:
+                path = verify_model(m, MODELS_DIR)
+                print(f"Model '{m}' verified offline at {path}")
         else:
-            path = fetch_model(FASTEMBED_MODEL, MODELS_DIR)
-            print(f"Model '{FASTEMBED_MODEL}' downloaded and verified at {path}")
+            for m in models_to_check:
+                path = fetch_model(m, MODELS_DIR)
+                print(f"Model '{m}' downloaded and verified at {path}")
     except ModelIntegrityError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

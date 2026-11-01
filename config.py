@@ -36,6 +36,8 @@ EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
 
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "fastembed")
 FASTEMBED_MODEL = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
+ENABLE_RERANKER = os.getenv("ENABLE_RERANKER", "true").lower() in ("1", "true", "yes", "on")
 MODELS_DIR = os.getenv("MODELS_DIR", str(ROOT / "models"))
 
 CHROMA_PATH = os.getenv("CHROMA_PATH", str(ROOT / "chroma_data"))

@@ -25,11 +25,12 @@ Implements dynamic self-assessment loops to verify output quality before answers
 ### 4. Corrective RAG (CRAG) & Adaptive Query Rewriting
 When retrieved documents fail relevance grading or an answer is found irrelevant, the pipeline autonomously reformulates the user query (`rewrite`) and retries retrieval. An integrated **circuit breaker** caps retries at 2 to prevent infinite cycles.
 
-### 5. Hybrid Retrieval (Dense Semantic + Sparse Lexical Fusion)
-Combines dense vector embeddings with sparse keyword search:
+### 5. Hybrid Retrieval & Cross-Encoder Reranking
+Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
 * **Dense Retrieval**: Cosine similarity via [ChromaDB](file:///Users/theo.dev/Documents/misc/local-rag-lab/chroma_data) and fast local embeddings (ONNX `bge-small-en-v1.5`).
-* **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25Okapi for exact matches, technical acronyms, and identifiers.
-* **Fusion**: Merges candidate sets to ensure both broad semantic recall and high-precision keyword matching.
+* **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
+* **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
+* **Neural Cross-Encoder Reranker (`reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
 
 ### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
 To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:

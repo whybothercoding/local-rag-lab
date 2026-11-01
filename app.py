@@ -30,6 +30,7 @@ from embedding_provider import get_embedding_model
 from llm_provider import DeterministicContextLLM, get_chat_llm
 from redaction import redact_pii
 from context_sanitizer import sanitize_chunks
+from reranker import rerank_documents
 from sparse_search import search_sparse_chunks
 
 
@@ -316,9 +317,12 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     )
 
     # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant
-    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=3) if relevant else []
-    chunks_found = [item["content"] for item in fused_docs]
-    citations = [item["citation"] for item in fused_docs]
+    # Fetch top candidates from RRF, then apply Cross-Encoder Reranker for deep attention scoring
+    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=6) if relevant else []
+    reranked_docs = rerank_documents(query, fused_docs, top_n=3) if fused_docs else []
+
+    chunks_found = [item["content"] for item in reranked_docs]
+    citations = [item["citation"] for item in reranked_docs]
 
     telemetry["retrieval_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     telemetry["dense_candidates_count"] = len(dense_candidates)
