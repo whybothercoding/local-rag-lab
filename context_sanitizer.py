@@ -81,12 +81,29 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+# Try importing native Rust accelerator, fallback to pure Python
+try:
+    import rag_accel
+    RUST_ACCEL = True
+except ImportError:
+    RUST_ACCEL = False
+
+
 def scan_chunk(text: str) -> tuple[bool, str | None]:
     """Scan a text chunk for indirect prompt injection payloads.
+
+    Uses native Rust Aho-Corasick & regex accelerator when available,
+    falling back to pure Python reference implementation.
 
     Returns:
         (is_safe, violation_reason)
     """
+    if RUST_ACCEL:
+        try:
+            return rag_accel.scan_chunk(text)
+        except Exception:
+            pass
+
     for pattern, reason in _INJECTION_PATTERNS:
         match = pattern.search(text)
         if match:

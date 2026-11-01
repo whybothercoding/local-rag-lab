@@ -1,4 +1,4 @@
-.PHONY: setup models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users reset-users factory-reset eval eval-judge clean
+.PHONY: setup rust-build models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users reset-users factory-reset eval eval-judge clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -6,6 +6,10 @@ setup:
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install -r requirements.txt
 	@echo "Setup complete. Run 'make models' once (needs network), add documents under knowledge_base/<workspace>/, create accounts with 'python access.py add-user <name> --admin', then run 'make ui'."
+
+# 1b. Build optional native Rust accelerator module (rag_accel) for high-throughput context scanning
+rust-build:
+	PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 VIRTUAL_ENV=$$PWD/venv ./venv/bin/maturin develop --release -m crates/rag_accel/Cargo.toml
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
 models:
