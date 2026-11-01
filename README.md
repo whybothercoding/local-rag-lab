@@ -43,9 +43,9 @@ To prevent hallucinations on irrelevant context, the system enforces strict evid
 ### 8. Dynamic Intent Classification & Routing
 An intent router classifies incoming queries into **domain RAG** vs. conversational **chitchat**, bypassing vector retrieval for general interactions to conserve compute and avoid noise.
 
-### 9. AI Safety & Input Guardrails
-* **Adversarial Prompt Injection Defense**: Pre-retrieval heuristics detect and reject jailbreak attempts, delimiter manipulation, and system prompt override attempts.
-* **Automated PII Redaction**: Regex-based masking for emails and telephone numbers runs prior to LLM processing and before writing entries to persistent audit logs.
+### 9. AI Safety, Prompt Injection Defense & Outbound DLP
+* **Direct & Indirect Prompt Injection Defense**: Pre-retrieval heuristics detect direct user jailbreaks (`guardrail`). Post-retrieval context scanning (`sanitize_context`) strips untrusted documents containing role spoofing, delimiter attacks, instruction overrides, and exfiltration beacons prior to generator evaluation.
+* **Real-Time Outbound Data Loss Prevention (DLP)**: Generated LLM responses undergo real-time redaction for emails, phone numbers, and sensitive identifiers before release. Audit logs are cryptographically hash-chained and PII-masked.
 
 ### 10. Human-in-the-Loop (HITL) Compliance & Dual-Control Gates
 * The state graph pauses before answer release at a compliance checkpoint node.
@@ -79,6 +79,8 @@ Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into iso
 [router] ──(chitchat)──> [chitchat] ──> [END]
    │ (rag)
 [retrieve] (Hybrid ChromaDB Dense + SQLite FTS5 / BM25 Sparse)
+   │
+[sanitize_context] (Zero Trust Indirect Prompt Injection Defense)
    │
 [grade_docs] ──(rewrite)──> [rewrite] ──> [retrieve]
    │ (approved / max retries)

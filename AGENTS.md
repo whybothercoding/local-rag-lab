@@ -52,8 +52,10 @@ Graph execution in [`app.py`](file:///Users/theo.dev/Documents/misc/local-rag-la
                  │                        │                        ├──(chitchat)──> [chitchat] ──> [END]
               (fail)                    (hit)                      └──(rag)──> [retrieve]
                  │                        │                                       │
-                 ▼                        ▼                                  [grade_docs] ──(rewrite)──┐
-               [END]                    [END]                                     │ (pass)             │
+                 ▼                        ▼                               [sanitize_context]
+               [END]                    [END]                                     │
+                                                                             [grade_docs] ──(rewrite)──┐
+                                                                                  │ (pass)             │
                                                                              [generate] <──────────────┘
                                                                                   │
                                                                        [grade_hallucination] ──(retry)──┐
@@ -61,7 +63,6 @@ Graph execution in [`app.py`](file:///Users/theo.dev/Documents/misc/local-rag-la
                                                                           [grade_relevance]             │
                                                                            ├──(irrelevant)──> [rewrite] ┘
                                                                            └──(relevant)──> [human_approval] ──> [END]
-```
 
 ### State & Tenancy Invariants
 * **State Schema**: `GraphState` ([`app.py`](file:///Users/theo.dev/Documents/misc/local-rag-lab/app.py)).

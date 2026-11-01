@@ -10,6 +10,7 @@ graph TD;
 	router(router)
 	chitchat(chitchat)
 	retrieve(retrieve)
+	sanitize_context(sanitize_context)
 	grade_docs(grade_docs)
 	rewrite(rewrite)
 	generate(generate)
@@ -30,10 +31,11 @@ graph TD;
 	grade_relevance -. &nbsp;irrelevant&nbsp; .-> rewrite;
 	guardrail -. &nbsp;fail&nbsp; .-> __end__;
 	guardrail -. &nbsp;pass&nbsp; .-> cache_lookup;
-	retrieve --> grade_docs;
+	retrieve --> sanitize_context;
 	rewrite --> retrieve;
 	router -.-> chitchat;
 	router -. &nbsp;rag&nbsp; .-> retrieve;
+	sanitize_context --> grade_docs;
 	chitchat --> __end__;
 	human_approval --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

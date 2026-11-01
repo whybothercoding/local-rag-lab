@@ -29,6 +29,7 @@ from audit import record as audit_record
 from embedding_provider import get_embedding_model
 from llm_provider import DeterministicContextLLM, get_chat_llm
 from redaction import redact_pii
+from context_sanitizer import sanitize_chunks
 from sparse_search import search_sparse_chunks
 
 
@@ -333,6 +334,45 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     }
 
 
+def sanitize_context_node(state: StateInput) -> dict[str, Any]:
+    """Inspect retrieved chunks for indirect prompt injection and drop poisoned content."""
+    t0 = time.perf_counter()
+    raw_docs = state.get("documents", [])
+    raw_citations = state.get("citations", [])
+    telemetry = dict(state.get("telemetry", {}))
+    degraded = list(state.get("degraded", []))
+    ws_id = state.get("workspace_id", "default")
+    session_id = state.get("session_id", "")
+
+    clean_docs, clean_citations, dropped = sanitize_chunks(raw_docs, raw_citations)
+
+    telemetry["context_sanitizer_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+    telemetry["poisoned_chunks_dropped"] = len(dropped)
+
+    if dropped:
+        degraded.append(
+            f"security_warning: dropped {len(dropped)} poisoned document chunk(s) containing indirect prompt injection payloads"
+        )
+        for violation in dropped:
+            audit_record(
+                "indirect_injection_detected",
+                workspace_id=ws_id,
+                session_id=session_id,
+                data={
+                    "citation": violation["citation"],
+                    "reason": violation["reason"],
+                    "preview": violation["preview"],
+                },
+            )
+
+    return {
+        "documents": clean_docs,
+        "citations": clean_citations,
+        "telemetry": telemetry,
+        "degraded": degraded,
+    }
+
+
 def grade_documents_node(state: StateInput) -> dict[str, Any]:
     docs = state.get("documents", [])
     retries = state.get("retry_count", 0)
@@ -375,6 +415,8 @@ def generate_node(state: StateInput) -> dict[str, Any]:
         degraded.append(f"generation_fallback: {type(exc).__name__}; the answer is extractive, not model-written")
         telemetry["generation_fallback"] = True
 
+    # Real-time outbound DLP filter
+    gen_content = redact_pii(gen_content)
     telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
     return {
@@ -549,6 +591,7 @@ builder.add_node("cache_lookup", cache_lookup_node)
 builder.add_node("router", router_node)
 builder.add_node("chitchat", chitchat_node)
 builder.add_node("retrieve", hybrid_retrieval_node)
+builder.add_node("sanitize_context", sanitize_context_node)
 builder.add_node("grade_docs", grade_documents_node)
 builder.add_node("rewrite", query_rewrite_node)
 builder.add_node("generate", generate_node)
@@ -577,7 +620,8 @@ builder.add_conditional_edges(
 )
 
 builder.add_edge("chitchat", END)
-builder.add_edge("retrieve", "grade_docs")
+builder.add_edge("retrieve", "sanitize_context")
+builder.add_edge("sanitize_context", "grade_docs")
 
 builder.add_conditional_edges(
     "grade_docs",
