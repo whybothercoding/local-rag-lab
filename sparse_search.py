@@ -30,24 +30,42 @@ def index_sparse_chunks(
     chunk_ids: list[str],
     sources: list[str],
     chunks: list[str],
+    clearances: list[str] | None = None,
     base_dir: str | None = None,
 ) -> None:
-    """Index chunks into an isolated SQLite FTS5 virtual table for keyword retrieval."""
+    """Index chunks into an isolated SQLite FTS5 virtual table for keyword retrieval.
+
+    Supports document clearance tags (e.g. 'public', 'internal', 'confidential', 'secret').
+    """
     db_path = get_fts_db_path(workspace_id, base_dir)
+    if clearances is None:
+        clearances = ["public"] * len(chunk_ids)
 
     try:
         with sqlite3.connect(db_path) as conn:
+            # Recreate table with clearance column if old schema exists
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fts_chunks';")
+            if cursor.fetchone():
+                info = conn.execute("PRAGMA table_info(fts_chunks);").fetchall()
+                cols = [r[1] for r in info]
+                if "clearance" not in cols:
+                    conn.execute("DROP TABLE fts_chunks;")
+
             conn.execute(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5("
                 "id UNINDEXED, "
                 "source UNINDEXED, "
+                "clearance UNINDEXED, "
                 "content, "
                 "tokenize='porter unicode61'"
                 ");"
             )
             conn.execute("DELETE FROM fts_chunks;")
-            rows = [(cid, src, content) for cid, src, content in zip(chunk_ids, sources, chunks)]
-            conn.executemany("INSERT INTO fts_chunks (id, source, content) VALUES (?, ?, ?);", rows)
+            rows = [
+                (cid, src, clr, content)
+                for cid, src, clr, content in zip(chunk_ids, sources, clearances, chunks)
+            ]
+            conn.executemany("INSERT INTO fts_chunks (id, source, clearance, content) VALUES (?, ?, ?, ?);", rows)
             conn.commit()
     except Exception as exc:
         logger.exception("Failed to write SQLite FTS5 index for %s: %s", workspace_id, exc)
@@ -58,9 +76,10 @@ def search_sparse_chunks(
     workspace_id: str,
     query: str,
     top_n: int = 5,
+    allowed_clearances: list[str] | None = None,
     base_dir: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Query the sparse index using SQLite FTS5 BM25 ranking, with safe fallback to legacy pickle."""
+    """Query the sparse index using SQLite FTS5 BM25 ranking, filtered by allowed clearance levels."""
     target_dir = base_dir or BM25_DIR
     db_path = os.path.join(target_dir, f"{workspace_id}.db")
 
@@ -72,14 +91,31 @@ def search_sparse_chunks(
         match_query = " OR ".join(tokens)
         try:
             with sqlite3.connect(db_path) as conn:
-                cursor = conn.execute(
-                    "SELECT id, source, content, bm25(fts_chunks) AS score "
-                    "FROM fts_chunks "
-                    "WHERE fts_chunks MATCH ? "
-                    "ORDER BY score ASC "
-                    "LIMIT ?;",
-                    (match_query, top_n),
-                )
+                info = conn.execute("PRAGMA table_info(fts_chunks);").fetchall()
+                cols = [r[1] for r in info]
+                has_clearance_col = "clearance" in cols
+
+                if has_clearance_col and allowed_clearances:
+                    placeholders = ", ".join("?" for _ in allowed_clearances)
+                    sql = (
+                        "SELECT id, source, content, bm25(fts_chunks) AS score "
+                        "FROM fts_chunks "
+                        f"WHERE fts_chunks MATCH ? AND clearance IN ({placeholders}) "
+                        "ORDER BY score ASC "
+                        "LIMIT ?;"
+                    )
+                    params = [match_query] + list(allowed_clearances) + [top_n]
+                else:
+                    sql = (
+                        "SELECT id, source, content, bm25(fts_chunks) AS score "
+                        "FROM fts_chunks "
+                        "WHERE fts_chunks MATCH ? "
+                        "ORDER BY score ASC "
+                        "LIMIT ?;"
+                    )
+                    params = [match_query, top_n]
+
+                cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
                 return [
                     {

@@ -24,7 +24,7 @@ from config import (
     RELEVANCE_MIN_COVERAGE,
     RELEVANCE_MIN_SIMILARITY,
 )
-from access import authorize, verify_token
+from access import allowed_clearances, authorize, get_user_clearance, verify_token
 from audit import record as audit_record
 from embedding_provider import get_embedding_model
 from llm_provider import DeterministicContextLLM, get_chat_llm
@@ -260,12 +260,24 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     dense_candidates: List[Dict[str, Any]] = []
     sparse_candidates: List[Dict[str, Any]] = []
 
+    # 1. Resolve user clearance levels for Zero Trust document-level RBAC filtering
+    principal = state.get("principal", "")
+    if not principal:
+        principal = verify_token(str(state.get("principal_token", "")))
+    user_clr = get_user_clearance(principal) if principal else "public"
+    authorized_clrs = allowed_clearances(user_clr)
+
     # 1. Dense retrieval (ChromaDB). Stored vectors are unit-normalized, so cosine = 1 - squared_l2 / 2.
     try:
         chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
         q_vec = get_embedding_model().embed_query(query)
-        results = collection.query(query_embeddings=[q_vec], n_results=5)
+        where_filter = {"clearance": {"$in": authorized_clrs}}
+        try:
+            results = collection.query(query_embeddings=[q_vec], n_results=5, where=where_filter)
+        except Exception:
+            # Fallback for unmigrated collections without clearance metadata
+            results = collection.query(query_embeddings=[q_vec], n_results=5)
         docs = (results.get("documents") or [[]])[0]
         metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
         ids = (results.get("ids") or [[]])[0]
@@ -282,9 +294,15 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     except Exception as exc:
         degraded.append(f"dense_retrieval_unavailable: {type(exc).__name__}")
 
-    # 2. Sparse retrieval (SQLite FTS5 with BM25 ranking, legacy fallback)
+    # 2. Sparse retrieval (SQLite FTS5 with BM25 ranking, filtered by clearance, legacy fallback)
     try:
-        sparse_candidates = search_sparse_chunks(ws_id, query, top_n=5, base_dir=BM25_DIR)
+        sparse_candidates = search_sparse_chunks(
+            ws_id,
+            query,
+            top_n=5,
+            allowed_clearances=authorized_clrs,
+            base_dir=BM25_DIR,
+        )
     except Exception as exc:
         degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}")
 

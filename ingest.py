@@ -11,15 +11,17 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import chromadb
+import yaml
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import workspace_manager
-from access import is_admin, sign_in
+from access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
 from audit import record as audit_record
 from config import MAX_SOURCE_BYTES
 from embedding_provider import embedding_fingerprint, get_embedding_model
@@ -111,6 +113,35 @@ def _publish_collection(client, name: str, ids, documents, metadatas, embeddings
     _delete_quiet(client, build_name)
 
 
+def _extract_doc_clearance(raw_text: str) -> tuple[str, str]:
+    """Extract clearance tag from YAML frontmatter or document header, returning (clearance, body)."""
+    clearance = DEFAULT_CLEARANCE
+    text = raw_text
+    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", raw_text, re.DOTALL)
+    if fm_match:
+        try:
+            parsed = yaml.safe_load(fm_match.group(1))
+            if isinstance(parsed, dict) and "clearance" in parsed:
+                candidate = str(parsed["clearance"]).strip().lower()
+                if candidate in CLEARANCE_LEVELS:
+                    clearance = candidate
+                text = raw_text[fm_match.end():]
+        except Exception:
+            pass
+    else:
+        hdr_match = re.match(
+            r"^(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)\s*\n",
+            raw_text,
+            re.IGNORECASE,
+        )
+        if hdr_match:
+            candidate = hdr_match.group(1).strip().lower()
+            if candidate in CLEARANCE_LEVELS:
+                clearance = candidate
+            text = raw_text[hdr_match.end():]
+    return clearance, text
+
+
 def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
     raw_docs: list[dict] = []
     skipped: list[str] = []
@@ -129,15 +160,17 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
             skipped.append(f"{relative}: larger than {MAX_SOURCE_BYTES} bytes")
             continue
         try:
-            content = extract_text_from_file(file_path)
+            raw_content = extract_text_from_file(file_path)
         except Exception as exc:
             skipped.append(f"{relative}: {exc}")
             continue
-        if not content:
+        if not raw_content:
             skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
             continue
+        clearance, content = _extract_doc_clearance(raw_content)
         raw_docs.append({
             "content": content,
+            "clearance": clearance,
             "source": relative,
             "doc_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         })
@@ -206,6 +239,7 @@ def ingest_workspace(
     chunk_ids: list[str] = []
     for doc_idx, doc in enumerate(raw_docs):
         doc_hash_short = doc["doc_hash"][:12]
+        doc_clearance = doc.get("clearance", DEFAULT_CLEARANCE)
         for chunk_idx, chunk_text in enumerate(splitter.split_text(doc["content"])):
             chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
             cid = f"{ws_id}_{doc_idx}_{chunk_idx}_{chunk_hash}"
@@ -213,6 +247,7 @@ def ingest_workspace(
             metadatas.append({
                 "source": doc["source"],
                 "workspace": ws_id,
+                "clearance": doc_clearance,
                 "id": cid,
                 "chunk_hash": chunk_hash,
                 "doc_hash": doc_hash_short,
@@ -252,7 +287,8 @@ def ingest_workspace(
     # 2. Write SQLite FTS5 safe keyword index
     try:
         sources = [m.get("source", "document") for m in metadatas]
-        index_sparse_chunks(ws_id, chunk_ids, sources, chunks, base_dir=bm25_dir)
+        clearances = [m.get("clearance", DEFAULT_CLEARANCE) for m in metadatas]
+        index_sparse_chunks(ws_id, chunk_ids, sources, chunks, clearances=clearances, base_dir=bm25_dir)
     except Exception as exc:
         logger.exception("FTS5 keyword write failed for workspace %s", ws_id)
         result.error = f"Keyword index write failed: {exc}"

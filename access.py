@@ -38,6 +38,8 @@ from vault import load_or_create_key
 from workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review")
+CLEARANCE_LEVELS = ("public", "internal", "confidential", "secret")
+DEFAULT_CLEARANCE = "public"
 MIN_PASSWORD_LENGTH = 12
 LOCKOUT_MAX_FAILURES = 5
 LOCKOUT_WINDOW_SECONDS = 15 * 60
@@ -268,6 +270,44 @@ def is_admin(username: str, path: str | None = None) -> bool:
     return bool(user and user.get("admin"))
 
 
+def get_user_clearance(username: str, path: str | None = None) -> str:
+    """Return the clearance level assigned to a user, defaulting to 'public'."""
+    if not username:
+        return DEFAULT_CLEARANCE
+    user = load_policy(path)["users"].get(username)
+    if not user:
+        return DEFAULT_CLEARANCE
+    clearance = str(user.get("clearance", DEFAULT_CLEARANCE)).strip().lower()
+    return clearance if clearance in CLEARANCE_LEVELS else DEFAULT_CLEARANCE
+
+
+def allowed_clearances(user_clearance: str) -> list[str]:
+    """Return list of clearance levels a user with user_clearance is authorized to view.
+
+    Clearances are hierarchical: secret >= confidential >= internal >= public.
+    """
+    clean = user_clearance.strip().lower() if user_clearance else DEFAULT_CLEARANCE
+    if clean not in CLEARANCE_LEVELS:
+        clean = DEFAULT_CLEARANCE
+    idx = CLEARANCE_LEVELS.index(clean)
+    return list(CLEARANCE_LEVELS[:idx + 1])
+
+
+def set_user_clearance(username: str, clearance: str, path: str | None = None) -> None:
+    """Assign a clearance level to an existing user account."""
+    name = _normalize_username(username)
+    clean_clearance = clearance.strip().lower()
+    if clean_clearance not in CLEARANCE_LEVELS:
+        raise ValueError(
+            f"Invalid clearance '{clearance}'. Allowed levels: {', '.join(CLEARANCE_LEVELS)}"
+        )
+    policy = load_policy(path)
+    if name not in policy["users"]:
+        raise ValueError(f"User '{name}' does not exist.")
+    policy["users"][name]["clearance"] = clean_clearance
+    save_policy(policy, path)
+
+
 def allowed_workspaces(username: str, workspace_ids: list[str], path: str | None = None) -> list[str]:
     return [ws for ws in workspace_ids if authorize(username, ws, "query", path)]
 
@@ -279,15 +319,31 @@ def _normalize_username(raw: str) -> str:
     return name
 
 
-def add_user(username: str, password: str, admin: bool = False, path: str | None = None) -> None:
+def add_user(
+    username: str,
+    password: str,
+    admin: bool = False,
+    clearance: str = DEFAULT_CLEARANCE,
+    path: str | None = None,
+) -> None:
     name = _normalize_username(username)
     check_password_strength(password, name)
+    clean_clearance = clearance.strip().lower()
+    if clean_clearance not in CLEARANCE_LEVELS:
+        raise ValueError(
+            f"Invalid clearance '{clearance}'. Allowed levels: {', '.join(CLEARANCE_LEVELS)}"
+        )
     policy = load_policy(path)
     if name in policy["users"]:
         raise ValueError(
             f"User '{name}' already exists. To reset the password, run: python access.py set-password {name}"
         )
-    policy["users"][name] = {"password_hash": hash_password(password), "admin": admin, "grants": {}}
+    policy["users"][name] = {
+        "password_hash": hash_password(password),
+        "admin": admin,
+        "clearance": clean_clearance,
+        "grants": {},
+    }
     save_policy(policy, path)
 
 
@@ -341,7 +397,12 @@ def reset_users(path: str | None = None) -> None:
 def list_users(path: str | None = None) -> list[dict[str, Any]]:
     users = load_policy(path)["users"]
     return [
-        {"username": name, "admin": bool(info.get("admin")), "grants": info.get("grants", {})}
+        {
+            "username": name,
+            "admin": bool(info.get("admin")),
+            "clearance": str(info.get("clearance", DEFAULT_CLEARANCE)),
+            "grants": info.get("grants", {}),
+        }
         for name, info in sorted(users.items())
     ]
 
@@ -362,6 +423,16 @@ def main(argv: list[str] | None = None) -> int:
     add = sub.add_parser("add-user", help="Create an account (prompts for a password)")
     add.add_argument("username")
     add.add_argument("--admin", action="store_true", help="Allow creating, deleting, and indexing workspaces")
+    add.add_argument(
+        "--clearance",
+        default=DEFAULT_CLEARANCE,
+        choices=CLEARANCE_LEVELS,
+        help=f"Data clearance level (default: {DEFAULT_CLEARANCE}). Options: {', '.join(CLEARANCE_LEVELS)}",
+    )
+
+    set_clr = sub.add_parser("set-clearance", help="Update an account's data clearance level")
+    set_clr.add_argument("username")
+    set_clr.add_argument("clearance", choices=CLEARANCE_LEVELS, help=f"Options: {', '.join(CLEARANCE_LEVELS)}")
 
     grant = sub.add_parser("grant", help="Grant permissions on one workspace (replaces existing grants there)")
     grant.add_argument("username")
@@ -387,8 +458,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "add-user":
-            add_user(args.username, _prompt_new_password(args.username), admin=args.admin)
-            print(f"Created user '{args.username.lower()}'{' (admin)' if args.admin else ''}.")
+            add_user(
+                args.username,
+                _prompt_new_password(args.username),
+                admin=args.admin,
+                clearance=args.clearance,
+            )
+            clr_tag = f" [{args.clearance}]"
+            print(f"Created user '{args.username.lower()}'{' (admin)' if args.admin else ''}{clr_tag}.")
+        elif args.command == "set-clearance":
+            set_user_clearance(args.username, args.clearance)
+            print(f"Clearance for '{args.username.lower()}' updated to '{args.clearance}'.")
         elif args.command == "set-password":
             set_password(args.username, _prompt_new_password(args.username))
             print(f"Password updated for '{args.username.lower()}'. Existing grants are unchanged.")
@@ -419,7 +499,8 @@ def main(argv: list[str] | None = None) -> int:
             for user in list_users():
                 grants = ", ".join(f"{ws}({'/'.join(p)})" for ws, p in user["grants"].items()) or "none"
                 flag = " admin" if user["admin"] else ""
-                print(f"{user['username']}{flag}: {grants}")
+                clr = f" [{user.get('clearance', DEFAULT_CLEARANCE)}]"
+                print(f"{user['username']}{flag}{clr}: {grants}")
     except (ValueError, PolicyIntegrityError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

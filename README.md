@@ -58,8 +58,9 @@ Every answer sentence is tied back to traceable chunk keys (`[workspace_doc_chun
 ### 12. Offline Benchmarking & LLM-as-a-Judge Evaluation Gate
 An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval precision, keyword recall, groundedness, answer rate, and abstention accuracy against golden evaluation datasets (`eval/golden.json`), with optional LLM-as-a-judge support checks.
 
-### 13. Multi-Tenant Knowledge Isolation
-Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
+### 13. Multi-Tenant Knowledge Isolation & Document-Level RBAC
+* **Workspace Isolation**: Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
+* **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter. Vector search (`ChromaDB where`) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
 ### 14. Model Weight Pinning & Graceful Degradation
 * Embedding weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
@@ -126,9 +127,12 @@ The system denies all access by default until accounts and workspace permissions
 # Create an administrator account (required for indexing and sync)
 python access.py add-user alice --admin
 
-# Create standard analyst accounts
-python access.py add-user bob
-python access.py add-user charlie
+# Create standard analyst accounts with clearance levels (public, internal, confidential, secret)
+python access.py add-user bob --clearance internal
+python access.py add-user charlie --clearance public
+
+# Update a user's clearance level
+python access.py set-clearance bob confidential
 
 # Grant workspace-specific permissions ('query', 'review', or both)
 python access.py grant bob accounting --perms query,review
