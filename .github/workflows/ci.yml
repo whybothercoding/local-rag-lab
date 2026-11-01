@@ -50,7 +50,8 @@ jobs:
 
       - name: Build and install native Rust accelerator
         run: |
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release -m crates/rag_accel/Cargo.toml
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin build --release -m crates/rag_accel/Cargo.toml
+          pip install crates/rag_accel/target/wheels/*.whl
 
       - name: Restore embedding model cache
         uses: actions/cache@v6
