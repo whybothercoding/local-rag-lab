@@ -11,6 +11,11 @@ import pytest
 import context_sanitizer
 from context_sanitizer import _INJECTION_PATTERNS
 
+pytestmark = pytest.mark.skipif(
+    not context_sanitizer.RUST_ACCEL,
+    reason="Native Rust accelerator (rag_accel) not compiled/installed; skipping accelerator-specific tests",
+)
+
 
 def _pure_python_scan(text: str) -> tuple[bool, str | None]:
     for pattern, reason in _INJECTION_PATTERNS:
