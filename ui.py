@@ -113,7 +113,10 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
 
     requester = state.values.get("principal", "")
     if not authorize(user, ws_id, "review") or user == requester:
-        st.info("Awaiting a decision from another reviewer with access to this workspace.")
+        if user == requester:
+            st.info("Awaiting approval from another reviewer (Separation of Duties). An authorized reviewer can approve here or via CLI: `make review`.")
+        else:
+            st.info("Awaiting a decision from a reviewer with access to this workspace.")
         return True
 
     reason = st.text_input("Reason (optional, recorded in the audit log)", key=f"reason-{thread_id}").strip()

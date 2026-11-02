@@ -1,4 +1,4 @@
-.PHONY: setup rust-build models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify add-user grant revoke set-clearance set-password delete-user users reset-users factory-reset eval eval-judge clean
+.PHONY: setup rust-build models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify add-user grant revoke set-clearance set-password delete-user users reset-users factory-reset eval eval-judge clean reviews review approve reject
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -113,6 +113,25 @@ set-password:
 delete-user:
 	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make delete-user ACCOUNT=<username> [YES=1]" && exit 1)
 	./venv/bin/python access.py delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(YES),-y,)
+
+# 12. Human-in-the-Loop compliance review CLI targets
+# List all threads awaiting human review
+reviews:
+	./venv/bin/python approve.py --list
+
+# Interactive review of a paused thread (auto-selects first pending thread if THREAD not set)
+review:
+	./venv/bin/python approve.py $(if $(THREAD),--thread $(THREAD),) $(if $(ACCOUNT),--approver $(ACCOUNT),)
+
+# Direct approval of a candidate answer
+approve:
+	@test -n "$(THREAD)" || (echo "Usage: make approve THREAD=<thread_id> [ACCOUNT=<reviewer>] [REASON=\"reason\"]" && exit 1)
+	./venv/bin/python approve.py --thread $(THREAD) --action approved $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
+
+# Direct rejection of a candidate answer
+reject:
+	@test -n "$(THREAD)" || (echo "Usage: make reject THREAD=<thread_id> [ACCOUNT=<reviewer>] [REASON=\"reason\"]" && exit 1)
+	./venv/bin/python approve.py --thread $(THREAD) --action rejected $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
 
 # 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
 eval:

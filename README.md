@@ -203,19 +203,24 @@ Open `http://localhost:8501` in your browser:
 
 ---
 
-### 5. Compliance CLI Review (`approve.py`)
+### 5. Compliance Review (Human-in-the-Loop)
 
-Pending Human-in-the-Loop review threads can also be managed directly from the terminal. Reviewers must authenticate and have the `review` permission:
+Pending Human-in-the-Loop review threads can be managed directly via `make` commands. Under Separation of Duties, a query must be approved by an authorized reviewer with `review` permissions other than the requester:
 
 ```bash
 # List all threads awaiting compliance approval
-python approve.py --list
+make reviews
 
-# Approve a paused thread
-python approve.py --thread ui-accounting-uuid --action approved --approver bob --reason "Verified against policy"
+# Interactively review a paused thread (prompts to approve/reject and records decisions)
+make review
+# Or specify a thread and reviewer:
+make review THREAD=ui-accounting-uuid ACCOUNT=bob
 
-# Reject a paused thread
-python approve.py --thread ui-accounting-uuid --action rejected --approver bob --reason "Outdated policy cited"
+# Directly approve a paused thread
+make approve THREAD=ui-accounting-uuid ACCOUNT=bob REASON="Verified against policy"
+
+# Directly reject a paused thread
+make reject THREAD=ui-accounting-uuid ACCOUNT=bob REASON="Outdated policy cited"
 ```
 
 ---
