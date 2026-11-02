@@ -37,9 +37,10 @@ To prevent hallucinations on irrelevant context, the system enforces strict evid
 * Cosine similarity cutoff ($\ge 0.65$) or query token keyword coverage ($\ge 40\%$).
 * If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
 
-### 7. State-Scoped Semantic Caching & Fingerprinting
-* Query responses are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{index_fingerprint}:{query}")`.
-* Re-indexing or updating documents automatically updates the fingerprint, ensuring instant cache invalidation with zero stale data served.
+### 7. State-Scoped & Clearance-Partitioned Semantic Caching
+* Approved query responses and their citations are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{index_fingerprint}:{clearance}:{original_question}")`.
+* Partitioning by user clearance ensures a lower-clearance user never hits a cached answer generated from higher-clearance documents, while keying on `original_question` ensures queries rewritten during CRAG loops still hit the cache on subsequent asks.
+* Re-indexing or updating documents automatically rotates `index_fingerprint`, guaranteeing instant cache invalidation with zero stale data served.
 
 ### 8. Dynamic Intent Classification & Routing
 An intent router classifies incoming queries into **domain RAG** vs. conversational **chitchat**, bypassing vector retrieval for general interactions to conserve compute and avoid noise.
@@ -63,9 +64,10 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
 * **Workspace Isolation**: Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
 * **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter. Vector search (`ChromaDB where`) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
-### 14. Model Weight Pinning & Graceful Degradation
-* Embedding weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
-* If the primary LLM or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
+### 14. Model Weight Pinning, Optional Rust Acceleration & Graceful Degradation
+* Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
+* **Optional Native Rust Accelerator (`crates/rag_accel`)**: Compiles via PyO3/Maturin (`make rust-build`) to accelerate indirect prompt-injection scanning, PII redaction, Reciprocal Rank Fusion (RRF), document chunking, and HMAC-SHA256 audit hash-chain verification, with automatic zero-config fallback to pure Python.
+* If the primary LLM, cross-encoder, or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
 
 ---
 
@@ -105,17 +107,21 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
 
 * **Python**: `>= 3.11` (tested up to 3.14)
 * **Ollama** (optional, recommended for local generative LLM): `ollama pull qwen2.5-coder:7b`
+* **Rust Toolchain** (optional, for compiling the native `rag_accel` PyO3 extension)
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
 ```bash
 # 1. Create virtual environment and install dependencies
 make setup
 
-# 2. Download and verify pinned embedding models (requires network once)
+# 2. Download and verify pinned embedding & reranker models (requires network once)
 make models
 
 # 3. Verify cached model weights offline
 make verify-models
+
+# 4. (Optional) Compile native Rust accelerator for high-throughput scanning & RRF
+make rust-build
 ```
 
 ---
@@ -264,7 +270,7 @@ make factory-reset CONFIRM=yes
 Verify system health, offline compliance, and retrieval quality:
 
 ```bash
-# Run full unit and integration test suite (150+ tests)
+# Run full unit and integration test suite (190+ tests)
 make test
 
 # Run test suite with all outbound sockets blocked
@@ -312,6 +318,7 @@ local-rag-lab/
 ├── parsers.py               # Document parsing implementations (pypdf, docx, html/txt)
 ├── parser_worker.py         # Sandboxed child process parser with time/memory caps
 ├── sparse_search.py         # SQLite FTS5 / BM25Okapi sparse lexical search engine
+├── reranker.py              # Local ONNX cross-encoder reranker (ms-marco-MiniLM-L-6-v2)
 ├── embedding_provider.py    # Local ONNX FastEmbed embedding engine
 ├── llm_provider.py          # Ollama and local OpenAI-compatible chat model connectors
 ├── model_integrity.py       # SHA-256 model weight pinning and offline integrity checks
@@ -325,11 +332,12 @@ local-rag-lab/
 ├── ui.py                    # Streamlit web application with citation drawers & review UI
 ├── eval.py                  # Offline evaluation benchmark runner
 ├── eval_metrics.py          # RAG evaluation metrics (precision, recall, groundedness)
-├── Makefile                 # Unified setup, test, sync, UI, and audit workflows
+├── crates/rag_accel/        # Optional native Rust PyO3 accelerator (scanning, RRF, PII, audit)
+├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows
 ├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints
 ├── eval/                    # Golden test dataset and benchmark corpus
 ├── knowledge_base/          # Multi-tenant knowledge base folders
-└── tests/                   # Comprehensive test suite (150+ unit and integration tests)
+└── tests/                   # Comprehensive test suite (190+ unit and integration tests)
 ```
 
 ---
