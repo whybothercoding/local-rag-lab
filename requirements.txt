@@ -30,3 +30,6 @@ pydantic>=2.8.0
 pytest>=8.3.0
 pytest-mock>=3.14.0
 watchdog>=4.0.0
+
+# Native Extension Tooling (Optional Rust Acceleration)
+maturin>=1.7.0

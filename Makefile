@@ -9,6 +9,7 @@ setup:
 
 # 1b. Build optional native Rust accelerator module (rag_accel) for high-throughput context scanning
 rust-build:
+	@./venv/bin/pip show maturin >/dev/null 2>&1 || ./venv/bin/pip install "maturin>=1.7.0"
 	PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 VIRTUAL_ENV=$$PWD/venv ./venv/bin/maturin develop --release -m crates/rag_accel/Cargo.toml
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
