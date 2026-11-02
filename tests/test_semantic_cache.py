@@ -191,3 +191,57 @@ def test_dict_proxy_interfaces():
 
     del cache["k1"]
     assert "k1" not in cache
+
+
+def test_hierarchical_clearance_exact_match(tmp_path: Path):
+    db_file = str(tmp_path / "cache.db")
+
+    # Store a public answer
+    store_cache("ops", "What is the deploy SLA?", "public", "10 minutes", db_path=db_file)
+
+    # Carol with internal clearance should get an instant exact match on the public answer
+    hit = lookup_cache("ops", "What is the deploy SLA?", clearance="internal", db_path=db_file)
+    assert hit["hit"] is True
+    assert hit["hit_type"] == "exact"
+    assert hit["generation"] == "10 minutes"
+
+
+def test_prune_stale_cache_and_retention(tmp_path: Path, monkeypatch):
+    import semantic_cache
+    from datetime import datetime, UTC, timedelta
+
+    db_file = str(tmp_path / "cache.db")
+
+    # Mock index version to "v1"
+    monkeypatch.setattr(semantic_cache, "_index_version", lambda ws: "v1")
+    store_cache("ops", "question 1", "public", "answer 1", db_path=db_file)
+
+    # Re-indexing advances version to "v2"
+    monkeypatch.setattr(semantic_cache, "_index_version", lambda ws: "v2")
+    removed_stale = semantic_cache.prune_stale_cache("ops", db_path=db_file)
+    assert removed_stale == 1
+    assert lookup_cache("ops", "question 1", "public", db_path=db_file)["hit"] is False
+
+    # Retention pruning
+    store_cache("ops", "question 2", "public", "answer 2", db_path=db_file)
+    future = datetime.now(UTC) + timedelta(days=200)
+    removed_ret = semantic_cache.prune_cache(retention_days=183, db_path=db_file, now=future)
+    assert removed_ret == 1
+
+
+def test_cache_stats_and_malformed_vector_handling(tmp_path: Path):
+    from semantic_cache import _unpack_vector, cache_stats
+
+    assert _unpack_vector(b"") == []
+    assert _unpack_vector(b"123") == []  # Not a multiple of 4 bytes
+
+    db_file = str(tmp_path / "cache.db")
+    store_cache("ops", "q1", "public", "a1", db_path=db_file)
+    store_cache("finance", "q2", "public", "a2", db_path=db_file)
+
+    st = cache_stats(db_path=db_file)
+    assert st["total_entries"] == 2
+    assert "ops" in st["workspaces"]
+    assert "finance" in st["workspaces"]
+    assert st["bytes"] > 0
+

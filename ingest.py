@@ -341,6 +341,13 @@ def ingest_workspace(
         "total_docs": len(raw_docs),
     })
 
+    # 4. Prune stale cache entries from previous index versions for this workspace
+    try:
+        from semantic_cache import prune_stale_cache
+        prune_stale_cache(ws_id)
+    except Exception as exc:
+        logger.debug("Could not prune stale cache for %s: %s", ws_id, exc)
+
     result.documents = len(raw_docs)
     result.chunks = len(chunks)
     result.indexed_files = [doc["source"] for doc in raw_docs]

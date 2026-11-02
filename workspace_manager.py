@@ -404,6 +404,15 @@ def print_status() -> int:
                 print(f"[!!] Audit anchor error  : {problem}")
             ok = False
 
+    # 7. Semantic cache
+    try:
+        from semantic_cache import cache_stats
+        cs = cache_stats()
+        print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s)")
+    except Exception as exc:
+        print(f"[!!] Semantic cache error: {exc}")
+        ok = False
+
     return 0 if ok else 1
 
 

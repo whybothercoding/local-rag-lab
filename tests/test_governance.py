@@ -379,6 +379,7 @@ def test_retention_cli(capsys):
     out = capsys.readouterr().out
     assert "Audit log: removed" in out
     assert "Checkpoints: removed" in out
+    assert "Cache: removed" in out
 
 
 def test_ui_sign_out_session_expiry_and_review_flows(rollback_index):

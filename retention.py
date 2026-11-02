@@ -10,6 +10,7 @@ import sys
 from audit import prune
 from checkpointer import prune_checkpoints
 from config import RETENTION_DAYS
+from semantic_cache import prune_cache
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     threads = prune_checkpoints(args.days)
     print(f"Checkpoints: removed {threads} idle thread(s). Threads awaiting review were kept.")
+    cached = prune_cache(args.days)
+    print(f"Cache: removed {cached} expired entry(s).")
     return 0
 
 
