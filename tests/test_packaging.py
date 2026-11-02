@@ -33,7 +33,17 @@ def test_pyproject_toml_structure_and_metadata():
     assert project.get("name") == "local-rag-lab"
     assert project.get("version") == "0.1.0"
     assert project.get("requires-python") == ">=3.11"
-    assert len(project.get("dependencies", [])) > 10
+    deps = project.get("dependencies", [])
+    assert len(deps) > 10
+    assert any(d.startswith("langgraph-checkpoint-postgres") for d in deps), (
+        "langgraph-checkpoint-postgres must be declared in pyproject.toml dependencies"
+    )
+
+    # Verify requirements.txt also includes langgraph-checkpoint-postgres
+    req_text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "langgraph-checkpoint-postgres" in req_text, (
+        "langgraph-checkpoint-postgres must be declared in requirements.txt"
+    )
 
     # 3. Tool configs
     assert "tool" in data

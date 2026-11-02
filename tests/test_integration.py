@@ -1,6 +1,4 @@
 import pytest
-from psycopg_pool import ConnectionPool
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from langchain_core.runnables import RunnableConfig
 
@@ -15,6 +13,7 @@ REVIEW = {"decision": "approved", "approver_token": token_for("bob"), "reason": 
 def is_postgres_available() -> bool:
     """Quick check to avoid 30-second pytest hanging if PostgreSQL container is off."""
     try:
+        from psycopg_pool import ConnectionPool
         with ConnectionPool(conninfo=DB_URI, min_size=1, max_size=1, timeout=1.5, kwargs={"autocommit": True}) as pool:
             with pool.connection() as conn:
                 with conn.cursor() as cur:
@@ -78,6 +77,10 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path, rollback_index):
 
 @pytest.mark.skipif(not is_postgres_available(), reason="PostgreSQL container not reachable on localhost:5432")
 def test_full_pipeline_to_postgres_and_approve_cli(rollback_index):
+    pytest.importorskip("langgraph.checkpoint.postgres", reason="langgraph-checkpoint-postgres not installed")
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg_pool import ConnectionPool
+
     config: RunnableConfig = {"configurable": {"thread_id": "test-integration-thread-001"}}
 
     with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
