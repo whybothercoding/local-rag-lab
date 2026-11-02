@@ -502,6 +502,14 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
         status = "grounded"
         grader_method = "abstain"
+    elif not gen or not str(gen).strip():
+        # Blank generation cannot be grounded
+        grader_method = "empty_generation"
+        if retries >= 2:
+            status = "circuit_break"
+        else:
+            status = "retry"
+            update["retry_count"] = retries + 1
     elif docs:
         doc_words = set(_WORD.findall(" ".join(docs).lower()))
         gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
@@ -510,7 +518,7 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
             if ratio < GROUNDEDNESS_MIN_RATIO:
                 # Fast lexical screening missed (<25% overlap). Fall back to pinned
                 # in-process ONNX cross-encoder to detect semantically grounded paraphrases.
-                scores = score_pairs(gen, docs)
+                scores = score_pairs(gen, docs[:5])
                 if scores:
                     semantic_score = round(max(scores), 4)
                     if semantic_score >= GROUNDEDNESS_CROSS_ENCODER_THRESHOLD:
@@ -556,6 +564,13 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
         telemetry["relevance_grader"] = "abstain"
         return {"relevance_status": "relevant", "telemetry": telemetry}
+
+    if not gen or not str(gen).strip():
+        # Blank generation cannot be a relevant answer
+        telemetry["relevance_grader"] = "empty_generation"
+        if state.get("retry_count", 0) >= 2:
+            return {"relevance_status": "circuit_break", "telemetry": telemetry}
+        return {"relevance_status": "irrelevant", "retry_count": state.get("retry_count", 0) + 1, "telemetry": telemetry}
 
     gen_lower = gen.lower()
     gen_words = set(_WORD.findall(gen_lower))

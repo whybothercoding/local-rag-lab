@@ -90,7 +90,23 @@ def test_score_pairs_returns_logits():
 
 def test_score_pairs_empty_inputs():
     assert score_pairs("", ["doc"]) == []
+    assert score_pairs("   ", ["doc"]) == []
     assert score_pairs("query", []) == []
+    assert score_pairs("query", ["", "   "]) == []
+    # Filters out blank documents and scores valid ones
+    res = score_pairs("query", ["", None, "valid doc"])
+    assert len(res) == 1
+    assert isinstance(res[0], float)
+
+
+def test_reranker_whitespace_query_returns_candidates():
+    candidates = [
+        {"id": "c1", "content": "chunk 1", "citation": "[c1]"},
+        {"id": "c2", "content": "chunk 2", "citation": "[c2]"},
+    ]
+    res = rerank_documents("   ", candidates, top_n=2)
+    assert len(res) == 2
+    assert res[0]["id"] == "c1"
 
 
 def test_score_pairs_disabled_and_error(monkeypatch):

@@ -337,3 +337,37 @@ def test_grade_answer_relevance_hybrid_semantic_rejection_and_fallback(monkeypat
     assert result_fallback["relevance_status"] == "irrelevant"
     assert result_fallback["telemetry"]["relevance_grader"] == "lexical_rejected"
 
+
+def test_graders_reject_empty_or_whitespace_generation():
+    # Empty generation in hallucination grader
+    hal_empty = grade_hallucination_node({
+        "documents": ["Some valid document content."],
+        "generation": "   ",
+        "retry_count": 0,
+    })
+    assert hal_empty["hallucination_status"] == "retry"
+    assert hal_empty["telemetry"]["groundedness_grader"] == "empty_generation"
+
+    hal_cb = grade_hallucination_node({
+        "documents": ["Some valid document content."],
+        "generation": "",
+        "retry_count": 2,
+    })
+    assert hal_cb["hallucination_status"] == "circuit_break"
+
+    # Empty generation in relevance grader
+    rel_empty = grade_answer_relevance_node({
+        "original_question": "What is the policy?",
+        "generation": "  ",
+        "retry_count": 0,
+    })
+    assert rel_empty["relevance_status"] == "irrelevant"
+    assert rel_empty["telemetry"]["relevance_grader"] == "empty_generation"
+
+    rel_cb = grade_answer_relevance_node({
+        "original_question": "What is the policy?",
+        "generation": "",
+        "retry_count": 2,
+    })
+    assert rel_cb["relevance_status"] == "circuit_break"
+
