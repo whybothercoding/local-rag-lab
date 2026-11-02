@@ -266,6 +266,29 @@ make eval-judge
 
 ---
 
+### 8. Storage Architecture & Docker Evaluation
+
+The engine supports two storage topologies for persisting LangGraph conversation state and checkpoints:
+
+#### Default Mode: Embedded SQLite (Zero-Ops & Self-Contained)
+* **Status:** Default out-of-the-box (`data/checkpoints.db`).
+* **Operational Footprint:** **Zero Docker required.** Checkpoints, audit trails (`data/audit.db`), and FTS5 keyword indices run natively as embedded SQLite databases with Write-Ahead Logging (WAL) and AES-256-GCM encryption-at-rest.
+
+#### Optional Mode: PostgreSQL via Docker Compose (`make up`)
+The repository includes a `docker-compose.yml` to run PostgreSQL (`postgres:16-alpine`) as an external checkpointer (`DB_URI=postgresql://...`).
+
+**Is Dockerized PostgreSQL "Enterprise-Ready"?**
+* **For Small Teams (1 to ~30 people / Internal Air-Gapped Labs):**
+  - **Verdict:**  **Practical & Recommended.**
+  - Provides instant, reproducible database provisioning without cloud infrastructure overhead or cloud egress costs.
+  - State is persisted to a Docker volume (`pgdata`), easily backed up via standard host snapshots or `pg_dump` jobs.
+* **For Large Enterprise Teams (50+ to Thousands of users):**
+  - **Verdict:** ⚠️ **Single-container Docker is NOT enterprise-ready.**
+  - A standalone container on a single host lacks **High Availability (HA)**, automatic multi-AZ failover, read replica scaling, and point-in-time recovery (PITR).
+  - **Recommended Enterprise Alternative:** Large enterprises should point `DB_URI` to a **Cloud-Managed Service** (AWS Aurora/RDS, GCP Cloud SQL, Azure Database for PostgreSQL) or deploy PostgreSQL via a **Kubernetes Database Operator** (e.g. [CloudNativePG](https://cloudnative-pg.io/) or [Crunchy Data PGO](https://access.crunchydata.com/documentation/postgres-operator/latest/)) with continuous WAL archiving (`pgBackRest` / `wal-g`).
+
+---
+
 ## Repository Structure
 
 ```text
