@@ -79,3 +79,34 @@ def test_declared_py_modules_exist_and_import():
         if mod_name != "ui":
             mod = importlib.import_module(mod_name)
             assert mod is not None
+
+
+def test_console_scripts_execute_via_cli():
+    import subprocess
+    import sys
+
+    pyproject_path = ROOT / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+
+    scripts = data.get("project", {}).get("scripts", {})
+    venv_bin = ROOT / "venv" / "bin"
+
+    for script_name in scripts:
+        executable = venv_bin / script_name
+        if not executable.is_file():
+            continue
+        res = subprocess.run([str(executable), "--help"], capture_output=True, text=True)
+        assert res.returncode == 0, f"Script {script_name} --help failed: {res.stderr}"
+
+
+def test_tool_configurations_in_pyproject():
+    pyproject_path = ROOT / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+
+    tool = data.get("tool", {})
+    assert "ruff" in tool
+    assert tool["ruff"]["line-length"] == 100
+    assert "mypy" in tool
+    assert tool["mypy"]["python_version"] == "3.11"

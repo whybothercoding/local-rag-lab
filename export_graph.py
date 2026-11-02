@@ -59,7 +59,14 @@ def export_mermaid_diagram():
         logger.warning(f"PNG rendering failed: {exc}. The .mmd file is still up to date.")
 
 
-main = export_mermaid_diagram
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Export LangGraph topology to docs/architecture.mmd (and .png if mmdc is installed)"
+    )
+    parser.parse_args(argv)
+    export_mermaid_diagram()
+
 
 if __name__ == "__main__":
     main()

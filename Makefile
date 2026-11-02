@@ -262,5 +262,5 @@ factory-reset:
 	rm -rf eval/out
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name ".DS_Store" -delete
-	rm -rf .pytest_cache .coverage htmlcov *.log
+	rm -rf .pytest_cache .coverage htmlcov *.log *.egg-info
 	@echo "Factory reset complete. System restored to clean initial state."
