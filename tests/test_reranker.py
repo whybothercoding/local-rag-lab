@@ -11,7 +11,7 @@ import pytest
 
 from config import RERANKER_MODEL, MODELS_DIR
 from model_integrity import verify_model
-from reranker import get_reranker, rerank_documents
+from reranker import get_reranker, rerank_documents, score_pairs
 
 
 def test_reranker_pinned_model_integrity():
@@ -73,3 +73,30 @@ def test_reranker_graceful_fallback(monkeypatch):
     res = rerank_documents("test query", candidates, top_n=1)
     assert len(res) == 1
     assert res[0]["id"] == "c1"
+
+
+def test_score_pairs_returns_logits():
+    query = "What is the capital of France?"
+    docs = [
+        "The capital of France is Paris.",
+        "Bananas grow abundantly on Mars.",
+    ]
+    scores = score_pairs(query, docs)
+    assert len(scores) == 2
+    assert isinstance(scores[0], float)
+    assert isinstance(scores[1], float)
+    assert scores[0] > scores[1]
+
+
+def test_score_pairs_empty_inputs():
+    assert score_pairs("", ["doc"]) == []
+    assert score_pairs("query", []) == []
+
+
+def test_score_pairs_disabled_and_error(monkeypatch):
+    monkeypatch.setattr("reranker.ENABLE_RERANKER", False)
+    assert score_pairs("query", ["doc"]) == []
+
+    monkeypatch.setattr("reranker.ENABLE_RERANKER", True)
+    monkeypatch.setattr("reranker.get_reranker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("error")))
+    assert score_pairs("query", ["doc"]) == []

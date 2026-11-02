@@ -259,3 +259,81 @@ def test_semantic_cache_preserves_citations_on_hit(mocker):
     assert hit["cache_hit"] is True
     assert hit["citations"] == ["[CHUNK-001] docs/company_policy.md"]
 
+
+def test_grade_hallucination_lexical_fast_path():
+    state = {
+        "documents": ["Rollback SLA is strictly under 5 minutes."],
+        "generation": "Rollback SLA is under 5 minutes.",
+        "retry_count": 0,
+    }
+    result = grade_hallucination_node(state)
+    assert result["hallucination_status"] == "grounded"
+    assert result["telemetry"]["groundedness_grader"] == "lexical_pass"
+
+
+def test_grade_hallucination_hybrid_semantic_pass_for_paraphrase():
+    # Zero literal word overlap of >3 char words, but semantically fully grounded:
+    # doc words: employees, submit, expense, claims, within, days
+    # gen words: staff, members, file, reimbursement, requests, month
+    state = {
+        "documents": ["Employees can submit expense claims within 30 days."],
+        "generation": "Staff members may file reimbursement requests in one month.",
+        "retry_count": 0,
+    }
+    result = grade_hallucination_node(state)
+    assert result["hallucination_status"] == "grounded"
+    assert result["telemetry"]["groundedness_grader"] == "semantic_cross_encoder"
+    assert "semantic_groundedness_score" in result["telemetry"]
+    assert result["telemetry"]["semantic_groundedness_score"] >= -3.5
+
+
+def test_grade_hallucination_hybrid_semantic_rejection_and_fallback(monkeypatch):
+    state = {
+        "documents": ["Employees can submit expense claims within 30 days."],
+        "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
+        "retry_count": 0,
+    }
+    result = grade_hallucination_node(state)
+    assert result["hallucination_status"] == "retry"
+    assert result["telemetry"]["groundedness_grader"] == "semantic_rejected"
+
+    # When cross-encoder is disabled/fails, falls back cleanly to lexical rejection
+    monkeypatch.setattr("app.score_pairs", lambda *a, **kw: [])
+    result_fallback = grade_hallucination_node(state)
+    assert result_fallback["hallucination_status"] == "retry"
+    assert result_fallback["telemetry"]["groundedness_grader"] == "lexical_rejected"
+
+
+def test_grade_answer_relevance_hybrid_semantic_pass_for_paraphrase():
+    # Zero literal word overlap:
+    # question: "When does the building open?" (tokens: when, does, building, open)
+    # generation: "Doors unlock at 7am daily." (tokens: doors, unlock, daily)
+    state = {
+        "original_question": "When does the building open?",
+        "generation": "Doors unlock at 7am daily.",
+        "retry_count": 0,
+    }
+    result = grade_answer_relevance_node(state)
+    assert result["relevance_status"] == "relevant"
+    assert result["telemetry"]["relevance_grader"] == "semantic_cross_encoder"
+    assert "semantic_relevance_score" in result["telemetry"]
+    assert result["telemetry"]["semantic_relevance_score"] >= -6.0
+
+
+def test_grade_answer_relevance_hybrid_semantic_rejection_and_fallback(monkeypatch):
+    # Off-topic answer with no overlapping words
+    state = {
+        "original_question": "When does the building open?",
+        "generation": "The server maintenance happens every Sunday at 3 AM.",
+        "retry_count": 0,
+    }
+    result = grade_answer_relevance_node(state)
+    assert result["relevance_status"] == "irrelevant"
+    assert result["telemetry"]["relevance_grader"] == "semantic_rejected"
+
+    # When cross-encoder is disabled/fails, falls back cleanly to lexical rejection
+    monkeypatch.setattr("app.score_pairs", lambda *a, **kw: [])
+    result_fallback = grade_answer_relevance_node(state)
+    assert result_fallback["relevance_status"] == "irrelevant"
+    assert result_fallback["telemetry"]["relevance_grader"] == "lexical_rejected"
+

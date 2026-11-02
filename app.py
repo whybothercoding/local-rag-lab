@@ -23,6 +23,9 @@ from config import (
     BM25_DIR,
     RELEVANCE_MIN_COVERAGE,
     RELEVANCE_MIN_SIMILARITY,
+    GROUNDEDNESS_MIN_RATIO,
+    GROUNDEDNESS_CROSS_ENCODER_THRESHOLD,
+    RELEVANCE_CROSS_ENCODER_THRESHOLD,
 )
 from access import allowed_clearances, authorize, get_user_clearance, verify_token
 from audit import record as audit_record
@@ -30,7 +33,7 @@ from embedding_provider import get_embedding_model
 from llm_provider import DeterministicContextLLM, get_chat_llm
 from redaction import redact_pii
 from context_sanitizer import sanitize_chunks
-from reranker import rerank_documents
+from reranker import rerank_documents, score_pairs
 from sparse_search import search_sparse_chunks
 from semantic_cache import (
     PersistentCitationsCache,
@@ -493,27 +496,54 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     status = "grounded"
     update: dict[str, Any] = {}
     ratio: float | None = None
+    semantic_score: float | None = None
+    grader_method = "lexical_pass"
 
-    if docs:
+    if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
+        status = "grounded"
+        grader_method = "abstain"
+    elif docs:
         doc_words = set(_WORD.findall(" ".join(docs).lower()))
         gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
         if gen_words:
             ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
-            if ratio < 0.25:
-                if retries >= 2:
-                    status = "circuit_break"
+            if ratio < GROUNDEDNESS_MIN_RATIO:
+                # Fast lexical screening missed (<25% overlap). Fall back to pinned
+                # in-process ONNX cross-encoder to detect semantically grounded paraphrases.
+                scores = score_pairs(gen, docs)
+                if scores:
+                    semantic_score = round(max(scores), 4)
+                    if semantic_score >= GROUNDEDNESS_CROSS_ENCODER_THRESHOLD:
+                        grader_method = "semantic_cross_encoder"
+                    else:
+                        grader_method = "semantic_rejected"
+                        if retries >= 2:
+                            status = "circuit_break"
+                        else:
+                            status = "retry"
+                            update["retry_count"] = retries + 1
                 else:
-                    status = "retry"
-                    update["retry_count"] = retries + 1
+                    grader_method = "lexical_rejected"
+                    if retries >= 2:
+                        status = "circuit_break"
+                    else:
+                        status = "retry"
+                        update["retry_count"] = retries + 1
 
     telemetry["groundedness_ratio"] = None if ratio is None else round(ratio, 4)
+    telemetry["groundedness_grader"] = grader_method
+    if semantic_score is not None:
+        telemetry["semantic_groundedness_score"] = semantic_score
+
     audit_record(
         "groundedness",
         workspace_id=state.get("workspace_id", "default"),
         session_id=state.get("session_id", ""),
         data={
             "status": status,
+            "grader": grader_method,
             "groundedness_ratio": telemetry["groundedness_ratio"],
+            "semantic_score": semantic_score,
             "retry_count": retries,
         },
     )
@@ -522,20 +552,63 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
 
 def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     gen = state.get("generation", "")
-    if gen == ABSTAIN_MESSAGE or state.get("telemetry", {}).get("abstained"):
-        return {"relevance_status": "relevant"}
+    telemetry = dict(state.get("telemetry", {}))
+    if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
+        telemetry["relevance_grader"] = "abstain"
+        return {"relevance_status": "relevant", "telemetry": telemetry}
+
     gen_lower = gen.lower()
     gen_words = set(_WORD.findall(gen_lower))
     q = state.get("original_question") or state.get("sanitized_question", "")
     retries = state.get("retry_count", 0)
 
     q_tokens = [t for t in _WORD.findall(q.lower()) if len(t) > 3]
-    if q_tokens and not any(t in gen_words or t in gen_lower for t in q_tokens):
-        if retries >= 2:
-            return {"relevance_status": "circuit_break"}
-        return {"relevance_status": "irrelevant", "retry_count": retries + 1}
+    has_lexical_overlap = bool(not q_tokens or any(t in gen_words or t in gen_lower for t in q_tokens))
 
-    return {"relevance_status": "relevant"}
+    status = "relevant"
+    grader_method = "lexical_pass"
+    semantic_score: float | None = None
+    update: dict[str, Any] = {}
+
+    if not has_lexical_overlap:
+        # Fast lexical check missed (>3 char query tokens absent). Fall back to
+        # pinned in-process ONNX cross-encoder to assess semantic relevance.
+        scores = score_pairs(q, [gen])
+        if scores:
+            semantic_score = round(scores[0], 4)
+            if semantic_score >= RELEVANCE_CROSS_ENCODER_THRESHOLD:
+                grader_method = "semantic_cross_encoder"
+            else:
+                grader_method = "semantic_rejected"
+                if retries >= 2:
+                    status = "circuit_break"
+                else:
+                    status = "irrelevant"
+                    update["retry_count"] = retries + 1
+        else:
+            grader_method = "lexical_rejected"
+            if retries >= 2:
+                status = "circuit_break"
+            else:
+                status = "irrelevant"
+                update["retry_count"] = retries + 1
+
+    telemetry["relevance_grader"] = grader_method
+    if semantic_score is not None:
+        telemetry["semantic_relevance_score"] = semantic_score
+
+    audit_record(
+        "answer_relevance",
+        workspace_id=state.get("workspace_id", "default"),
+        session_id=state.get("session_id", ""),
+        data={
+            "status": status,
+            "grader": grader_method,
+            "semantic_score": semantic_score,
+            "retry_count": retries,
+        },
+    )
+    return {"relevance_status": status, "telemetry": telemetry, **update}
 
 
 def _normalize_decision(raw: Any) -> dict[str, str]:

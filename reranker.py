@@ -61,3 +61,26 @@ def rerank_documents(
     except Exception as exc:
         logger.warning("Cross-encoder reranking failed, falling back to initial ranking: %s", exc)
         return list(candidates[:top_n])
+
+
+def score_pairs(
+    query: str,
+    docs: Sequence[str],
+    model_name: str = RERANKER_MODEL,
+    cache_dir: str = MODELS_DIR,
+) -> list[float]:
+    """Score (query, doc) text pairs using the pinned cross-encoder model.
+
+    Returns raw logits for each document in docs.
+    Returns an empty list if ENABLE_RERANKER is False, query is empty, docs is empty,
+    or if scoring fails.
+    """
+    if not ENABLE_RERANKER or not query or not docs:
+        return []
+    try:
+        reranker = get_reranker(model_name=model_name, cache_dir=cache_dir)
+        doc_strings = [str(d) for d in docs]
+        return [float(s) for s in reranker.rerank(query, doc_strings)]
+    except Exception as exc:
+        logger.warning("Cross-encoder score_pairs failed: %s", exc)
+        return []

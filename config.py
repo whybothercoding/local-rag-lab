@@ -63,5 +63,10 @@ BACKUP_DIR = os.getenv("BACKUP_DIR", str(ROOT / "backups"))
 RELEVANCE_MIN_SIMILARITY = float(os.getenv("RELEVANCE_MIN_SIMILARITY", "0.65"))
 RELEVANCE_MIN_COVERAGE = float(os.getenv("RELEVANCE_MIN_COVERAGE", "0.40"))
 
+# Self-RAG Grader thresholds: fast lexical screening first, ONNX cross-encoder fallback for paraphrases
+GROUNDEDNESS_MIN_RATIO = float(os.getenv("GROUNDEDNESS_MIN_RATIO", "0.25"))
+GROUNDEDNESS_CROSS_ENCODER_THRESHOLD = float(os.getenv("GROUNDEDNESS_CROSS_ENCODER_THRESHOLD", "-3.5"))
+RELEVANCE_CROSS_ENCODER_THRESHOLD = float(os.getenv("RELEVANCE_CROSS_ENCODER_THRESHOLD", "-6.0"))
+
 # Keep source files bounded so one huge upload cannot exhaust memory.
 MAX_SOURCE_BYTES = int(os.getenv("MAX_SOURCE_BYTES", str(25 * 1024 * 1024)))
