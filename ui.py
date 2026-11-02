@@ -105,7 +105,8 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
         return False
 
     st.warning("Candidate answer paused at the compliance approval gate.")
-    st.caption(f"Question: {state.values.get('sanitized_question', '')}")
+    display_q = state.values.get("original_question") or state.values.get("sanitized_question", "")
+    st.caption(f"Question: {display_q}")
     st.text_area("Candidate Output", value=state.values.get("generation", ""), height=130,
                  disabled=True, key=f"candidate-{thread_id}")
     render_citations(state.values.get("citations", []))
@@ -267,9 +268,14 @@ if admin:
 
         if accepted:
             with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
-                ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
-            st.sidebar.success(f"Successfully indexed {accepted} file(s).")
-            st.rerun()
+                res = ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
+            for skipped_note in res.skipped:
+                st.sidebar.warning(f"Skipped {skipped_note}")
+            if not res.ok:
+                st.sidebar.error(f"Indexing failed: {res.error}")
+            else:
+                st.sidebar.success(f"Successfully indexed {res.documents} file(s) ({res.chunks} chunks).")
+                st.rerun()
 
 # --- MAIN CHAT AREA ---
 st.title(f"Workspace: `{active_ws}`")

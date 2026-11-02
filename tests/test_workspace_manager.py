@@ -50,13 +50,22 @@ def test_workspace_stats_empty(tmp_path: Path, monkeypatch):
 
 
 def test_delete_workspace(tmp_path: Path, monkeypatch):
+    from access import add_user, load_policy, set_grant
+    from conftest import TEST_PASSWORD
+
+    policy_path = str(tmp_path / "access_policy.json")
+    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
     monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr("workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
     monkeypatch.setattr("workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
 
     ensure_base_dirs()
     create_workspace("accounting")
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+    set_grant("erin", "accounting", ["query", "review"], path=policy_path)
     assert "accounting" in list_workspaces()
+    assert "accounting" in load_policy(path=policy_path)["users"]["erin"]["grants"]
 
     delete_workspace("accounting")
     assert "accounting" not in list_workspaces()
+    assert "accounting" not in load_policy(path=policy_path)["users"]["erin"]["grants"]

@@ -193,6 +193,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     return {
         "is_safe": True,
         "principal": principal,
+        "original_question": sanitized,
         "sanitized_question": sanitized,
         "telemetry": telemetry,
     }
@@ -515,9 +516,10 @@ def _normalize_decision(raw: Any) -> dict[str, str]:
 
 def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     # The payload is what approve.py displays. It carries the redacted question, never the raw input.
+    display_q = state.get("original_question") or state.get("sanitized_question", "")
     review = _normalize_decision(interrupt({
         "action": "human_approval",
-        "question": state.get("sanitized_question", ""),
+        "question": display_q,
         "citations": state.get("citations", []),
         "candidate_answer": state.get("generation", ""),
     }))
@@ -561,7 +563,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     if approved:
         history.append(f"Assistant: {gen}")
 
-        q = state.get("sanitized_question", "")
+        q = state.get("original_question") or state.get("sanitized_question", "")
         ws_id = state.get("workspace_id", "default")
         principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
         clearance = get_user_clearance(principal) if principal else "public"

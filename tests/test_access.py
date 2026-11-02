@@ -394,3 +394,8 @@ def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, caps
     policy = load_policy(path=policy_path)
     assert policy["users"]["erin"]["grants"] == {}
 
+    # 5. Grant/revoke on nonexistent user returns error code 1 even for 'all'
+    assert access.main(["grant", "ghost", "all"]) == 1
+    assert access.main(["revoke", "ghost", "all"]) == 1
+
+

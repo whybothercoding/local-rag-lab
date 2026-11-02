@@ -51,6 +51,8 @@ def create(destination: Path | None = None) -> Path:
     target.mkdir(parents=True, exist_ok=False)
 
     files: dict[str, str] = {}
+    # Ensure audit database and schema exist even on a fresh deployment with 0 events
+    verify_chain(str(AUDIT_DB_PATH))
     _sqlite_copy(Path(AUDIT_DB_PATH), target / "audit.db")
     files["audit.db"] = _sha256(target / "audit.db")
 

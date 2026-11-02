@@ -53,12 +53,19 @@ def inspect_thread(app, thread_id: str):
             interrupt_payload = task.interrupts[0].value
             break
 
+    citations_list = interrupt_payload.get("citations") or state.values.get("citations") or []
+    degraded_list = state.values.get("degraded") or []
+
     print("\n" + "=" * 65)
     print(f" PENDING AUDIT FOR THREAD: {thread_id}")
     print("=" * 65)
     print(f"Action Type       : {interrupt_payload.get('action', 'N/A')}")
+    print(f"Workspace         : {state.values.get('workspace_id', 'N/A')}")
+    print(f"Requested By      : {state.values.get('principal', 'N/A')}")
     print(f"Original Question : {interrupt_payload.get('question', state.values.get('original_question'))}")
-    print(f"Citations         : {', '.join(interrupt_payload.get('citations', []))}")
+    print(f"Citations         : {', '.join(citations_list) if citations_list else 'none'}")
+    if degraded_list:
+        print(f"Degraded Warnings : {'; '.join(degraded_list)}")
     print("-" * 65)
     print("Candidate Generation to Review:\n")
     print(interrupt_payload.get('candidate_answer', state.values.get('generation')))

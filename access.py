@@ -493,6 +493,10 @@ def main(argv: list[str] | None = None) -> int:
             reset_users()
             print("All user accounts have been reset.")
         elif args.command == "grant":
+            name = _normalize_username(args.username)
+            policy = load_policy()
+            if name not in policy["users"]:
+                raise ValueError(f"User '{name}' does not exist.")
             perms = [p.strip() for p in args.perms.split(",") if p.strip()]
             from workspace_manager import list_workspaces
             if args.workspaces.strip().lower() in ("all", "*"):
@@ -503,22 +507,24 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 targets = [w.strip() for w in args.workspaces.split(",") if w.strip()]
             for ws in targets:
-                set_grant(args.username, ws, perms)
-            print(f"Granted {', '.join(perms)} on {', '.join(targets)} to '{args.username.lower()}'.")
+                set_grant(name, ws, perms)
+            print(f"Granted {', '.join(perms)} on {', '.join(targets)} to '{name}'.")
         elif args.command == "revoke":
-            from workspace_manager import list_workspaces
+            name = _normalize_username(args.username)
+            policy = load_policy()
+            if name not in policy["users"]:
+                raise ValueError(f"User '{name}' does not exist.")
             if args.workspaces.strip().lower() in ("all", "*"):
-                policy = load_policy()
-                user_info = policy.get("users", {}).get(_normalize_username(args.username), {})
+                user_info = policy["users"][name]
                 targets = list(user_info.get("grants", {}).keys())
                 if not targets:
-                    print(f"No active workspace grants for '{args.username.lower()}'.")
+                    print(f"No active workspace grants for '{name}'.")
                     return 0
             else:
                 targets = [w.strip() for w in args.workspaces.split(",") if w.strip()]
             for ws in targets:
-                set_grant(args.username, ws, [])
-            print(f"Revoked access to {', '.join(targets)} for '{args.username.lower()}'.")
+                set_grant(name, ws, [])
+            print(f"Revoked access to {', '.join(targets)} for '{name}'.")
         else:
             for user in list_users():
                 grants = ", ".join(f"{ws}({'/'.join(p)})" for ws, p in user["grants"].items()) or "none"

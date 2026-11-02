@@ -231,6 +231,21 @@ def delete_workspace(raw_name: str) -> bool:
         except Exception as exc:
             logger.warning("Could not delete SQLite checkpoints for %s: %s", ws_id, exc)
 
+    # 5. Remove stale grants for this workspace from access policy
+    try:
+        from access import load_policy, save_policy
+        policy = load_policy()
+        changed = False
+        for user_info in policy.get("users", {}).values():
+            grants = user_info.get("grants", {})
+            if ws_id in grants:
+                del grants[ws_id]
+                changed = True
+        if changed:
+            save_policy(policy)
+    except Exception as exc:
+        logger.debug("Could not prune grants for %s: %s", ws_id, exc)
+
     return True
 
 

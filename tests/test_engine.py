@@ -139,14 +139,14 @@ def test_telemetry_recorded_in_nodes():
     assert res_cache["telemetry"]["cache_hit"] is False
 
 
-def test_hitl_node_approval(mocker):
+def test_hitl_node_approval_preserves_original_question_after_rewrite(mocker):
     mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
     SEMANTIC_CACHE.clear()
 
     state = {
         "workspace_id": "default",
         "original_question": "What is the rollback SLA?",
-        "sanitized_question": "what is the rollback sla?",
+        "sanitized_question": "what is the rollback sla? details overview",
         "generation": "Rollback SLA is strictly under 5 minutes.",
         "citations": ["[CHUNK-001] docs/company_policy.md"],
         "history": []
@@ -155,7 +155,7 @@ def test_hitl_node_approval(mocker):
     result = human_in_the_loop_node(state)
     assert "Assistant: Rollback SLA is strictly under 5 minutes." in result["history"][-1]
 
-    key = cache_key("default", state["sanitized_question"])
+    key = cache_key("default", state["original_question"])
     assert SEMANTIC_CACHE[key] == "Rollback SLA is strictly under 5 minutes."
 
 
