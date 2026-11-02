@@ -124,36 +124,41 @@ make verify-models
 
 The system denies all access by default until accounts and workspace permissions are granted. Passwords are encrypted using **scrypt** with automatic hash upgrades.
 
+All operations can be managed directly via `make` commands without activating the virtual environment:
+
 ```bash
 # Create an administrator account (required for indexing and sync)
-python access.py add-user alice --admin
+make add-user ACCOUNT=alice ADMIN=1
 
 # Create standard analyst accounts with clearance levels (public, internal, confidential, secret)
-python access.py add-user bob --clearance internal
-python access.py add-user charlie --clearance public
+make add-user ACCOUNT=bob CLEARANCE=internal
+make add-user ACCOUNT=charlie CLEARANCE=public
 
 # Update a user's clearance level
-python access.py set-clearance bob confidential
+make set-clearance ACCOUNT=bob CLEARANCE=confidential
 
 # Grant workspace-specific permissions ('query', 'review', or both)
-python access.py grant bob accounting --perms query,review
-python access.py grant charlie accounting --perms query
+make grant ACCOUNT=bob WS=accounting PERMS=query,review
+make grant ACCOUNT=charlie WS=accounting PERMS=query
 
-# List accounts and assigned permissions (never displays hashes)
+# Revoke access to a workspace
+make revoke ACCOUNT=charlie WS=accounting
+
+# List accounts, clearance, and assigned permissions (never displays hashes)
 make users
-# or: python access.py list
 
-# Reset an account password
-python access.py set-password bob
+# Reset an account password (prompts securely)
+make set-password ACCOUNT=bob
 
 # Delete an individual user and all their grants
-python access.py delete-user bob
-# Or bypass confirmation:
-python access.py delete-user bob -y
+make delete-user ACCOUNT=bob
+# Or bypass confirmation prompt:
+make delete-user ACCOUNT=bob YES=1
 
 # Delete ALL user accounts and grants
 make reset-users
-# Or: python access.py reset-users -y
+# Or bypass confirmation prompt:
+make reset-users CONFIRM=yes
 ```
 
 ---

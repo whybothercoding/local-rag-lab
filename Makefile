@@ -1,4 +1,4 @@
-.PHONY: setup rust-build models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify users reset-users factory-reset eval eval-judge clean
+.PHONY: setup rust-build models verify-models up down ollama-pull test test-offline sync ingest ui audit-verify audit-tail audit-feedback audit-anchor retention backup backup-verify add-user grant revoke set-clearance set-password delete-user users reset-users factory-reset eval eval-judge clean
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -79,9 +79,33 @@ backup-verify:
 	@test -n "$(DIR)" || (echo "Set DIR=<backup directory>" && exit 1)
 	./venv/bin/python backup.py verify $(DIR)
 
-# 12. List accounts and workspace grants (never password hashes)
+# 12. Account & Role-Based Access Control (RBAC) Management
 users:
 	./venv/bin/python access.py list
+
+add-user:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
+	./venv/bin/python access.py add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(ADMIN),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),)
+
+grant:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace> [PERMS=query,review]" && exit 1)
+	./venv/bin/python access.py grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
+
+revoke:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace>" && exit 1)
+	./venv/bin/python access.py revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
+
+set-clearance:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret" && exit 1)
+	./venv/bin/python access.py set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
+
+set-password:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make set-password ACCOUNT=<username>" && exit 1)
+	./venv/bin/python access.py set-password $(or $(ACCOUNT),$(USERNAME))
+
+delete-user:
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make delete-user ACCOUNT=<username> [YES=1]" && exit 1)
+	./venv/bin/python access.py delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(YES),-y,)
 
 # 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
 eval:
