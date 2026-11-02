@@ -21,9 +21,12 @@ verify-models:
 
 # 4. Optional PostgreSQL checkpointer (set DB_URI=postgresql://... to use it)
 up:
+	@command -v docker >/dev/null 2>&1 || { echo "Error: Docker is not installed. (Note: Docker is optional; SQLite is used by default with zero setup)."; exit 1; }
+	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
 	docker compose up -d
 
 down:
+	@command -v docker >/dev/null 2>&1 || exit 0
 	docker compose down
 
 # 5. Optional: pull the Ollama chat model when using the Ollama backend
