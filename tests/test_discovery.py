@@ -116,3 +116,45 @@ def test_ingest_merges_knowledge_base_and_uploads(storage, tmp_path):
     stats = get_workspace_stats("accounting")
     assert stats["files"] == 2
 
+
+def test_ingest_skips_oversized_empty_and_invalid_clearance_files(storage, monkeypatch):
+    import ingest
+
+    monkeypatch.setattr(ingest, "MAX_SOURCE_BYTES", 100)
+    ws_dir = storage / "ops"
+    ws_dir.mkdir()
+    (ws_dir / "valid.md").write_text("Valid short operational runbook.")
+    (ws_dir / "empty.txt").write_text("   \n  ")
+    (ws_dir / "oversized.txt").write_text("X" * 250)
+    (ws_dir / "bad_clearance.md").write_text("---\nclearance: ultra_secret\n---\nBody text.")
+
+    res = ingest_workspace("ops", str(ws_dir), force=True)
+    assert res.ok
+    assert res.indexed_files == ["valid.md"]
+    assert any("empty.txt: no extractable text" in s for s in res.skipped)
+    assert any("oversized.txt: larger than 100 bytes" in s for s in res.skipped)
+    assert any("bad_clearance.md: invalid clearance" in s for s in res.skipped)
+
+
+def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tmp_path):
+    import chromadb
+    import workspace_manager
+
+    kb_acc = storage / "accounting"
+    kb_acc.mkdir()
+    (kb_acc / "z_policy.txt").write_text("Corporate tax policy requires quarterly filings.")
+
+    up_acc = tmp_path / "uploads" / "accounting"
+    up_acc.mkdir(parents=True)
+    (up_acc / "a_memo.txt").write_text("Supplemental expense memo for Q4.")
+
+    assert ingest_workspace("accounting", str(kb_acc), force=True).ok
+    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    ids_from_kb = sorted(client.get_collection("ws_accounting").get()["ids"])
+
+    assert ingest_workspace("accounting", str(up_acc), force=True).ok
+    ids_from_up = sorted(client.get_collection("ws_accounting").get()["ids"])
+
+    assert ids_from_kb == ids_from_up
+
+

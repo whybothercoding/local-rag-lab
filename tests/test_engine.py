@@ -220,3 +220,42 @@ def test_reciprocal_rank_fusion_prefers_overlap():
     fused = reciprocal_rank_fusion(dense, sparse, k=60, top_n=3)
     assert fused[0]["id"] == "doc_b"
     assert len(fused) == 3
+
+
+def test_grade_hallucination_trips_circuit_breaker_on_max_retries():
+    state = {
+        "documents": ["The capital of France is Paris."],
+        "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
+        "retry_count": 2,
+    }
+    result = grade_hallucination_node(state)
+    assert result["hallucination_status"] == "circuit_break"
+
+
+def test_semantic_cache_preserves_citations_on_hit(mocker):
+    from app import SEMANTIC_CACHE_CITATIONS
+
+    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+    SEMANTIC_CACHE.clear()
+    SEMANTIC_CACHE_CITATIONS.clear()
+
+    state = {
+        "workspace_id": "default",
+        "principal": "carol",
+        "original_question": "What is the rollback SLA?",
+        "sanitized_question": "what is the rollback sla?",
+        "generation": "Rollback SLA is strictly under 5 minutes.",
+        "citations": ["[CHUNK-001] docs/company_policy.md"],
+        "history": [],
+    }
+    human_in_the_loop_node(state)
+
+    hit = cache_lookup_node({
+        "workspace_id": "default",
+        "principal": "carol",
+        "sanitized_question": "What is the rollback SLA?",
+        "telemetry": {},
+    })
+    assert hit["cache_hit"] is True
+    assert hit["citations"] == ["[CHUNK-001] docs/company_policy.md"]
+

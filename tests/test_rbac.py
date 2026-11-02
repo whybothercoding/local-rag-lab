@@ -258,3 +258,87 @@ def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
     })
     assert bob_lookup["cache_hit"] is False
 
+
+def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path: Path, mocker, monkeypatch):
+    """When Chroma's where filter raises an exception, the Python post-filter must still enforce clearance."""
+    policy_path = str(tmp_path / "access_policy.json")
+    monkeypatch.setattr("config.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
+    add_user("bob", "Password123!@#", clearance="public", path=policy_path)
+
+    fake_collection = mocker.MagicMock()
+
+    def query_side_effect(**kwargs):
+        if "where" in kwargs:
+            raise RuntimeError("legacy collection without where index")
+        return {
+            "documents": [[
+                "Public holiday schedule and general office hours.",
+                "Secret master key XYZ-999 for production vault.",
+            ]],
+            "metadatas": [[
+                {"source": "public.md", "clearance": "public"},
+                {"source": "secret.md", "clearance": "secret"},
+            ]],
+            "ids": [["c_pub", "c_sec"]],
+            "distances": [[0.1, 0.05]],
+        }
+
+    fake_collection.query.side_effect = query_side_effect
+    fake_client = mocker.MagicMock()
+    fake_client.get_collection.return_value = fake_collection
+    mocker.patch("app.chromadb.PersistentClient", return_value=fake_client)
+    mocker.patch("app.search_sparse_chunks", return_value=[])
+
+    out = hybrid_retrieval_node({
+        "workspace_id": "legacy_ws",
+        "principal": "bob",
+        "sanitized_question": "What is the secret master key or office hours?",
+    })
+    for doc in out["documents"]:
+        assert "XYZ-999" not in doc
+    assert any("office hours" in doc for doc in out["documents"])
+
+
+class _DummyBM25:
+    def get_scores(self, tokenized_query):
+        return [1.0, 2.0]
+
+
+def test_legacy_pickle_sparse_search_filters_by_clearance(tmp_path: Path):
+    import pickle
+
+    bm25_dir = tmp_path / "bm25_legacy"
+    bm25_dir.mkdir()
+    pkl_path = bm25_dir / "legacy_ws.pkl"
+    with open(pkl_path, "wb") as handle:
+        pickle.dump(
+            {
+                "bm25": _DummyBM25(),
+                "chunks": ["Public handbook guidelines", "Secret encryption key XYZ-999"],
+                "metadatas": [
+                    {"source": "handbook.md", "clearance": "public"},
+                    {"source": "vault.md", "clearance": "secret"},
+                ],
+                "ids": ["id_pub", "id_sec"],
+            },
+            handle,
+        )
+
+    pub_only = search_sparse_chunks(
+        "legacy_ws",
+        "encryption key handbook",
+        allowed_clearances=["public"],
+        base_dir=str(bm25_dir),
+    )
+    assert [r["id"] for r in pub_only] == ["id_pub"]
+
+    with_secret = search_sparse_chunks(
+        "legacy_ws",
+        "encryption key handbook",
+        allowed_clearances=["public", "secret"],
+        base_dir=str(bm25_dir),
+    )
+    assert {r["id"] for r in with_secret} == {"id_pub", "id_sec"}
+
+

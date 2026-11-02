@@ -399,3 +399,157 @@ def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, caps
     assert access.main(["revoke", "ghost", "all"]) == 1
 
 
+def test_cli_reviewer_rejects_empty_account_name(mocker, thread_state):
+    import approve
+
+    mocker.patch("builtins.input", return_value="   ")
+    with pytest.raises(SystemExit, match="Account name is required"):
+        approve.confirm_reviewer(thread_state, None)
+
+
+def test_approve_list_inspect_and_process_decision(mocker, capsys):
+    import approve
+    from types import SimpleNamespace
+
+    interrupt_obj = SimpleNamespace(
+        value={
+            "action": "verify_and_approve_rag_response",
+            "question": "What is the rollback SLA?",
+            "candidate_answer": "5 minutes for Tier-1.",
+            "citations": ["runbook.md (chunk 0)"],
+        }
+    )
+    paused_state = SimpleNamespace(
+        next=("human_approval",),
+        tasks=[SimpleNamespace(interrupts=[interrupt_obj])],
+        values={
+            "workspace_id": "default",
+            "principal": "carol",
+            "original_question": "What is the rollback SLA?",
+            "generation": "5 minutes for Tier-1.",
+            "citations": ["runbook.md (chunk 0)"],
+            "degraded": ["reranker_skipped"],
+        },
+    )
+    done_state = SimpleNamespace(
+        next=(),
+        tasks=[],
+        values={"workspace_id": "default", "generation": "5 minutes for Tier-1."},
+    )
+
+    fake_app = mocker.MagicMock()
+
+    def get_state_side_effect(config):
+        tid = config["configurable"]["thread_id"]
+        if tid == "thread-pending":
+            return paused_state
+        return done_state
+
+    fake_app.get_state.side_effect = get_state_side_effect
+    fake_app.stream.return_value = [{"human_approval": {"generation": "5 minutes for Tier-1."}}]
+    mocker.patch("approve.fetch_checkpoint_threads", return_value=["thread-pending", "thread-done"])
+
+    # 1. list_pending_threads finds only paused threads with active interrupts
+    pending = approve.list_pending_threads(fake_app)
+    assert pending == ["thread-pending"]
+
+    # 2. inspect_thread returns state for paused thread and None for non-paused thread
+    assert approve.inspect_thread(fake_app, "thread-pending") is paused_state
+    out = capsys.readouterr().out
+    assert "PENDING AUDIT FOR THREAD: thread-pending" in out
+    assert "reranker_skipped" in out
+    assert "5 minutes for Tier-1." in out
+
+    assert approve.inspect_thread(fake_app, "thread-done") is None
+    assert "not awaiting approval" in capsys.readouterr().out
+
+    # 3. process_decision streams Command(resume=...) and prints final state
+    fake_app.get_state.side_effect = None
+    fake_app.get_state.return_value = done_state
+    approve.process_decision(fake_app, "thread-pending", "approved", token_for("bob"), reason="Looks accurate")
+    assert fake_app.stream.called
+    assert "EXECUTION RESUMED & COMPLETED" in capsys.readouterr().out
+
+
+def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
+    import approve
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    interrupt_obj = SimpleNamespace(
+        value={
+            "action": "verify_and_approve_rag_response",
+            "question": "Q?",
+            "candidate_answer": "A.",
+            "citations": [],
+        }
+    )
+    paused_state = SimpleNamespace(
+        next=("human_approval",),
+        tasks=[SimpleNamespace(interrupts=[interrupt_obj])],
+        values={"workspace_id": "default", "principal": "carol", "generation": "A."},
+    )
+    done_state = SimpleNamespace(next=(), tasks=[], values={"workspace_id": "default", "generation": "A."})
+
+    fake_app = mocker.MagicMock()
+    fake_app.stream.return_value = [{"human_approval": {"generation": "A."}}]
+
+    @contextmanager
+    def dummy_checkpointer():
+        yield mocker.MagicMock()
+
+    mocker.patch("approve.get_checkpointer", dummy_checkpointer)
+    mocker.patch("approve.workflow.compile", return_value=fake_app)
+    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+
+    # Mode 1: --list with pending thread and with empty queue
+    mocker.patch("approve.fetch_checkpoint_threads", return_value=["t-1"])
+    fake_app.get_state.return_value = paused_state
+    monkeypatch.setattr("sys.argv", ["approve.py", "--list"])
+    approve.main()
+    assert "1. t-1" in capsys.readouterr().out
+
+    mocker.patch("approve.fetch_checkpoint_threads", return_value=[])
+    monkeypatch.setattr("sys.argv", ["approve.py", "--list"])
+    approve.main()
+    assert "No threads currently paused" in capsys.readouterr().out
+
+    # Mode 2: --thread & --action on a valid pending thread
+    fake_app.get_state.side_effect = [paused_state, done_state]
+    monkeypatch.setattr(
+        "sys.argv",
+        ["approve.py", "--thread", "t-1", "--action", "approved", "--approver", "bob", "--reason", "LGTM"],
+    )
+    approve.main()
+    assert "EXECUTION RESUMED & COMPLETED" in capsys.readouterr().out
+
+    # Mode 2: --thread & --action on a non-pending thread exits with code 1
+    fake_app.get_state.side_effect = None
+    fake_app.get_state.return_value = done_state
+    monkeypatch.setattr("sys.argv", ["approve.py", "--thread", "t-done", "--action", "approved", "--approver", "bob"])
+    with pytest.raises(SystemExit) as excinfo:
+        approve.main()
+    assert excinfo.value.code == 1
+
+    # Mode 3: Interactive auto-select when no pending threads exist exits with code 0
+    mocker.patch("approve.fetch_checkpoint_threads", return_value=[])
+    monkeypatch.setattr("sys.argv", ["approve.py"])
+    with pytest.raises(SystemExit) as excinfo:
+        approve.main()
+    assert excinfo.value.code == 0
+
+    # Mode 3: Interactive auto-select with 'r' (reject) and 'q' (abort)
+    mocker.patch("approve.fetch_checkpoint_threads", return_value=["t-1"])
+    fake_app.get_state.side_effect = [paused_state, paused_state, done_state]
+    monkeypatch.setattr("sys.argv", ["approve.py", "--approver", "bob"])
+    monkeypatch.setattr("builtins.input", lambda _: "r")
+    approve.main()
+    assert "EXECUTION RESUMED & COMPLETED" in capsys.readouterr().out
+
+    fake_app.get_state.side_effect = [paused_state, paused_state]
+    monkeypatch.setattr("builtins.input", lambda _: "q")
+    approve.main()
+    assert "Aborted without changes." in capsys.readouterr().out
+
+
+

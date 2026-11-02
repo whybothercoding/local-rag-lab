@@ -57,3 +57,33 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
     res3 = ingest_workspace("test_idempotent", str(source_dir), force=True)
     assert res3.ok is True
     assert res3.unchanged is False
+
+
+def test_embedding_fingerprint_and_ollama_fallback(mocker):
+    import embedding_provider
+    from embedding_provider import embedding_fingerprint, get_embedding_model
+    from langchain_ollama import OllamaEmbeddings
+
+    assert embedding_fingerprint("ollama").startswith("ollama:")
+    assert embedding_fingerprint("fastembed").startswith("fastembed:")
+
+    ollama_emb = get_embedding_model("ollama")
+    assert isinstance(ollama_emb, OllamaEmbeddings)
+
+    # When LocalFastEmbeddings raises during initialization, get_embedding_model falls back to OllamaEmbeddings
+    mocker.patch.object(embedding_provider, "LocalFastEmbeddings", side_effect=RuntimeError("ONNX init error"))
+    fallback_emb = get_embedding_model("fastembed")
+    assert isinstance(fallback_emb, OllamaEmbeddings)
+
+
+def test_get_chat_llm_auto_fallback_and_openai_provider(mocker):
+    import llm_provider
+    from llm_provider import OpenAICompatibleChat
+
+    mocker.patch.object(llm_provider, "is_ollama_alive", return_value=False)
+    auto_llm = get_chat_llm(provider="auto")
+    assert isinstance(auto_llm, DeterministicContextLLM)
+
+    openai_llm = get_chat_llm(provider="openai")
+    assert isinstance(openai_llm, OpenAICompatibleChat)
+

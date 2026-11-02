@@ -58,3 +58,45 @@ def test_verify_rejects_absent_cache(tmp_path, fake_pins):
 def test_verify_rejects_unpinned_model(tmp_path):
     with pytest.raises(ModelIntegrityError, match="no pinned"):
         verify_model("some/other-model", str(tmp_path))
+
+
+def test_fetch_models_verify_only_and_unpinned_error(monkeypatch, capsys):
+    import fetch_models
+
+    with pytest.raises(ModelIntegrityError, match="no pinned SHA-256"):
+        fetch_models.fetch_model("unpinned/model")
+
+    monkeypatch.setattr("sys.argv", ["fetch_models.py", "--verify-only"])
+    assert fetch_models.main() == 0
+    assert "verified offline" in capsys.readouterr().out
+
+    def fail_verify(*_args, **_kwargs):
+        raise ModelIntegrityError("tampered weights")
+
+    monkeypatch.setattr(fetch_models, "verify_model", fail_verify)
+    assert fetch_models.main() == 1
+    assert "tampered weights" in capsys.readouterr().err
+
+
+def test_export_graph_mermaid_and_png_fallback(tmp_path, monkeypatch, mocker):
+    import export_graph
+
+    out_dir = tmp_path / "docs"
+    mmd_file = out_dir / "architecture.mmd"
+    png_file = out_dir / "architecture.png"
+    monkeypatch.setattr(export_graph, "OUTPUT_DIR", str(out_dir))
+    monkeypatch.setattr(export_graph, "MERMAID_FILE", str(mmd_file))
+    monkeypatch.setattr(export_graph, "PNG_FILE", str(png_file))
+
+    # 1. Without mmdc installed, render_png_locally returns False and .mmd is still written
+    monkeypatch.setattr("export_graph.shutil.which", lambda _: None)
+    export_graph.export_mermaid_diagram()
+    assert mmd_file.is_file()
+    assert "guardrail" in mmd_file.read_text(encoding="utf-8")
+
+    # 2. With mmdc available, subprocess.run is invoked and render_png_locally returns True
+    monkeypatch.setattr("export_graph.shutil.which", lambda _: "/usr/local/bin/mmdc")
+    run_mock = mocker.patch("export_graph.subprocess.run")
+    assert export_graph.render_png_locally(str(mmd_file), str(png_file)) is True
+    run_mock.assert_called_once()
+
