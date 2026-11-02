@@ -89,11 +89,11 @@ add-user:
 	./venv/bin/python access.py add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(ADMIN),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),)
 
 grant:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace> [PERMS=query,review]" && exit 1)
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review]" && exit 1)
 	./venv/bin/python access.py grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
 
 revoke:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace>" && exit 1)
+	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all>" && exit 1)
 	./venv/bin/python access.py revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
 
 set-clearance:

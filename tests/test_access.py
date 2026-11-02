@@ -345,3 +345,42 @@ def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
     ret = access.main(["reset-users", "-y"])
     assert ret == 0
     assert list_users(path=policy_path) == []
+
+
+def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, capsys):
+    import access
+    from access import load_policy
+
+    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr("workspace_manager.list_workspaces", lambda: ["accounting", "strategy", "legal"])
+    add_user("erin", TEST_PASSWORD, path=policy_path)
+
+    # 1. Comma-separated grant
+    ret = access.main(["grant", "erin", "accounting,strategy", "--perms", "query,review"])
+    assert ret == 0
+    policy = load_policy(path=policy_path)
+    assert policy["users"]["erin"]["grants"]["accounting"] == ["query", "review"]
+    assert policy["users"]["erin"]["grants"]["strategy"] == ["query", "review"]
+    assert "legal" not in policy["users"]["erin"]["grants"]
+
+    # 2. Grant all
+    ret = access.main(["grant", "erin", "all", "--perms", "query"])
+    assert ret == 0
+    policy = load_policy(path=policy_path)
+    assert set(policy["users"]["erin"]["grants"].keys()) == {"accounting", "strategy", "legal"}
+    assert policy["users"]["erin"]["grants"]["legal"] == ["query"]
+
+    # 3. Comma-separated revoke
+    ret = access.main(["revoke", "erin", "accounting,strategy"])
+    assert ret == 0
+    policy = load_policy(path=policy_path)
+    assert "accounting" not in policy["users"]["erin"]["grants"]
+    assert "strategy" not in policy["users"]["erin"]["grants"]
+    assert "legal" in policy["users"]["erin"]["grants"]
+
+    # 4. Revoke all
+    ret = access.main(["revoke", "erin", "all"])
+    assert ret == 0
+    policy = load_policy(path=policy_path)
+    assert policy["users"]["erin"]["grants"] == {}
+

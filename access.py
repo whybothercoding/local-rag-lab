@@ -434,14 +434,14 @@ def main(argv: list[str] | None = None) -> int:
     set_clr.add_argument("username")
     set_clr.add_argument("clearance", choices=CLEARANCE_LEVELS, help=f"Options: {', '.join(CLEARANCE_LEVELS)}")
 
-    grant = sub.add_parser("grant", help="Grant permissions on one workspace (replaces existing grants there)")
+    grant = sub.add_parser("grant", help="Grant permissions on workspaces (replaces existing grants there). Accepts comma-separated list or 'all'")
     grant.add_argument("username")
-    grant.add_argument("workspace")
+    grant.add_argument("workspaces", help="Workspace name, comma-separated list (e.g. 'accounting,strategy'), or 'all'")
     grant.add_argument("--perms", default="query", help="Comma-separated: query,review")
 
-    revoke = sub.add_parser("revoke", help="Remove all permissions on one workspace")
+    revoke = sub.add_parser("revoke", help="Remove all permissions on workspaces. Accepts comma-separated list or 'all'")
     revoke.add_argument("username")
-    revoke.add_argument("workspace")
+    revoke.add_argument("workspaces", help="Workspace name, comma-separated list, or 'all'")
 
     reset = sub.add_parser("set-password", help="Set or reset an account's password (prompts)")
     reset.add_argument("username")
@@ -490,11 +490,31 @@ def main(argv: list[str] | None = None) -> int:
             print("All user accounts have been reset.")
         elif args.command == "grant":
             perms = [p.strip() for p in args.perms.split(",") if p.strip()]
-            set_grant(args.username, args.workspace, perms)
-            print(f"Granted {', '.join(perms)} on '{args.workspace}' to '{args.username.lower()}'.")
+            from workspace_manager import list_workspaces
+            if args.workspaces.strip().lower() in ("all", "*"):
+                targets = list_workspaces()
+                if not targets:
+                    print("No workspaces discovered in knowledge_base/.")
+                    return 0
+            else:
+                targets = [w.strip() for w in args.workspaces.split(",") if w.strip()]
+            for ws in targets:
+                set_grant(args.username, ws, perms)
+            print(f"Granted {', '.join(perms)} on {', '.join(targets)} to '{args.username.lower()}'.")
         elif args.command == "revoke":
-            set_grant(args.username, args.workspace, [])
-            print(f"Revoked access to '{args.workspace}' for '{args.username.lower()}'.")
+            from workspace_manager import list_workspaces
+            if args.workspaces.strip().lower() in ("all", "*"):
+                policy = load_policy()
+                user_info = policy.get("users", {}).get(_normalize_username(args.username), {})
+                targets = list(user_info.get("grants", {}).keys())
+                if not targets:
+                    print(f"No active workspace grants for '{args.username.lower()}'.")
+                    return 0
+            else:
+                targets = [w.strip() for w in args.workspaces.split(",") if w.strip()]
+            for ws in targets:
+                set_grant(args.username, ws, [])
+            print(f"Revoked access to {', '.join(targets)} for '{args.username.lower()}'.")
         else:
             for user in list_users():
                 grants = ", ".join(f"{ws}({'/'.join(p)})" for ws, p in user["grants"].items()) or "none"

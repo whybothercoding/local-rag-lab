@@ -138,11 +138,14 @@ make add-user ACCOUNT=charlie CLEARANCE=public
 make set-clearance ACCOUNT=bob CLEARANCE=confidential
 
 # Grant workspace-specific permissions ('query', 'review', or both)
+# Accepts a single workspace, comma-separated list, or 'all'
 make grant ACCOUNT=bob WS=accounting PERMS=query,review
-make grant ACCOUNT=charlie WS=accounting PERMS=query
+make grant ACCOUNT=bob WS=accounting,strategy PERMS=query,review
+make grant ACCOUNT=charlie WS=all PERMS=query
 
-# Revoke access to a workspace
+# Revoke access to workspaces (accepts a single workspace, comma-separated list, or 'all')
 make revoke ACCOUNT=charlie WS=accounting
+make revoke ACCOUNT=bob WS=all
 
 # List accounts, clearance, and assigned permissions (never displays hashes)
 make users
