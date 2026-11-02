@@ -41,16 +41,20 @@ class DeterministicContextLLM(BaseChatModel):
         context = ""
         question = ""
 
-        if "Context:" in prompt and "Question:" in prompt:
-            parts = prompt.split("Question:")
-            ctx_part = parts[0].replace("Context:", "").strip()
+        if "Context:" in prompt and "\n\nQuestion:" in prompt:
+            ctx_part, q_part = prompt.rsplit("\n\nQuestion:", 1)
+            if ctx_part.startswith("Context:"):
+                ctx_part = ctx_part[len("Context:"):].strip()
+            else:
+                ctx_part = ctx_part.replace("Context:", "", 1).strip()
             # Remove separator markers
             chunks = [c.strip() for c in ctx_part.split("---") if c.strip()]
             context = " ".join(chunks)
 
-            q_part = parts[1]
-            if "Answer" in q_part:
-                question = q_part.split("Answer")[0].strip()
+            if "\n\nAnswer" in q_part:
+                question = q_part.rsplit("\n\nAnswer", 1)[0].strip()
+            elif "Answer" in q_part:
+                question = q_part.rsplit("Answer", 1)[0].strip()
             else:
                 question = q_part.strip()
         else:

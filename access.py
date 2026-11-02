@@ -148,9 +148,18 @@ def load_policy(path: str | None = None) -> dict[str, Any]:
     target = Path(path or ACCESS_POLICY_PATH)
     if not target.is_file():
         return {"version": 1, "users": {}}
-    with open(target, encoding="utf-8") as handle:
-        policy = json.load(handle)
-    users = policy.get("users", {})
+    try:
+        with open(target, encoding="utf-8") as handle:
+            policy = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyIntegrityError(
+            f"Access policy {target} could not be parsed. Access is refused until it is restored."
+        ) from exc
+    if not isinstance(policy, dict) or not isinstance(policy.get("users"), dict):
+        raise PolicyIntegrityError(
+            f"Access policy {target} is malformed. Access is refused until it is restored."
+        )
+    users = policy["users"]
     if not hmac.compare_digest(str(policy.get("integrity", "")), _policy_mac(users)):
         raise PolicyIntegrityError(
             f"Access policy {target} failed its integrity check. Access is refused until it is restored."

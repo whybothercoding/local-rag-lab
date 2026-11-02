@@ -73,7 +73,7 @@ STOPWORDS = frozenset({
     "has", "had", "with", "from", "into", "about", "there", "their", "your", "this", "that", "these",
     "those", "must", "should", "would", "could", "under", "over", "between", "after", "before", "tell",
     "give", "show", "list", "they", "them", "were", "been", "being", "will", "shall", "each", "every",
-    "some", "any",
+    "some", "any", "details", "overview",
 })
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -231,10 +231,16 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
 
 
 def router_node(state: StateInput) -> dict[str, Any]:
-    query = state.get("sanitized_question", "").lower()
-    chitchat_keywords = ["hello", "hi", "hey", "who are you", "what can you do", "thanks", "thank you"]
+    raw_query = state.get("sanitized_question", "").lower()
+    cleaned = " ".join(_WORD.findall(raw_query))
+    words = cleaned.split()
+    chitchat_phrases = ("who are you", "what can you do", "thank you")
+    chitchat_words = {"hello", "hi", "hey", "thanks"}
 
-    if any(k in query.split() for k in chitchat_keywords):
+    if any(phrase in cleaned for phrase in chitchat_phrases):
+        return {"intent": "chitchat"}
+    domain_terms = _content_terms(cleaned) - chitchat_words
+    if any(w in chitchat_words for w in words) and not domain_terms:
         return {"intent": "chitchat"}
     return {"intent": "rag"}
 
@@ -290,10 +296,14 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         ids = (results.get("ids") or [[]])[0]
         distances = (results.get("distances") or [[]])[0] or [2.0] * len(docs)
         for doc, meta, cid, distance in zip(docs, metas, ids, distances):
+            meta_dict = meta or {}
+            doc_clr = str(meta_dict.get("clearance", "public")).strip().lower()
+            if doc_clr not in authorized_clrs:
+                continue
             dense_candidates.append({
                 "id": cid,
                 "content": doc,
-                "citation": f"[{cid}] {meta.get('source', 'document')}",
+                "citation": f"[{cid}] {meta_dict.get('source', 'document')}",
                 "similarity": 1.0 - float(distance) / 2.0,
             })
     except NotFoundError:
@@ -465,8 +475,8 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     ratio: float | None = None
 
     if docs:
-        doc_words = set(" ".join(docs).lower().split())
-        gen_words = [w for w in gen.lower().split() if len(w) > 3]
+        doc_words = set(_WORD.findall(" ".join(docs).lower()))
+        gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
         if gen_words:
             ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
             if ratio < 0.25:
@@ -491,12 +501,16 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
 
 
 def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
-    gen = state.get("generation", "").lower()
-    q = state.get("sanitized_question", "").lower()
+    gen = state.get("generation", "")
+    if gen == ABSTAIN_MESSAGE or state.get("telemetry", {}).get("abstained"):
+        return {"relevance_status": "relevant"}
+    gen_lower = gen.lower()
+    gen_words = set(_WORD.findall(gen_lower))
+    q = state.get("original_question") or state.get("sanitized_question", "")
     retries = state.get("retry_count", 0)
 
-    q_tokens = [t for t in q.split() if len(t) > 3]
-    if q_tokens and not any(t in gen for t in q_tokens):
+    q_tokens = [t for t in _WORD.findall(q.lower()) if len(t) > 3]
+    if q_tokens and not any(t in gen_words or t in gen_lower for t in q_tokens):
         if retries >= 2:
             return {"relevance_status": "circuit_break"}
         return {"relevance_status": "irrelevant", "retry_count": retries + 1}
@@ -575,7 +589,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
 
     rejection_notice = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
     history.append(f"Assistant: {rejection_notice}")
-    return {"generation": rejection_notice, "history": history}
+    return {"generation": rejection_notice, "citations": [], "degraded": [], "history": history}
 
 
 # --- GRAPH EDGES & ROUTING ---

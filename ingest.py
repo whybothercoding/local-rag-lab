@@ -114,30 +114,39 @@ def _publish_collection(client, name: str, ids, documents, metadatas, embeddings
 
 
 def _extract_doc_clearance(raw_text: str) -> tuple[str, str]:
-    """Extract clearance tag from YAML frontmatter or document header, returning (clearance, body)."""
+    """Extract clearance tag from YAML frontmatter or document header, returning (clearance, body).
+
+    Raises ValueError if an explicit clearance tag is unrecognized (fail-closed).
+    """
     clearance = DEFAULT_CLEARANCE
     text = raw_text
-    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", raw_text, re.DOTALL)
+    fm_match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n", raw_text, re.DOTALL)
     if fm_match:
         try:
             parsed = yaml.safe_load(fm_match.group(1))
-            if isinstance(parsed, dict) and "clearance" in parsed:
-                candidate = str(parsed["clearance"]).strip().lower()
-                if candidate in CLEARANCE_LEVELS:
-                    clearance = candidate
-                text = raw_text[fm_match.end():]
         except Exception:
-            pass
+            parsed = None
+        if isinstance(parsed, dict) and "clearance" in parsed:
+            candidate = str(parsed["clearance"]).strip().lower()
+            if candidate not in CLEARANCE_LEVELS:
+                raise ValueError(
+                    f"invalid clearance '{candidate}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
+                )
+            clearance = candidate
+            text = raw_text[fm_match.end():]
     else:
         hdr_match = re.match(
-            r"^(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)\s*\n",
+            r"^(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)\s*\r?\n",
             raw_text,
             re.IGNORECASE,
         )
         if hdr_match:
             candidate = hdr_match.group(1).strip().lower()
-            if candidate in CLEARANCE_LEVELS:
-                clearance = candidate
+            if candidate not in CLEARANCE_LEVELS:
+                raise ValueError(
+                    f"invalid clearance '{candidate}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
+                )
+            clearance = candidate
             text = raw_text[hdr_match.end():]
     return clearance, text
 
@@ -161,13 +170,13 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
             continue
         try:
             raw_content = extract_text_from_file(file_path)
+            if not raw_content:
+                skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
+                continue
+            clearance, content = _extract_doc_clearance(raw_content)
         except Exception as exc:
             skipped.append(f"{relative}: {exc}")
             continue
-        if not raw_content:
-            skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
-            continue
-        clearance, content = _extract_doc_clearance(raw_content)
         raw_docs.append({
             "content": content,
             "clearance": clearance,
@@ -229,6 +238,7 @@ def ingest_workspace(
                     seen_sources.add(doc["source"])
             skipped.extend(comp_skipped)
 
+    raw_docs.sort(key=lambda d: d["source"])
     result.skipped = skipped
     if not raw_docs:
         result.error = f"No supported documents with extractable text found in {source_dir}"
@@ -397,8 +407,20 @@ if __name__ == "__main__":
         sys.exit(0 if all(o.ok for o in outcomes.values()) else 1)
 
     if not args.dir:
-        print("Error: --dir is required when specifying a single --workspace.")
-        sys.exit(1)
+        ws_id = sanitize_workspace_id(args.workspace)
+        kb_candidate = Path(workspace_manager.KNOWLEDGE_BASE_DIR) / ws_id
+        up_candidate = Path(workspace_manager.UPLOADS_DIR) / ws_id
+        for disc_id, disc_path in workspace_manager.discover_knowledge_base_workspaces():
+            if disc_id == ws_id:
+                kb_candidate = Path(disc_path)
+                break
+        if kb_candidate.is_dir():
+            args.dir = str(kb_candidate)
+        elif up_candidate.is_dir():
+            args.dir = str(up_candidate)
+        else:
+            print(f"Error: No directory found for workspace '{args.workspace}'. Specify DIR=<path> or place files in knowledge_base/{ws_id}/.")
+            sys.exit(1)
 
     outcome = ingest_workspace(args.workspace, args.dir, force=args.force, actor=actor)
     _print_result(outcome)

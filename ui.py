@@ -50,7 +50,7 @@ def render_degraded(notes) -> None:
 
 
 def _sign_out(notice: str = "") -> None:
-    for key in ("user", "token", "last_seen"):
+    for key in ("user", "token", "last_seen", "messages", "thread_id", "current_ws", "queue_pick"):
         st.session_state.pop(key, None)
     if notice:
         st.session_state.notice = notice
@@ -306,8 +306,9 @@ with get_checkpointer() as checkpointer:
         completed_state = engine.get_state(config)
         if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
             gen_text = completed_state.values.get("generation", "")
-            cites = completed_state.values.get("citations", [])
-            deg = completed_state.values.get("degraded", [])
+            rejected = "REJECTED BY HUMAN COMPLIANCE" in gen_text
+            cites = [] if rejected else completed_state.values.get("citations", [])
+            deg = [] if rejected else completed_state.values.get("degraded", [])
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": gen_text,

@@ -215,6 +215,23 @@ def test_backup_verifies_excludes_keys_and_detects_tampering(tmp_path):
     assert any("audit.db does not match" in p for p in problems)
 
 
+def test_backup_list_and_audit_export_cli(tmp_path, monkeypatch, capsys):
+    import audit
+
+    bk_root = tmp_path / "backups"
+    monkeypatch.setattr(backup, "BACKUP_DIR", str(bk_root))
+    record("query_received", workspace_id="ops", session_id="s", data={"i": 1})
+    backup.create(bk_root / "backup-20261102T000000Z")
+
+    assert backup.main(["list"]) == 0
+    assert "backup-20261102T000000Z" in capsys.readouterr().out
+
+    export_file = tmp_path / "audit-out.jsonl"
+    assert audit.main(["export", "-o", str(export_file)]) == 0
+    assert export_file.is_file()
+    assert len(export_file.read_text(encoding="utf-8").strip().splitlines()) >= 1
+
+
 # --- G15: admin view --------------------------------------------------------
 
 def test_export_lists_every_event_oldest_first(audit_path):

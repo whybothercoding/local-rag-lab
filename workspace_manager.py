@@ -210,14 +210,16 @@ def delete_workspace(raw_name: str) -> bool:
         shutil.rmtree(upload_path, ignore_errors=True)
 
     # 4. Clean up checkpoint records for this workspace prefix
+    escaped_ws = ws_id.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
+    like_pattern = f"ui-{escaped_ws}-%"
     if is_postgres_uri(DB_URI):
         try:
             with ConnectionPool(conninfo=DB_URI, max_size=2, open=True, kwargs={"autocommit": True}) as pool:
                 with pool.connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-                        cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
-                        cur.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s;", (f"ui-{ws_id}-%",))
+                        cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s ESCAPE '\\';", (like_pattern,))
+                        cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id LIKE %s ESCAPE '\\';", (like_pattern,))
+                        cur.execute("DELETE FROM checkpoint_writes WHERE thread_id LIKE %s ESCAPE '\\';", (like_pattern,))
         except Exception as exc:
             logger.warning("Could not delete checkpoints for %s: %s", ws_id, exc)
     else:
@@ -226,8 +228,14 @@ def delete_workspace(raw_name: str) -> bool:
             if os.path.exists(sqlite_db):
                 import sqlite3
                 with sqlite3.connect(sqlite_db) as conn:
-                    conn.execute("DELETE FROM checkpoints WHERE thread_id LIKE ?;", (f"ui-{ws_id}-%",))
-                    conn.execute("DELETE FROM writes WHERE thread_id LIKE ?;", (f"ui-{ws_id}-%",))
+                    tables = {
+                        row[0]
+                        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+                    }
+                    if "checkpoints" in tables:
+                        conn.execute("DELETE FROM checkpoints WHERE thread_id LIKE ? ESCAPE '\\';", (like_pattern,))
+                    if "writes" in tables:
+                        conn.execute("DELETE FROM writes WHERE thread_id LIKE ? ESCAPE '\\';", (like_pattern,))
         except Exception as exc:
             logger.warning("Could not delete SQLite checkpoints for %s: %s", ws_id, exc)
 
@@ -258,9 +266,12 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
     # Chunks from Chroma
     try:
+        from chromadb.errors import NotFoundError
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         col = client.get_collection(name=f"ws_{ws_id}")
         chunk_count = col.count()
+    except NotFoundError:
+        chunk_count = 0
     except Exception as exc:
         logger.warning("Could not read chunk count for %s: %s", ws_id, exc)
 
@@ -280,17 +291,21 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
     # 2. Fallback / union with unindexed files on disk
     seen_files = set()
-    upload_path = os.path.join(UPLOADS_DIR, ws_id)
-    if os.path.exists(upload_path):
-        for f in os.listdir(upload_path):
-            if not f.startswith(".") and os.path.isfile(os.path.join(upload_path, f)):
-                seen_files.add(f)
-
+    roots = [Path(UPLOADS_DIR) / ws_id]
     for disc_id, kb_dir in discover_knowledge_base_workspaces():
-        if disc_id == ws_id and os.path.exists(kb_dir):
-            for f in os.listdir(kb_dir):
-                if not f.startswith(".") and os.path.isfile(os.path.join(kb_dir, f)):
-                    seen_files.add(f)
+        if disc_id == ws_id:
+            roots.append(Path(kb_dir))
+
+    for root in roots:
+        if root.is_dir():
+            for path in root.rglob("*"):
+                if (
+                    path.is_file()
+                    and not path.is_symlink()
+                    and not path.name.startswith(".")
+                    and path.suffix.lower() in SUPPORTED_EXTENSIONS
+                ):
+                    seen_files.add(str(path.relative_to(root)))
 
     file_count = max(file_count, len(seen_files))
 
@@ -300,3 +315,149 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
         "chunks": chunk_count,
         "bm25_indexed": bm25_indexed
     }
+
+
+def print_status() -> int:
+    """Print an end-to-end operational readiness and health summary."""
+    from access import PolicyIntegrityError, list_users
+    from approve import list_pending_threads
+    from app import workflow
+    from audit import verify_anchors, verify_chain
+    from checkpointer import get_checkpointer
+    from config import FASTEMBED_MODEL, MODELS_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, RERANKER_MODEL
+    from context_sanitizer import RUST_ACCEL
+    from llm_provider import is_ollama_alive
+    from model_integrity import ModelIntegrityError, verify_model
+
+    ok = True
+    print("=== Local Enterprise RAG Lab: System Status ===")
+
+    # 1. Pinned ONNX models
+    for model_name in (FASTEMBED_MODEL, RERANKER_MODEL):
+        try:
+            verify_model(model_name, MODELS_DIR)
+            print(f"[OK] Model verified      : {model_name}")
+        except ModelIntegrityError as exc:
+            print(f"[!!] Model unverified    : {model_name} ({exc})")
+            ok = False
+
+    # 2. Rust accelerator & Ollama LLM
+    accel_state = "active (native PyO3)" if RUST_ACCEL else "fallback (pure Python; run 'make rust-build' to compile)"
+    print(f"[OK] Context sanitizer   : {accel_state}")
+    ollama_state = (
+        f"reachable ({OLLAMA_MODEL} at {OLLAMA_BASE_URL})"
+        if is_ollama_alive(OLLAMA_BASE_URL)
+        else f"offline at {OLLAMA_BASE_URL} (using deterministic in-process fallback)"
+    )
+    print(f"[OK] LLM backend         : {ollama_state}")
+
+    # 3. Accounts & RBAC policy
+    try:
+        users = list_users()
+        admins = [u["username"] for u in users if u["admin"]]
+        print(f"[OK] RBAC accounts       : {len(users)} user(s), {len(admins)} admin(s)")
+    except PolicyIntegrityError as exc:
+        print(f"[!!] RBAC policy error   : {exc}")
+        ok = False
+
+    # 4. Workspaces
+    workspaces = list_workspaces()
+    if not workspaces:
+        print("[--] Workspaces          : none (create with 'make create-workspace WS=<name>' or 'make sync ADMIN=<admin>')")
+    else:
+        print(f"[OK] Workspaces ({len(workspaces)})      :")
+        for ws in workspaces:
+            st = get_workspace_stats(ws)
+            fts = "ready" if st["bm25_indexed"] else "not indexed"
+            print(f"     - {ws:<18} files={st['files']}  chunks={st['chunks']}  fts5={fts}")
+
+    # 5. Pending HITL reviews
+    try:
+        with get_checkpointer() as saver:
+            app = workflow.compile(checkpointer=saver)
+            pending = list_pending_threads(app)
+        print(f"[OK] Pending HITL reviews: {len(pending)} thread(s)")
+    except Exception as exc:
+        print(f"[!!] Checkpointer error  : {exc}")
+        ok = False
+
+    # 6. Audit chain & anchors
+    from config import AUDIT_DB_PATH
+    if not Path(AUDIT_DB_PATH).exists():
+        print("[OK] Audit log integrity : 0 record(s) verified (not initialized yet)")
+    else:
+        chain_ok, bad_seq, count = verify_chain()
+        anchors_ok, problems, anchor_count = verify_anchors()
+        if chain_ok and anchors_ok:
+            print(f"[OK] Audit log integrity : {count} record(s) verified, {anchor_count} anchor(s) intact")
+        else:
+            if not chain_ok:
+                print(f"[!!] Audit chain broken  : seq {bad_seq}")
+            for problem in problems:
+                print(f"[!!] Audit anchor error  : {problem}")
+            ok = False
+
+    return 0 if ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Manage multi-tenant workspaces and inspect system status.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list", help="List all workspaces and their indexing statistics")
+    sub.add_parser("status", help="Show system health, model integrity, workspaces, and audit status")
+
+    create_p = sub.add_parser("create", help="Create a new workspace")
+    create_p.add_argument("workspace", help="Workspace name")
+
+    delete_p = sub.add_parser("delete", help="Permanently delete a workspace, its indexes, checkpoints, and grants")
+    delete_p.add_argument("workspace", help="Workspace name")
+    delete_p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "status":
+        return print_status()
+
+    if args.command == "list":
+        workspaces = list_workspaces()
+        if not workspaces:
+            print("No workspaces found.")
+            return 0
+        for ws in workspaces:
+            st = get_workspace_stats(ws)
+            fts = "indexed" if st["bm25_indexed"] else "unindexed"
+            print(f"{ws}: {st['files']} file(s), {st['chunks']} chunk(s) [{fts}]")
+        return 0
+
+    if args.command == "create":
+        ws_id = create_workspace(args.workspace)
+        if not ws_id:
+            print("Error: Invalid workspace name.", file=sys.stderr)
+            return 1
+        print(f"Created workspace '{ws_id}'.")
+        return 0
+
+    if args.command == "delete":
+        ws_id = sanitize_workspace_id(args.workspace)
+        if not ws_id:
+            print("Error: Invalid workspace name.", file=sys.stderr)
+            return 1
+        if not args.yes:
+            ans = input(f"Are you sure you want to permanently delete workspace '{ws_id}'? [y/N]: ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("Deletion cancelled.")
+                return 0
+        delete_workspace(ws_id)
+        print(f"Deleted workspace '{ws_id}'.")
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

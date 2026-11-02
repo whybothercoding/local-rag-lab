@@ -19,7 +19,9 @@ Local Enterprise RAG Lab is a fully local, air-gapped Compound AI retrieval and 
 Always use `make` targets (and `WS` for workspace arguments, never `WORKSPACE`):
 
 ```bash
-# Setup & Models
+# Setup, Models & Health
+make help                   # Show categorized command reference (default target)
+make status                 # End-to-end health check (models, accelerator, LLM, RBAC, workspaces, audit)
 make setup                  # Create venv and install Python dependencies
 make models                 # Download & verify pinned ONNX models (requires network once)
 make verify-models          # Verify model SHA-256 integrity offline
@@ -35,8 +37,11 @@ make delete-user ACCOUNT=<u_name> [YES=1]
 make users                  # List users, clearance levels, and workspace grants
 make reset-users [CONFIRM=yes]
 
-# Ingestion, UI & HITL Compliance Review
-make sync ADMIN=<admin>     # Ingest/sync knowledge_base/ and uploads/ into indexes
+# Workspaces, Ingestion, UI & HITL Compliance Review
+make workspaces             # List workspaces with file, chunk, and FTS5 status
+make create-workspace WS=<ws>
+make delete-workspace WS=<ws> [YES=1]
+make sync ADMIN=<admin> [WS=<ws>] [DIR=<path>] [FORCE=1]
 make ui [ADMIN=<admin>]     # Launch Streamlit web UI
 make reviews                # List paused threads awaiting Human-in-the-Loop review
 make review [THREAD=<id>] [ACCOUNT=<reviewer>]
@@ -48,13 +53,18 @@ make test                   # Run full test suite (pytest -v)
 make test-offline           # Run test suite with outbound network sockets blocked (RAG_OFFLINE=1)
 make eval                   # Run offline RAG benchmark evaluation (eval/golden.json)
 make eval-judge             # Evaluation with local Ollama LLM-as-a-judge support checks
-make audit-verify           # Verify append-only HMAC audit hash chain
-make audit-tail             # View 20 most recent audit events
-make audit-feedback         # View rejected answers and reviewer reasons
+make eval-calibrate         # Print retrieval similarity and coverage signals on calibration split
+make graph                  # Export LangGraph topology to docs/architecture.mmd
+make audit-verify           # Verify append-only HMAC audit hash chain and anchors
+make audit-tail [N=20] [WS=<ws>]
+make audit-feedback [N=20] [WS=<ws>]
 make audit-anchor           # Record externalizable audit head hash anchor
-make retention              # Prune expired audit records and idle checkpoints
+make audit-export [OUT=audit-export.jsonl]
+make retention [DAYS=183]   # Prune expired audit records and idle checkpoints
 make backup                 # Create checksummed snapshot of audit, checkpoints, and policy
+make backups                # List existing backup snapshots
 make backup-verify DIR=<backup_dir>
+make clean                  # Clean caches and temporary test artifacts
 make factory-reset [CONFIRM=yes]
 ```
 
@@ -83,11 +93,12 @@ Graph execution in [`app.py`](app.py) follows a cyclic Self-RAG state machine:
 ```
 
 ### State & Tenancy Invariants
-* **State Schema**: `GraphState` ([`app.py`](app.py)) preserves `original_question` (post-PII redaction) separately from `sanitized_question` (which [`query_rewrite_node`](app.py) may expand) so semantic caching and review panels always key on the user's original question.
-* **Clearance-Partitioned Cache**: `SEMANTIC_CACHE` and `SEMANTIC_CACHE_CITATIONS` key on `(workspace_id, index_fingerprint, clearance, original_question)` so lower-clearance users never hit higher-clearance cached answers.
-* **Workspaces**: Sanitized slugs (`ws_<workspace_id>`). Each workspace unifies `knowledge_base/<ws>` and `uploads/<ws>` across its isolated Chroma collection and SQLite FTS5 index. Deleting a workspace prunes its grants from `access_policy.json`.
-* **Human-in-the-Loop (Four-Eyes Principle)**: Review interrupt triggers before answer release. Self-approval (`requester == approver`) is strictly forbidden and enforced prior to resuming graph execution in both UI and CLI ([`approve.py`](approve.py)).
-* **Graceful Degradation**: If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently.
+* **State Schema**: `GraphState` ([`app.py`](app.py)) preserves `original_question` (post-PII redaction) separately from `sanitized_question` (which [`query_rewrite_node`](app.py) may expand) so semantic caching, relevance grading, and review panels always key on the user's original question.
+* **Clearance-Partitioned Cache**: `SEMANTIC_CACHE` and `SEMANTIC_CACHE_CITATIONS` key on `(workspace_id, clearance, index_fingerprint, original_question)` so lower-clearance users never hit higher-clearance cached answers.
+* **Fail-Closed Document Clearance**: Unrecognized explicit `clearance` tags in YAML frontmatter or headers are rejected during ingestion ([`ingest.py`](ingest.py)). Both dense ([`app.py`](app.py)) and sparse ([`sparse_search.py`](sparse_search.py)) retrieval enforce `allowed_clearances` at query time and via post-query guards (`allowed_clearances=[]` returns `[]`).
+* **Workspaces**: Sanitized slugs (`ws_<workspace_id>`). Each workspace deterministically merges and sorts `knowledge_base/<ws>` and `uploads/<ws>` across its isolated Chroma collection and SQLite FTS5 index. Deleting a workspace escapes SQL `LIKE` wildcards and prunes its grants from `access_policy.json`.
+* **Human-in-the-Loop (Four-Eyes Principle)**: Review interrupt triggers before answer release. Self-approval (`requester == approver`) is strictly forbidden in both UI and CLI ([`approve.py`](approve.py)). Rejections clear `citations` and `degraded` warnings from state, and UI sign-out purges session chat/thread state.
+* **Rust Accelerator Parity & Graceful Degradation**: `crates/rag_accel` uses a single-pass `RegexSet` automaton with 100% verdict and reason parity with [`context_sanitizer.py`](context_sanitizer.py). If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently.
 
 ---
 

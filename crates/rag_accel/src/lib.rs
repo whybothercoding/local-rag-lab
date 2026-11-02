@@ -1,4 +1,3 @@
-mod audit;
 mod chunker;
 mod sanitizer;
 
@@ -19,22 +18,21 @@ fn scan_chunks(
     let mut safe_citations = Vec::new();
     let mut rejected_alerts = Vec::new();
 
-    let count = chunks.len();
+    let count = chunks.len().max(citations.len());
     for i in 0..count {
-        let chunk = &chunks[i];
-        let citation = if i < citations.len() {
-            &citations[i]
-        } else {
-            "document"
-        };
+        let chunk = chunks.get(i).map(|s| s.as_str()).unwrap_or("");
+        let citation = citations
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| format!("[CHUNK-{}] unknown", i));
         let res = sanitizer::scan_chunk(chunk);
         if res.is_safe {
-            safe_chunks.push(chunk.clone());
-            safe_citations.push(citation.to_string());
+            safe_chunks.push(chunk.to_string());
+            safe_citations.push(citation);
         } else {
             rejected_alerts.push((
-                citation.to_string(),
-                res.reason.unwrap_or_else(|| "unsafe_context".to_string()),
+                citation,
+                res.reason.unwrap_or_else(|| "unknown_violation".to_string()),
             ));
         }
     }
@@ -54,3 +52,4 @@ fn rag_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_text, m)?)?;
     Ok(())
 }
+

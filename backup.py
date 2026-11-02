@@ -86,7 +86,15 @@ def verify(directory: Path) -> list[str]:
     manifest_path = directory / MANIFEST
     if not manifest_path.exists():
         return [f"no {MANIFEST} in {directory}"]
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [f"corrupted {MANIFEST} in {directory}"]
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        return [f"malformed {MANIFEST} in {directory}"]
+
+    if "audit.db" not in manifest["files"]:
+        problems.append("audit.db is missing from manifest")
 
     for name, expected in manifest["files"].items():
         path = directory / name
@@ -97,9 +105,13 @@ def verify(directory: Path) -> list[str]:
 
     audit_copy = directory / "audit.db"
     if audit_copy.exists():
-        chain_ok, bad_seq, _count = verify_chain(str(audit_copy))
+        chain_ok, bad_seq, count = verify_chain(str(audit_copy))
         if not chain_ok:
             problems.append(f"audit chain broken at seq {bad_seq}")
+        if "audit_records" in manifest and manifest["audit_records"] != count:
+            problems.append("audit record count does not match manifest")
+        if "audit_head" in manifest and manifest["audit_head"] != head_hash(str(audit_copy)):
+            problems.append("audit head hash does not match manifest")
         anchors_ok, anchor_problems, _anchors = verify_anchors(
             str(audit_copy), str(directory / "audit_anchors.jsonl")
         )
@@ -108,10 +120,33 @@ def verify(directory: Path) -> list[str]:
     return problems
 
 
+def list_backups(base_dir: Path | None = None) -> list[dict]:
+    """Return metadata for each backup directory under backups/, newest first."""
+    root = base_dir or Path(BACKUP_DIR)
+    if not root.is_dir():
+        return []
+    entries = []
+    for child in sorted(root.iterdir(), reverse=True):
+        if not child.is_dir():
+            continue
+        manifest_path = child / MANIFEST
+        info = {"path": str(child), "name": child.name, "created": "-", "audit_records": 0}
+        if manifest_path.is_file():
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                info["created"] = str(data.get("created", "-"))
+                info["audit_records"] = int(data.get("audit_records", 0))
+            except Exception:
+                pass
+        entries.append(info)
+    return entries
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create and verify governance backups.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("create", help="Create a backup in backups/")
+    sub.add_parser("list", help="List existing backups in backups/")
     check = sub.add_parser("verify", help="Verify a backup directory")
     check.add_argument("directory", type=Path)
     args = parser.parse_args(argv)
@@ -119,6 +154,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "create":
         target = create()
         print(f"Backup written to {target}. Keys were not included; store them separately.")
+        return 0
+
+    if args.command == "list":
+        backups = list_backups()
+        if not backups:
+            print("No backups found.")
+            return 0
+        for b in backups:
+            print(f"{b['path']}  (created={b['created']}, audit_records={b['audit_records']})")
         return 0
 
     problems = verify(args.directory)

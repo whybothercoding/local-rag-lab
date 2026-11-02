@@ -303,7 +303,22 @@ def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> t
     accepted without a record to compare against.
     """
     problems: list[str] = []
-    anchors = _read_anchors(anchor_path)
+    target = Path(anchor_path or ANCHOR_PATH)
+    anchors: list[dict[str, Any]] = []
+    if target.exists():
+        with open(target, encoding="utf-8") as handle:
+            for line_no, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    problems.append(f"anchor line {line_no}: invalid JSON (anchor file was edited)")
+                    continue
+                if not isinstance(parsed, dict):
+                    problems.append(f"anchor line {line_no}: entry is not a JSON object")
+                    continue
+                anchors.append(parsed)
     conn = _open(path)
     try:
         base_seq, base_hash = _base(conn)
@@ -316,13 +331,18 @@ def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> t
                 problems.append(f"anchor {index}: chaining to the previous anchor is broken")
             prev = str(entry.get("mac", ""))
 
-            seq = int(entry["seq"])
+            try:
+                seq = int(entry["seq"])
+                expected_hash = str(entry["hash"])
+            except (KeyError, TypeError, ValueError):
+                problems.append(f"anchor {index}: missing or invalid seq/hash fields")
+                continue
             row = conn.execute("SELECT record_hash FROM audit_events WHERE seq = ?", (seq,)).fetchone()
             if row is not None:
-                if row[0] != entry["hash"]:
+                if row[0] != expected_hash:
                     problems.append(f"anchor {index}: record {seq} changed after it was anchored")
             elif seq == base_seq:
-                if base_hash != entry["hash"]:
+                if base_hash != expected_hash:
                     problems.append(f"anchor {index}: retention base does not match the anchored hash")
             elif seq > base_seq:
                 problems.append(
@@ -391,7 +411,8 @@ def main(argv: list[str] | None = None) -> int:
     feedback = sub.add_parser("feedback", help="List answers reviewers rejected, with their reasons")
     feedback.add_argument("-n", type=int, default=20)
     feedback.add_argument("--workspace")
-    sub.add_parser("export", help="Print every event, oldest first, as JSON lines (decrypted)")
+    export_p = sub.add_parser("export", help="Print every event, oldest first, as JSON lines (decrypted)")
+    export_p.add_argument("-o", "--output", help="Optional file path to write JSONL export to")
     args = parser.parse_args(argv)
 
     if args.command == "verify":
@@ -428,8 +449,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "export":
-        for event in export_events():
-            _print_event(event)
+        events = export_events()
+        if args.output:
+            out_path = Path(args.output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as handle:
+                for event in events:
+                    handle.write(json.dumps(event, sort_keys=True) + "\n")
+            print(f"Exported {len(events)} audit record(s) to {out_path}")
+        else:
+            for event in events:
+                _print_event(event)
         return 0
 
     for event in reversed(list_events(limit=args.n, workspace_id=args.workspace)):

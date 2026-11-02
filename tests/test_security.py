@@ -106,6 +106,12 @@ def test_policy_edited_outside_access_py_fails_closed(tmp_path):
     with pytest.raises(PolicyIntegrityError):
         authorize("erin", "finance", "query", path=path)
 
+    # Corrupted JSON also raises PolicyIntegrityError (fail-closed)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("{corrupted-json")
+    with pytest.raises(PolicyIntegrityError):
+        load_policy(path)
+
 
 def test_policy_file_is_written_with_an_integrity_tag(tmp_path):
     path = str(tmp_path / "policy.json")

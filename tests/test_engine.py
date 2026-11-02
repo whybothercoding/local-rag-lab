@@ -64,11 +64,11 @@ def test_semantic_cache_hit_and_miss():
 
 
 def test_router_chitchat_and_rag():
-    state_chat = {"sanitized_question": "hello there"}
-    assert router_node(state_chat)["intent"] == "chitchat"
+    for greeting in ("hello there", "hello!", "who are you?", "what can you do", "thank you!"):
+        assert router_node({"sanitized_question": greeting})["intent"] == "chitchat"
 
-    state_rag = {"sanitized_question": "what is our expense policy?"}
-    assert router_node(state_rag)["intent"] == "rag"
+    for domain_q in ("what is our expense policy?", "Hi, what is our Q4 tax policy?", "Thanks, show the rollback SLA"):
+        assert router_node({"sanitized_question": domain_q})["intent"] == "rag"
 
 
 def test_grade_documents_approved():
@@ -122,6 +122,36 @@ def test_grade_answer_relevance_trips_circuit_breaker_on_max_retries():
     assert result["relevance_status"] == "circuit_break"
 
 
+def test_graders_handle_punctuation_and_abstention():
+    # Punctuation attached to query words ("holidays?") must still match "holidays" in answer
+    rel = grade_answer_relevance_node({
+        "original_question": "List holidays?",
+        "sanitized_question": "list holidays? details overview",
+        "generation": "Company holidays include New Year's Day and Thanksgiving.",
+        "retry_count": 0,
+    })
+    assert rel["relevance_status"] == "relevant"
+
+    # Abstained answers are relevant by definition and do not trigger rewrites
+    from app import ABSTAIN_MESSAGE
+    abstain_rel = grade_answer_relevance_node({
+        "sanitized_question": "What is the office dress code?",
+        "generation": ABSTAIN_MESSAGE,
+        "telemetry": {"abstained": True},
+        "retry_count": 0,
+    })
+    assert abstain_rel["relevance_status"] == "relevant"
+
+    # Groundedness grader strips punctuation when matching document words
+    hal = grade_hallucination_node({
+        "documents": ["Rollback SLA is under 5 minutes, strictly enforced."],
+        "generation": "Rollback SLA is under 5 minutes.",
+        "retry_count": 0,
+    })
+    assert hal["hallucination_status"] == "grounded"
+    assert hal["telemetry"]["groundedness_ratio"] == 1.0
+
+
 def test_telemetry_recorded_in_nodes():
     state = {
         "question": "Hello world query",
@@ -173,6 +203,8 @@ def test_hitl_node_rejection(mocker):
 
     result = human_in_the_loop_node(state)
     assert "rejected by human compliance" in result["generation"].lower()
+    assert result["citations"] == []
+    assert result["degraded"] == []
 
 
 def test_reciprocal_rank_fusion_prefers_overlap():

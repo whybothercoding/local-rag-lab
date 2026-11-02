@@ -108,6 +108,8 @@ def confirm_reviewer(state, preset: str | None) -> str:
 
     try:
         name = (preset or input("Account name: ")).strip().lower()
+        if not name:
+            sys.exit("Account name is required. No decision recorded.")
         for attempt in range(1, MAX_SIGN_IN_ATTEMPTS + 1):
             password = getpass.getpass(f"Password for '{name}': ")
             result = sign_in(name, password)
@@ -163,9 +165,10 @@ def main():
         # Mode 2: Direct approval/rejection via CLI args
         if args.thread and args.action:
             state = inspect_thread(app, args.thread)
-            if state:
-                approver_token = confirm_reviewer(state, args.approver)
-                process_decision(app, args.thread, args.action, approver_token, args.reason)
+            if not state:
+                sys.exit(1)
+            approver_token = confirm_reviewer(state, args.approver)
+            process_decision(app, args.thread, args.action, approver_token, args.reason)
             return
 
         # Mode 3: Interactive approval
@@ -183,6 +186,10 @@ def main():
             sys.exit(1)
 
         approver_token = confirm_reviewer(state, args.approver)
+
+        if args.action:
+            process_decision(app, target_thread, args.action, approver_token, args.reason)
+            return
 
         choice = input("Enter decision ('a' for approve / 'r' for reject / 'q' to abort): ").strip().lower()
         if choice in ["a", "approve", "approved"]:

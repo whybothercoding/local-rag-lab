@@ -27,7 +27,7 @@ When retrieved documents fail relevance grading or an answer is found irrelevant
 
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
-* **Dense Retrieval**: Cosine similarity via [ChromaDB](file:///Users/theo.dev/Documents/misc/local-rag-lab/chroma_data) and fast local embeddings (ONNX `bge-small-en-v1.5`).
+* **Dense Retrieval**: Cosine similarity via ChromaDB and fast local embeddings (ONNX `bge-small-en-v1.5`).
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
 * **Neural Cross-Encoder Reranker (`reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
@@ -38,7 +38,7 @@ To prevent hallucinations on irrelevant context, the system enforces strict evid
 * If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
 
 ### 7. State-Scoped & Clearance-Partitioned Semantic Caching
-* Approved query responses and their citations are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{index_fingerprint}:{clearance}:{original_question}")`.
+* Approved query responses and their citations are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{clearance}:{index_fingerprint}:{original_question}")`.
 * Partitioning by user clearance ensures a lower-clearance user never hits a cached answer generated from higher-clearance documents, while keying on `original_question` ensures queries rewritten during CRAG loops still hit the cache on subsequent asks.
 * Re-indexing or updating documents automatically rotates `index_fingerprint`, guaranteeing instant cache invalidation with zero stale data served.
 
@@ -62,11 +62,11 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
 
 ### 13. Multi-Tenant Knowledge Isolation & Document-Level RBAC
 * **Workspace Isolation**: Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
-* **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter. Vector search (`ChromaDB where`) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
+* **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter or headers (unrecognized tags fail closed during ingestion). Vector search (`ChromaDB where` + post-query guard) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
 ### 14. Model Weight Pinning, Optional Rust Acceleration & Graceful Degradation
 * Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
-* **Optional Native Rust Accelerator (`crates/rag_accel`)**: Compiles via PyO3/Maturin (`make rust-build`) to accelerate indirect prompt-injection scanning, PII redaction, Reciprocal Rank Fusion (RRF), document chunking, and HMAC-SHA256 audit hash-chain verification, with automatic zero-config fallback to pure Python.
+* **Optional Native Rust Accelerator (`crates/rag_accel`)**: Compiles via PyO3/Maturin (`make rust-build`) to accelerate indirect prompt-injection scanning (`RegexSet` single-pass automaton) and document chunking (`split_text`) with 100% parity and automatic zero-config fallback to pure Python.
 * If the primary LLM, cross-encoder, or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
 
 ---
@@ -111,6 +111,9 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
 ```bash
+# 0. View all available make commands
+make help
+
 # 1. Create virtual environment and install dependencies
 make setup
 
@@ -120,8 +123,11 @@ make models
 # 3. Verify cached model weights offline
 make verify-models
 
-# 4. (Optional) Compile native Rust accelerator for high-throughput scanning & RRF
+# 4. (Optional) Compile native Rust accelerator for high-throughput context scanning & chunking
 make rust-build
+
+# 5. Inspect full system status (models, accelerator, LLM, RBAC, workspaces, audit health)
+make status
 ```
 
 ---
@@ -172,16 +178,24 @@ make reset-users CONFIRM=yes
 
 ---
 
-### 3. Document Ingestion & Workspace Sync
+### 3. Workspace Management & Document Ingestion
 
-Place `.md`, `.txt`, `.pdf`, or `.docx` files in dedicated folders under `knowledge_base/<workspace>/`.
+Place `.md`, `.txt`, `.pdf`, `.docx`, or other supported files in dedicated folders under `knowledge_base/<workspace>/` (or manage workspaces directly via `make`):
 
 ```bash
+# List all workspaces with file counts, chunk counts, and FTS5 index status
+make workspaces
+
+# Create or delete a workspace from the CLI
+make create-workspace WS=legal
+make delete-workspace WS=legal YES=1
+
 # Sync all workspace directories (requires admin credentials)
 make sync ADMIN=alice
 
-# Or ingest a single directory into a target workspace
-python ingest.py --workspace accounting --dir ./knowledge_base/accounting --as alice
+# Sync a single workspace (auto-discovers knowledge_base/<ws>/ or accepts a custom DIR, plus optional FORCE=1)
+make sync ADMIN=alice WS=accounting
+make sync ADMIN=alice WS=accounting DIR=./knowledge_base/accounting FORCE=1
 ```
 
 * Workspaces are automatically sanitized (e.g., `Accounting & Tax` becomes `accounting_tax`).
@@ -239,22 +253,27 @@ All system events (queries, guardrail checks, retrievals, and human decisions) a
 # Verify the cryptographic HMAC audit hash chain
 make audit-verify
 
-# Inspect the 20 most recent audit events
+# Inspect recent audit events (optional N=<count> and WS=<workspace>)
 make audit-tail
+make audit-tail N=50 WS=accounting
 
 # Inspect answers rejected by human reviewers along with reasons
 make audit-feedback
+make audit-feedback N=20 WS=accounting
 
 # Anchor the audit head hash (run periodically to detect truncation)
 make audit-anchor
 
-# Apply data retention policy (prunes audit logs and idle threads > 183 days)
+# Export decrypted audit trail as JSONL (to stdout or OUT=<file>)
+make audit-export OUT=audit-export.jsonl
+
+# Apply data retention policy (prunes audit logs and idle threads > 183 days by default)
 make retention
+make retention DAYS=90
 
-# Create a consistent, checksummed snapshot backup (keys excluded)
+# Create, list, and verify consistent checksummed snapshot backups (keys excluded)
 make backup
-
-# Verify a backup manifest and audit chain
+make backups
 make backup-verify DIR=backups/backup-<timestamp>
 
 # Zero-trace factory reset (wipes all users, audit logs, checkpoints, keys, and vectors)
@@ -270,7 +289,7 @@ make factory-reset CONFIRM=yes
 Verify system health, offline compliance, and retrieval quality:
 
 ```bash
-# Run full unit and integration test suite (190+ tests)
+# Run full unit and integration test suite
 make test
 
 # Run test suite with all outbound sockets blocked
@@ -281,6 +300,12 @@ make eval
 
 # Run evaluation with local Ollama LLM-as-a-judge support checks
 make eval-judge
+
+# Print retrieval similarity and keyword coverage signals on the calibration split
+make eval-calibrate
+
+# Export LangGraph architecture diagram to docs/architecture.mmd
+make graph
 ```
 
 ---
@@ -332,7 +357,7 @@ local-rag-lab/
 ├── ui.py                    # Streamlit web application with citation drawers & review UI
 ├── eval.py                  # Offline evaluation benchmark runner
 ├── eval_metrics.py          # RAG evaluation metrics (precision, recall, groundedness)
-├── crates/rag_accel/        # Optional native Rust PyO3 accelerator (scanning, RRF, PII, audit)
+├── crates/rag_accel/        # Optional native Rust PyO3 accelerator (context scanning & chunking)
 ├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows
 ├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints
 ├── eval/                    # Golden test dataset and benchmark corpus

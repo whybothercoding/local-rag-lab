@@ -80,6 +80,9 @@ def search_sparse_chunks(
     base_dir: str | None = None,
 ) -> list[dict[str, Any]]:
     """Query the sparse index using SQLite FTS5 BM25 ranking, filtered by allowed clearance levels."""
+    if allowed_clearances is not None and len(allowed_clearances) == 0:
+        return []
+
     target_dir = base_dir or BM25_DIR
     db_path = os.path.join(target_dir, f"{workspace_id}.db")
 
@@ -88,14 +91,14 @@ def search_sparse_chunks(
         tokens = re.findall(r"\w+", query.lower())
         if not tokens:
             return []
-        match_query = " OR ".join(tokens)
+        match_query = " OR ".join(f'"{t}"' for t in tokens)
         try:
             with sqlite3.connect(db_path) as conn:
                 info = conn.execute("PRAGMA table_info(fts_chunks);").fetchall()
                 cols = [r[1] for r in info]
                 has_clearance_col = "clearance" in cols
 
-                if has_clearance_col and allowed_clearances:
+                if has_clearance_col and allowed_clearances is not None:
                     placeholders = ", ".join("?" for _ in allowed_clearances)
                     sql = (
                         "SELECT id, source, content, bm25(fts_chunks) AS score "
@@ -142,19 +145,24 @@ def search_sparse_chunks(
 
             tokenized_query = query.lower().split()
             scores = bm25.get_scores(tokenized_query)
-            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_n]
+            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
 
             results = []
             for idx in top_indices:
                 if any(t in bm25_chunks[idx].lower() for t in tokenized_query) or scores[idx] > 0:
-                    cid = bm25_ids[idx] if idx < len(bm25_ids) else f"{workspace_id}_sparse_{idx}"
                     meta = bm25_metas[idx] if idx < len(bm25_metas) else {}
+                    doc_clr = str(meta.get("clearance", "public")).strip().lower()
+                    if allowed_clearances is not None and doc_clr not in allowed_clearances:
+                        continue
+                    cid = bm25_ids[idx] if idx < len(bm25_ids) else f"{workspace_id}_sparse_{idx}"
                     src = meta.get("source", "document")
                     results.append({
                         "id": cid,
                         "content": bm25_chunks[idx],
                         "citation": f"[{cid}] {src}",
                     })
+                    if len(results) >= top_n:
+                        break
             return results
         except Exception as exc:
             logger.debug("Legacy pickle fallback error on workspace %s: %s", workspace_id, exc)

@@ -9,9 +9,10 @@ def test_deterministic_context_llm_extraction():
     llm = DeterministicContextLLM()
     prompt = (
         "Context:\n"
+        "FAQ Question: What is the old SLA? Answer: 15 minutes.\n---\n"
         "The standard company rollback SLA is under 5 minutes strictly. "
         "Server updates happen on Saturday.\n\n"
-        "Question: What is the rollback SLA?\n\n"
+        "Question: What is the standard company rollback SLA Answer window?\n\n"
         "Answer concisely based strictly on the context:"
     )
     result = llm.invoke(prompt)

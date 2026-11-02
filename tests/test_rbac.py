@@ -85,6 +85,12 @@ def test_extract_doc_clearance():
     assert clr4 == "public"
     assert body4 == "Regular public documentation text."
 
+    # Invalid explicit clearance fails closed instead of silently downgrading to public
+    with pytest.raises(ValueError, match="invalid clearance"):
+        _extract_doc_clearance("---\nclearance: top_secret\n---\nClassified content.")
+    with pytest.raises(ValueError, match="invalid clearance"):
+        _extract_doc_clearance("# clearance: restricted\nClassified content.")
+
 
 def test_sparse_search_clearance_filtering(tmp_path: Path):
     ws_id = "test_clearance_ws"
@@ -146,6 +152,15 @@ def test_sparse_search_clearance_filtering(tmp_path: Path):
     )
     assert len(sec_res) == 1
     assert sec_res[0]["id"] == "c3"
+
+    # 4. Empty allowed_clearances fails closed and returns no results
+    empty_res = search_sparse_chunks(
+        workspace_id=ws_id,
+        query="database passphrase",
+        allowed_clearances=[],
+        base_dir=bm25_dir,
+    )
+    assert empty_res == []
 
 
 def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
