@@ -390,7 +390,7 @@ def _print_result(result: IngestResult) -> None:
     )
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Multi-tenant knowledge ingestion")
     parser.add_argument("--workspace", required=False, help="Workspace name, for example accounting")
@@ -399,7 +399,7 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true", help="Force re-indexing even if files are unchanged")
     parser.add_argument("--as", dest="admin", required=True, metavar="ACCOUNT",
                         help="Administrator account performing the indexing (prompts for its password)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     actor = authenticate_admin(args.admin)
 
     if args.all or not args.workspace:
@@ -433,3 +433,7 @@ if __name__ == "__main__":
     _print_result(outcome)
     if not outcome.ok:
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

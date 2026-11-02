@@ -59,5 +59,7 @@ def export_mermaid_diagram():
         logger.warning(f"PNG rendering failed: {exc}. The .mmd file is still up to date.")
 
 
+main = export_mermaid_diagram
+
 if __name__ == "__main__":
-    export_mermaid_diagram()
+    main()

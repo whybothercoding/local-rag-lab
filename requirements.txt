@@ -31,5 +31,6 @@ pytest>=8.3.0
 pytest-mock>=3.14.0
 watchdog>=4.0.0
 
-# Native Extension Tooling (Optional Rust Acceleration)
+# Packaging & Tooling
+setuptools>=61.0
 maturin>=1.7.0

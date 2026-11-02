@@ -1,0 +1,138 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-rag-lab"
+version = "0.1.0"
+description = "Air-gapped Compound AI retrieval and compliance engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Local RAG Lab Contributors"}
+]
+keywords = [
+    "rag",
+    "retrieval-augmented-generation",
+    "langgraph",
+    "air-gapped",
+    "security",
+    "zero-trust",
+    "onnx",
+    "cross-encoder",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+]
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-ollama>=0.2.0",
+    "langchain-text-splitters>=0.3.0",
+    "chromadb>=0.5.0",
+    "fastembed>=0.9.0",
+    "huggingface-hub>=0.25.0",
+    "rank-bm25>=0.2.2",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+    "cryptography>=43.0.0",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
+    "streamlit>=1.39.0",
+    "pydantic>=2.8.0",
+    "python-dotenv>=1.0.0",
+    "watchdog>=4.0.0",
+    "setuptools>=61.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-mock>=3.14.0",
+]
+rust = [
+    "maturin>=1.7.0",
+]
+
+[project.scripts]
+local-rag = "workspace_manager:main"
+local-rag-sync = "ingest:main"
+local-rag-access = "access:main"
+local-rag-audit = "audit:main"
+local-rag-approve = "approve:main"
+local-rag-eval = "eval:main"
+local-rag-retention = "retention:main"
+local-rag-backup = "backup:main"
+
+[tool.setuptools]
+py-modules = [
+    "access",
+    "app",
+    "approve",
+    "audit",
+    "backup",
+    "checkpointer",
+    "config",
+    "context_sanitizer",
+    "embedding_provider",
+    "eval",
+    "eval_metrics",
+    "export_graph",
+    "fetch_models",
+    "ingest",
+    "llm_provider",
+    "model_integrity",
+    "parser_worker",
+    "parsers",
+    "redaction",
+    "reranker",
+    "retention",
+    "semantic_cache",
+    "sparse_search",
+    "ui",
+    "vault",
+    "workspace_manager",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers"
+filterwarnings = [
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith.*",
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:chromadb.*",
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+    ".git",
+    ".pytest_cache",
+    "venv",
+    "chroma_data",
+    "crates",
+    "models",
+    "backups",
+    "eval/out",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

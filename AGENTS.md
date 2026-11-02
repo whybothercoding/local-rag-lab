@@ -106,6 +106,7 @@ Graph execution in [`app.py`](app.py) follows a cyclic Self-RAG state machine:
 ## 4. Coding & Security Rules
 
 * **Documentation Sync**: Keep `AGENTS.md` and `CLAUDE.md` identical at all times.
+* **Packaging & Configuration Standards**: Project builds, metadata, dependencies, console scripts, and tool configs (pytest, ruff, mypy) are centrally declared in [`pyproject.toml`](pyproject.toml) following PEP 517/518/621. Editable installs (`pip install -e . --no-build-isolation`) register standard console scripts (`local-rag`, `local-rag-sync`, `local-rag-access`, etc.).
 * **Access Control**: All entry points must validate caller identity through `principal_token` and workspace permissions (`query`, `review`, `admin`) via [`access.py`](access.py).
 * **Sanitization & Redaction**: Sanitize file paths, reject path traversal, enforce zip-bomb/PDF resource limits in [`parser_worker.py`](parser_worker.py), and mask PII ([`redaction.py`](redaction.py)) before persisting logs or prompt contexts.
 * **Testing**: Any bug fix or feature must include unit/integration coverage in [`tests/`](tests/) and pass `make test`.

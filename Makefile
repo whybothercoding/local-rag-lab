@@ -65,6 +65,7 @@ setup:
 	python3 -m venv venv
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install -r requirements.txt
+	./venv/bin/pip install -e . --no-build-isolation
 	@echo "Setup complete. Next steps:"
 	@echo "  1. 'make models' (one-time download; requires network)"
 	@echo "  2. (Optional) 'make rust-build' to compile high-throughput Rust accelerator"
@@ -236,7 +237,7 @@ audit-feedback:
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name ".DS_Store" -delete
-	rm -rf .pytest_cache .coverage htmlcov eval/out *.log
+	rm -rf .pytest_cache .coverage htmlcov eval/out *.log *.egg-info
 
 # 19. Delete all users and reset the access policy
 reset-users:
