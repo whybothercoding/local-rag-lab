@@ -293,7 +293,11 @@ with get_checkpointer() as checkpointer:
     engine = workflow.compile(checkpointer=checkpointer)
     review_queue(engine, active_ws, user, own_thread=st.session_state.thread_id)
     paused = pending_review_panel(engine, st.session_state.thread_id, active_ws, user)
-    user_query = st.chat_input(f"Ask a question grounded in '{active_ws}'...", disabled=paused)
+    can_query = authorize(user, active_ws, "query")
+    user_query = st.chat_input(
+        f"Ask a question grounded in '{active_ws}'..." if can_query else f"Your account does not have query permission on '{active_ws}'.",
+        disabled=paused or not can_query,
+    )
 
     if user_query:
         st.session_state.messages.append({"role": "user", "content": user_query})

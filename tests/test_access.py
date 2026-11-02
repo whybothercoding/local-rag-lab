@@ -93,11 +93,11 @@ def test_policy_file_is_owner_only_and_hashes_are_not_listed(policy_path):
     assert "scrypt$" not in listing and "password" not in listing
 
 
-def test_allowed_workspaces_filters_by_query_grant(policy_path):
+def test_allowed_workspaces_includes_query_and_review_grants(policy_path):
     add_user("erin", TEST_PASSWORD, path=policy_path)
     set_grant("erin", "accounting", ["query"], path=policy_path)
     set_grant("erin", "strategy", ["review"], path=policy_path)
-    assert allowed_workspaces("erin", ["accounting", "strategy", "legal"], path=policy_path) == ["accounting"]
+    assert allowed_workspaces("erin", ["accounting", "strategy", "legal"], path=policy_path) == ["accounting", "strategy"]
 
 
 def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):

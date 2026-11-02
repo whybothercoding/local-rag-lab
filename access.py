@@ -309,7 +309,11 @@ def set_user_clearance(username: str, clearance: str, path: str | None = None) -
 
 
 def allowed_workspaces(username: str, workspace_ids: list[str], path: str | None = None) -> list[str]:
-    return [ws for ws in workspace_ids if authorize(username, ws, "query", path)]
+    """Return workspaces where the user has either query or review permissions."""
+    return [
+        ws for ws in workspace_ids
+        if authorize(username, ws, "query", path) or authorize(username, ws, "review", path)
+    ]
 
 
 def _normalize_username(raw: str) -> str:
