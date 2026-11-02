@@ -196,7 +196,14 @@ def delete_workspace(raw_name: str) -> bool:
     # 2. Delete sparse index (SQLite FTS5 and legacy PKL)
     delete_sparse_index(ws_id, base_dir=BM25_DIR)
 
-    # 3. Delete manifest file if present
+    # 3. Delete semantic cache entries for this workspace
+    try:
+        from semantic_cache import clear_workspace_cache
+        clear_workspace_cache(ws_id)
+    except Exception as exc:
+        logger.debug("Could not clear cache for %s: %s", ws_id, exc)
+
+    # 4. Delete manifest file if present
     manifest_file = os.path.join(BM25_DIR, f"{ws_id}_manifest.json")
     if os.path.exists(manifest_file):
         try:

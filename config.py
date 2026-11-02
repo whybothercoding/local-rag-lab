@@ -45,6 +45,8 @@ BM25_DIR = os.getenv("BM25_DIR", str(ROOT / "bm25_indices"))
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", str(ROOT / "uploads"))
 KNOWLEDGE_BASE_DIR = os.getenv("KNOWLEDGE_BASE_DIR", str(ROOT / "knowledge_base"))
 AUDIT_DB_PATH = os.getenv("AUDIT_DB_PATH", str(ROOT / "data" / "audit.db"))
+CACHE_DB_PATH = os.getenv("CACHE_DB_PATH", str(ROOT / "data" / "cache.db"))
+SEMANTIC_CACHE_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_CACHE_SIMILARITY_THRESHOLD", "0.92"))
 ACCESS_POLICY_PATH = os.getenv("ACCESS_POLICY_PATH", str(ROOT / "access_policy.json"))
 ACCESS_KEY_PATH = os.getenv("ACCESS_KEY_PATH", str(ROOT / "data" / "access.key"))
 # Encrypts audit payloads and checkpoint state. Keep its backup custody separate from the backups themselves.

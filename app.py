@@ -32,6 +32,14 @@ from redaction import redact_pii
 from context_sanitizer import sanitize_chunks
 from reranker import rerank_documents
 from sparse_search import search_sparse_chunks
+from semantic_cache import (
+    PersistentCitationsCache,
+    PersistentSemanticCache,
+    cache_key,
+    clear_workspace_cache,
+    lookup_cache,
+    store_cache,
+)
 
 
 class GraphState(TypedDict, total=False):
@@ -58,8 +66,8 @@ class GraphState(TypedDict, total=False):
 
 
 StateInput = GraphState | dict[str, Any]
-SEMANTIC_CACHE: dict[str, Any] = {}
-SEMANTIC_CACHE_CITATIONS: dict[str, List[str]] = {}
+SEMANTIC_CACHE = PersistentSemanticCache()
+SEMANTIC_CACHE_CITATIONS = PersistentCitationsCache()
 
 
 def _sha256(text: str) -> str:
@@ -206,18 +214,30 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
     clearance = get_user_clearance(principal) if principal else "public"
     telemetry = dict(state.get("telemetry", {}))
-    key = cache_key(ws_id, query, clearance)
 
+    cache_res = lookup_cache(
+        workspace_id=ws_id,
+        query=query,
+        clearance=clearance,
+    )
     telemetry["cache_lookup_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    if key in SEMANTIC_CACHE:
+
+    if cache_res.get("hit"):
         telemetry["cache_hit"] = True
-        cached = SEMANTIC_CACHE[key]
-        cached_citations = SEMANTIC_CACHE_CITATIONS.get(key, state.get("citations", []))
+        telemetry["cache_hit_type"] = cache_res.get("hit_type", "exact")
+        telemetry["cache_similarity"] = cache_res.get("similarity", 1.0)
+        cached = cache_res["generation"]
+        cached_citations = cache_res.get("citations") or state.get("citations", [])
         audit_record(
             "cache_hit",
             workspace_id=ws_id,
             session_id=state.get("session_id", ""),
-            data={"query": query, "answer_sha256": _sha256(str(cached))},
+            data={
+                "query": query,
+                "hit_type": telemetry["cache_hit_type"],
+                "similarity": telemetry["cache_similarity"],
+                "answer_sha256": _sha256(str(cached)),
+            },
         )
         return {
             "cache_hit": True,
@@ -581,9 +601,14 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         ws_id = state.get("workspace_id", "default")
         principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
         clearance = get_user_clearance(principal) if principal else "public"
-        key = cache_key(ws_id, q, clearance)
-        SEMANTIC_CACHE[key] = gen
-        SEMANTIC_CACHE_CITATIONS[key] = list(state.get("citations", []))
+        cites = list(state.get("citations", []))
+        store_cache(
+            workspace_id=ws_id,
+            query=q,
+            clearance=clearance,
+            generation=gen,
+            citations=cites,
+        )
 
         return {"generation": gen, "history": history}
 

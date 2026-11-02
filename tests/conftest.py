@@ -17,6 +17,7 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 _scratch_dir = tempfile.mkdtemp(prefix="rag-test-")
 atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
 os.environ["AUDIT_DB_PATH"] = os.path.join(_scratch_dir, "audit.db")
+os.environ["CACHE_DB_PATH"] = os.path.join(_scratch_dir, "cache.db")
 os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.json")
 os.environ["ACCESS_KEY_PATH"] = os.path.join(_scratch_dir, "access.key")
 os.environ["DATA_KEY_PATH"] = os.path.join(_scratch_dir, "data.key")
@@ -27,6 +28,15 @@ os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')
 os.environ["LLM_PROVIDER"] = "deterministic"
 
 TEST_PASSWORD = "correct-horse-battery"
+
+
+@pytest.fixture(autouse=True)
+def _clean_cache_each_test():
+    from semantic_cache import clear_cache
+
+    clear_cache()
+    yield
+    clear_cache()
 
 
 @pytest.fixture
