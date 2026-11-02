@@ -252,10 +252,32 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
     # Sparse index presence
     bm25_indexed = has_sparse_index(ws_id, base_dir=BM25_DIR)
 
-    # Source files in staging
+    # 1. Manifest count (tracks all indexed files across knowledge_base and uploads)
+    manifest_file = os.path.join(BM25_DIR, f"{ws_id}_manifest.json")
+    if os.path.exists(manifest_file):
+        try:
+            import json
+            with open(manifest_file, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+                file_count = len(manifest.get("files", {}))
+        except Exception:
+            pass
+
+    # 2. Fallback / union with unindexed files on disk
+    seen_files = set()
     upload_path = os.path.join(UPLOADS_DIR, ws_id)
     if os.path.exists(upload_path):
-        file_count = len([f for f in os.listdir(upload_path) if not f.startswith(".")])
+        for f in os.listdir(upload_path):
+            if not f.startswith(".") and os.path.isfile(os.path.join(upload_path, f)):
+                seen_files.add(f)
+
+    for disc_id, kb_dir in discover_knowledge_base_workspaces():
+        if disc_id == ws_id and os.path.exists(kb_dir):
+            for f in os.listdir(kb_dir):
+                if not f.startswith(".") and os.path.isfile(os.path.join(kb_dir, f)):
+                    seen_files.add(f)
+
+    file_count = max(file_count, len(seen_files))
 
     return {
         "workspace_id": ws_id,

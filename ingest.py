@@ -203,6 +203,32 @@ def ingest_workspace(
         return result
 
     raw_docs, skipped = _collect_documents(source_path)
+
+    # Also merge documents from the complementary workspace directory (knowledge_base <-> uploads)
+    # when source_dir is one of the managed workspace roots, so UI uploads and CLI sync never overwrite each other.
+    resolved_src = source_path.resolve()
+    kb_root = Path(workspace_manager.KNOWLEDGE_BASE_DIR).resolve()
+    up_root = Path(workspace_manager.UPLOADS_DIR).resolve()
+    complementary_dirs: list[Path] = []
+    if resolved_src.parent == up_root:
+        for disc_id, kb_dir in workspace_manager.discover_knowledge_base_workspaces():
+            if disc_id == ws_id:
+                complementary_dirs.append(Path(kb_dir))
+    elif resolved_src.parent == kb_root:
+        up_ws = Path(workspace_manager.UPLOADS_DIR) / ws_id
+        if up_ws.is_dir():
+            complementary_dirs.append(up_ws)
+
+    seen_sources = {doc["source"] for doc in raw_docs}
+    for comp_dir in complementary_dirs:
+        if comp_dir.is_dir() and comp_dir.resolve() != resolved_src:
+            comp_docs, comp_skipped = _collect_documents(comp_dir)
+            for doc in comp_docs:
+                if doc["source"] not in seen_sources:
+                    raw_docs.append(doc)
+                    seen_sources.add(doc["source"])
+            skipped.extend(comp_skipped)
+
     result.skipped = skipped
     if not raw_docs:
         result.error = f"No supported documents with extractable text found in {source_dir}"

@@ -145,6 +145,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
                     "content": "[Rejected by reviewer]",
                     "citations": [],
                 })
+            st.session_state.thread_id = f"ui-{ws_id}-{uuid.uuid4().hex[:6]}"
         st.rerun()
     return True
 
@@ -293,6 +294,22 @@ with get_checkpointer() as checkpointer:
     engine = workflow.compile(checkpointer=checkpointer)
     review_queue(engine, active_ws, user, own_thread=st.session_state.thread_id)
     paused = pending_review_panel(engine, st.session_state.thread_id, active_ws, user)
+
+    # Sync completed answer back into chat if approved/rejected externally (e.g. via CLI or another reviewer tab)
+    if not paused and st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        completed_state = engine.get_state(config)
+        if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
+            gen_text = completed_state.values.get("generation", "")
+            cites = completed_state.values.get("citations", [])
+            deg = completed_state.values.get("degraded", [])
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": gen_text,
+                "citations": cites,
+                "degraded": deg,
+            })
+            st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex[:6]}"
+            st.rerun()
     can_query = authorize(user, active_ws, "query")
     user_query = st.chat_input(
         f"Ask a question grounded in '{active_ws}'..." if can_query else f"Your account does not have query permission on '{active_ws}'.",
@@ -346,6 +363,7 @@ with get_checkpointer() as checkpointer:
             "citations": citations,
             "degraded": degraded,
         })
+        st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex[:6]}"
         with st.chat_message("assistant"):
             st.write(ans)
             render_degraded(degraded)

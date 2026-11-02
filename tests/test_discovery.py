@@ -94,3 +94,25 @@ def test_sync_indexes_each_workspace_then_skips_unchanged(storage):
     second = sync_all_workspaces()
     assert all(r.ok and r.unchanged for r in second.values())
     assert list_workspaces() == ["accounting", "strategy"]
+
+
+def test_ingest_merges_knowledge_base_and_uploads(storage, tmp_path):
+    """Uploading a file via UI (into uploads/<ws>) must merge with knowledge_base/<ws> rather than wiping it."""
+    from workspace_manager import get_workspace_stats
+
+    kb_acc = storage / "accounting"
+    kb_acc.mkdir()
+    (kb_acc / "tax.txt").write_text("Corporate tax policy requires quarterly filings.")
+
+    up_acc = tmp_path / "uploads" / "accounting"
+    up_acc.mkdir(parents=True)
+    (up_acc / "memo.txt").write_text("Supplemental expense memo for Q4.")
+
+    # Ingest triggered from UI upload dir
+    res = ingest_workspace("accounting", str(up_acc))
+    assert res.ok
+    assert set(res.indexed_files) == {"memo.txt", "tax.txt"}
+
+    stats = get_workspace_stats("accounting")
+    assert stats["files"] == 2
+

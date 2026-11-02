@@ -58,7 +58,8 @@ class GraphState(TypedDict, total=False):
 
 
 StateInput = GraphState | dict[str, Any]
-SEMANTIC_CACHE: dict[str, str] = {}
+SEMANTIC_CACHE: dict[str, Any] = {}
+SEMANTIC_CACHE_CITATIONS: dict[str, List[str]] = {}
 
 
 def _sha256(text: str) -> str:
@@ -96,9 +97,9 @@ def _index_version(ws_id: str) -> str:
     return hashlib.sha256(manifest.read_bytes()).hexdigest()
 
 
-def cache_key(ws_id: str, query: str) -> str:
-    """Cached answers are keyed by workspace, query, and index version, so re-indexing invalidates them."""
-    return _sha256(f"{ws_id}:{_index_version(ws_id)}:{query.strip().lower()}")
+def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
+    """Cached answers are keyed by workspace, clearance, query, and index version, so re-indexing or clearance changes invalidate them."""
+    return _sha256(f"{ws_id}:{clearance}:{_index_version(ws_id)}:{query.strip().lower()}")
 
 
 # --- HELPER: RECIPROCAL RANK FUSION (RRF) ---
@@ -201,22 +202,26 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     t0 = time.perf_counter()
     query = state.get("sanitized_question", "")
     ws_id = state.get("workspace_id", "default")
+    principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
+    clearance = get_user_clearance(principal) if principal else "public"
     telemetry = dict(state.get("telemetry", {}))
-    key = cache_key(ws_id, query)
+    key = cache_key(ws_id, query, clearance)
 
     telemetry["cache_lookup_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     if key in SEMANTIC_CACHE:
         telemetry["cache_hit"] = True
         cached = SEMANTIC_CACHE[key]
+        cached_citations = SEMANTIC_CACHE_CITATIONS.get(key, state.get("citations", []))
         audit_record(
             "cache_hit",
             workspace_id=ws_id,
             session_id=state.get("session_id", ""),
-            data={"query": query, "answer_sha256": _sha256(cached)},
+            data={"query": query, "answer_sha256": _sha256(str(cached))},
         )
         return {
             "cache_hit": True,
-            "generation": cached,
+            "generation": str(cached),
+            "citations": cached_citations,
             "telemetry": telemetry,
         }
 
@@ -558,8 +563,11 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
 
         q = state.get("sanitized_question", "")
         ws_id = state.get("workspace_id", "default")
-        key = cache_key(ws_id, q)
+        principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
+        clearance = get_user_clearance(principal) if principal else "public"
+        key = cache_key(ws_id, q, clearance)
         SEMANTIC_CACHE[key] = gen
+        SEMANTIC_CACHE_CITATIONS[key] = list(state.get("citations", []))
 
         return {"generation": gen, "history": history}
 

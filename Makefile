@@ -91,28 +91,28 @@ users:
 	./venv/bin/python access.py list
 
 add-user:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
 	./venv/bin/python access.py add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(ADMIN),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),)
 
 grant:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review]" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review]" && exit 1)
 	./venv/bin/python access.py grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
 
 revoke:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all>" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all>" && exit 1)
 	./venv/bin/python access.py revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
 
 set-clearance:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret" && exit 1)
 	./venv/bin/python access.py set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
 
 set-password:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make set-password ACCOUNT=<username>" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-password ACCOUNT=<username>" && exit 1)
 	./venv/bin/python access.py set-password $(or $(ACCOUNT),$(USERNAME))
 
 delete-user:
-	@test -n "$(ACCOUNT)" || test -n "$(USERNAME)" || (echo "Usage: make delete-user ACCOUNT=<username> [YES=1]" && exit 1)
-	./venv/bin/python access.py delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(YES),-y,)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make delete-user ACCOUNT=<username> [YES=1]" && exit 1)
+	./venv/bin/python access.py delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(YES),$(CONFIRM)),-y,)
 
 # 12. Human-in-the-Loop compliance review CLI targets
 # List all threads awaiting human review
@@ -153,11 +153,11 @@ clean:
 
 # 19. Delete all users and reset the access policy
 reset-users:
-	./venv/bin/python access.py reset-users $(if $(CONFIRM),-y,)
+	./venv/bin/python access.py reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
 
 # 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
 factory-reset:
-	@if [ "$(CONFIRM)" != "yes" ]; then \
+	@if [ "$(CONFIRM)" != "yes" ] && [ "$(YES)" != "1" ] && [ "$(YES)" != "yes" ]; then \
 		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, and indexed vectors.\nType 'yes' to proceed: "; \
 		read ans; \
 		if [ "$$ans" != "yes" ]; then \

@@ -208,3 +208,38 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
     # Alice has secret clearance and should receive the relevant chunk
     found_secret = any("XYZ-999" in doc for doc in alice_out.get("documents", []))
     assert found_secret is True
+
+
+def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
+    """Ensure a secret-clearance cached answer is never served to a public-clearance user."""
+    from app import SEMANTIC_CACHE, cache_key, cache_lookup_node
+
+    policy_path = str(tmp_path / "access_policy.json")
+    monkeypatch.setattr("config.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
+
+    add_user("alice", "Password123!@#", clearance="secret", path=policy_path)
+    add_user("bob", "Password123!@#", clearance="public", path=policy_path)
+
+    SEMANTIC_CACHE.clear()
+    query = "what is the master key"
+    # Alice (secret) caches an answer
+    SEMANTIC_CACHE[cache_key("rbac_test", query, "secret")] = "The master key is XYZ-999."
+
+    # Alice hits the cache
+    alice_lookup = cache_lookup_node({
+        "workspace_id": "rbac_test",
+        "principal": "alice",
+        "sanitized_question": query,
+    })
+    assert alice_lookup["cache_hit"] is True
+    assert "XYZ-999" in alice_lookup["generation"]
+
+    # Bob (public) MUST miss the secret cache entry
+    bob_lookup = cache_lookup_node({
+        "workspace_id": "rbac_test",
+        "principal": "bob",
+        "sanitized_question": query,
+    })
+    assert bob_lookup["cache_hit"] is False
+

@@ -120,6 +120,12 @@ def confirm_reviewer(state, preset: str | None) -> str:
             f"'{result.username}' signed in but has no review permission on workspace '{workspace}'. "
             "No decision recorded."
         )
+    requester = state.values.get("principal", "")
+    if requester and result.username == requester:
+        sys.exit(
+            f"Separation of Duties: '{result.username}' submitted this query and cannot review their own request. "
+            "No decision recorded; the query remains in the queue for another reviewer."
+        )
     return issue_token(result.username)
 
 

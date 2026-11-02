@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
 
+#[allow(dead_code)]
 pub fn verify_hash_chain(events: &[(&str, &str, &str)]) -> (bool, Option<usize>) {
     // events: slice of (event_id, payload_str, previous_hash)
     // Returns (valid, failing_index)

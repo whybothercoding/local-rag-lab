@@ -257,6 +257,16 @@ def test_cli_reviewer_needs_review_grant_even_with_correct_password(mocker, thre
         approve.confirm_reviewer(thread_state, "carol")
 
 
+def test_cli_reviewer_cannot_approve_own_query(mocker):
+    import approve
+    from types import SimpleNamespace
+
+    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+    own_state = SimpleNamespace(values={"workspace_id": "default", "principal": "bob"})
+    with pytest.raises(SystemExit, match="Separation of Duties"):
+        approve.confirm_reviewer(own_state, "bob")
+
+
 def test_password_reset_keeps_grants(policy_path):
     from access import set_password
 
