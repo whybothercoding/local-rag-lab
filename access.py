@@ -336,7 +336,7 @@ def add_user(
     policy = load_policy(path)
     if name in policy["users"]:
         raise ValueError(
-            f"User '{name}' already exists. To reset the password, run: python access.py set-password {name}"
+            f"User '{name}' already exists. To reset the password, run: make set-password ACCOUNT={name}"
         )
     policy["users"][name] = {
         "password_hash": hash_password(password),

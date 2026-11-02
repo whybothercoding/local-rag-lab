@@ -76,7 +76,7 @@ def login_gate() -> None:
         st.error(str(exc))
         st.stop()
     if not has_accounts:
-        st.error("No accounts exist yet. Create one with: python access.py add-user <name> --admin")
+        st.error("No accounts exist yet. Create one with: make add-user ACCOUNT=<name> ADMIN=1")
         st.stop()
 
     with st.form("login"):
@@ -92,7 +92,7 @@ def login_gate() -> None:
             st.rerun()
         message = result.describe()
         if result.reason == "invalid":
-            message += " Forgot the password? Ask an administrator to reset it (access.py set-password <name>)."
+            message += " Forgot the password? Ask an administrator to reset it (make set-password ACCOUNT=<name>)."
         st.error(message)
     st.stop()
 
@@ -221,7 +221,7 @@ if admin:
             clean_name = new_name.lower().replace(" ", "_")
             if clean_name and clean_name not in all_workspaces:
                 create_workspace(clean_name)
-                st.success(f"Workspace '{clean_name}' created. Grant users access with access.py.")
+                st.success(f"Workspace '{clean_name}' created. Grant access with: make grant ACCOUNT=<name> WS={clean_name} PERMS=query,review")
                 st.rerun()
             elif clean_name in all_workspaces:
                 st.warning("A workspace with that name already exists.")

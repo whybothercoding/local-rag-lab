@@ -95,8 +95,8 @@ def confirm_reviewer(state, preset: str | None) -> str:
     workspace = state.values.get("workspace_id", "")
     print("\nTo record this decision, sign in with the reviewer account.")
     print("Enter the account name and the password set for that account.")
-    print("Forgot the password? An administrator can reset it with: python access.py set-password <name>")
-    print("Unsure of the account name? List accounts with: python access.py list")
+    print("Forgot the password? An administrator can reset it with: make set-password ACCOUNT=<name>")
+    print("Unsure of the account name? List accounts with: make users")
     print("Press Ctrl-C at any time to cancel. Nothing is recorded and the query stays in the queue.\n")
 
     try:

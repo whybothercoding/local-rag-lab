@@ -280,7 +280,7 @@ def test_password_reset_requires_an_existing_account(policy_path):
 
 def test_adding_an_existing_user_points_to_password_reset(policy_path):
     add_user("erin", TEST_PASSWORD, path=policy_path)
-    with pytest.raises(ValueError, match="set-password erin"):
+    with pytest.raises(ValueError, match="set-password ACCOUNT=erin"):
         add_user("erin", TEST_PASSWORD, path=policy_path)
 
 

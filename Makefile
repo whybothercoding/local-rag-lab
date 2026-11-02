@@ -5,7 +5,13 @@ setup:
 	python3 -m venv venv
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install -r requirements.txt
-	@echo "Setup complete. Run 'make models' once (needs network), add documents under knowledge_base/<workspace>/, create accounts with 'python access.py add-user <name> --admin', then run 'make ui'."
+	@echo "Setup complete. Next steps:"
+	@echo "  1. 'make models' (one-time download; requires network)"
+	@echo "  2. (Optional) 'make rust-build' to compile high-throughput Rust accelerator"
+	@echo "  3. 'make add-user ACCOUNT=<name> ADMIN=1' to create your admin account"
+	@echo "  4. 'make grant ACCOUNT=<name> WS=all PERMS=query,review' to assign workspace access"
+	@echo "  5. 'make sync ADMIN=<name>' to index knowledge_base/ workspaces"
+	@echo "  6. 'make ui' to launch the application"
 
 # 1b. Build optional native Rust accelerator module (rag_accel) for high-throughput context scanning
 rust-build:
