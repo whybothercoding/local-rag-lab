@@ -37,7 +37,7 @@ from config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
 from vault import load_or_create_key
 from workspace_manager import sanitize_workspace_id
 
-PERMISSIONS = ("query", "review")
+PERMISSIONS = ("query", "review", "auto_approve")
 CLEARANCE_LEVELS = ("public", "internal", "confidential", "secret")
 DEFAULT_CLEARANCE = "public"
 MIN_PASSWORD_LENGTH = 12
@@ -318,10 +318,10 @@ def set_user_clearance(username: str, clearance: str, path: str | None = None) -
 
 
 def allowed_workspaces(username: str, workspace_ids: list[str], path: str | None = None) -> list[str]:
-    """Return workspaces where the user has either query or review permissions."""
+    """Return workspaces where the user has query, review, or auto_approve permissions."""
     return [
         ws for ws in workspace_ids
-        if authorize(username, ws, "query", path) or authorize(username, ws, "review", path)
+        if any(authorize(username, ws, p, path) for p in ("query", "review", "auto_approve"))
     ]
 
 
@@ -376,15 +376,16 @@ def set_grant(username: str, workspace: str, permissions: list[str], path: str |
     ws_id = sanitize_workspace_id(workspace)
     if not ws_id:
         raise ValueError("Invalid workspace name.")
-    unknown = [p for p in permissions if p not in PERMISSIONS]
+    normalized_perms = [p.strip().replace("-", "_") for p in permissions if p.strip()]
+    unknown = [p for p in normalized_perms if p not in PERMISSIONS]
     if unknown:
         raise ValueError(f"Unknown permission(s): {', '.join(unknown)}. Choose from {', '.join(PERMISSIONS)}.")
     policy = load_policy(path)
     if name not in policy["users"]:
         raise ValueError(f"User '{name}' does not exist.")
     grants = policy["users"][name].setdefault("grants", {})
-    if permissions:
-        grants[ws_id] = sorted(set(permissions))
+    if normalized_perms:
+        grants[ws_id] = sorted(set(normalized_perms))
     else:
         grants.pop(ws_id, None)
     save_policy(policy, path)
@@ -450,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     grant = sub.add_parser("grant", help="Grant permissions on workspaces (replaces existing grants there). Accepts comma-separated list or 'all'")
     grant.add_argument("username")
     grant.add_argument("workspaces", help="Workspace name, comma-separated list (e.g. 'accounting,strategy'), or 'all'")
-    grant.add_argument("--perms", default="query", help="Comma-separated: query,review")
+    grant.add_argument("--perms", default="query", help="Comma-separated: query,review,auto_approve")
 
     revoke = sub.add_parser("revoke", help="Remove all permissions on workspaces. Accepts comma-separated list or 'all'")
     revoke.add_argument("username")

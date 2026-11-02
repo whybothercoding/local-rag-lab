@@ -29,7 +29,7 @@ make rust-build             # (Optional) Build native Rust PyO3 accelerator (rag
 
 # RBAC & User Management
 make add-user ACCOUNT=<u_name> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]
-make grant ACCOUNT=<u_name> WS=<ws|ws1,ws2|all> [PERMS=query,review]
+make grant ACCOUNT=<u_name> WS=<ws|ws1,ws2|all> [PERMS=query,review,auto_approve]
 make revoke ACCOUNT=<u_name> WS=<ws|ws1,ws2|all>
 make set-clearance ACCOUNT=<u_name> CLEARANCE=<level>
 make set-password ACCOUNT=<u_name>

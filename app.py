@@ -639,28 +639,38 @@ def _normalize_decision(raw: Any) -> dict[str, str]:
 def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     # The payload is what approve.py displays. It carries the redacted question, never the raw input.
     display_q = state.get("original_question") or state.get("sanitized_question", "")
-    review = _normalize_decision(interrupt({
-        "action": "human_approval",
-        "question": display_q,
-        "citations": state.get("citations", []),
-        "candidate_answer": state.get("generation", ""),
-    }))
     gen = state.get("generation", "")
     history = list(state.get("history", []))
-
-    approved = review["decision"] == "approved"
     ws_id = state.get("workspace_id", "default")
-    if approved and not review["approver"]:
-        # An approval with no accountable reviewer is not released.
-        approved = False
-        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: no approver identity"]))
-    if approved and review["approver"] == state.get("principal", ""):
-        # Separation of duties: the requester cannot approve their own query.
-        approved = False
-        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: self-approval"]))
-    if approved and not authorize(review["approver"], ws_id, "review"):
-        approved = False
-        review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver lacks review permission"]))
+    principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
+
+    has_auto_approve = bool(principal and authorize(principal, ws_id, "auto_approve"))
+    if has_auto_approve:
+        review = {
+            "decision": "approved",
+            "approver": f"auto:{principal}",
+            "reason": f"auto-approved via policy grant for {principal}",
+        }
+        approved = True
+    else:
+        review = _normalize_decision(interrupt({
+            "action": "human_approval",
+            "question": display_q,
+            "citations": state.get("citations", []),
+            "candidate_answer": state.get("generation", ""),
+        }))
+        approved = review["decision"] == "approved"
+        if approved and not review["approver"]:
+            # An approval with no accountable reviewer is not released.
+            approved = False
+            review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: no approver identity"]))
+        if approved and review["approver"] == state.get("principal", ""):
+            # Separation of duties: the requester cannot approve their own query.
+            approved = False
+            review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: self-approval"]))
+        if approved and not authorize(review["approver"], ws_id, "review"):
+            approved = False
+            review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver lacks review permission"]))
 
     # Written before the answer is released, so a failed write releases nothing.
     audit_record(

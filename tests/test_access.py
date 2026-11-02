@@ -552,4 +552,21 @@ def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
     assert "Aborted without changes." in capsys.readouterr().out
 
 
+def test_auto_approve_permission_and_grant(policy_path):
+    from access import add_user, allowed_workspaces, authorize, set_grant
+
+    add_user("dave", TEST_PASSWORD, path=policy_path)
+    assert not authorize("dave", "accounting", "auto_approve", path=policy_path)
+
+    # Test granting with hyphen or underscore
+    set_grant("dave", "accounting", ["query", "auto-approve"], path=policy_path)
+    assert authorize("dave", "accounting", "query", path=policy_path)
+    assert authorize("dave", "accounting", "auto_approve", path=policy_path)
+    assert not authorize("dave", "accounting", "review", path=policy_path)
+
+    workspaces = allowed_workspaces("dave", ["accounting", "ops"], path=policy_path)
+    assert "accounting" in workspaces
+    assert "ops" not in workspaces
+
+
 

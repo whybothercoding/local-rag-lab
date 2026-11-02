@@ -17,7 +17,7 @@ help:
 	@echo "  make users                                     List accounts, clearance levels, and workspace grants"
 	@echo "  make add-user ACCOUNT=<u> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]"
 	@echo "  make set-clearance ACCOUNT=<u> CLEARANCE=<lvl> Update a user's document clearance level"
-	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review]"
+	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve]"
 	@echo "  make revoke ACCOUNT=<u> WS=<ws|w1,w2|all>      Revoke workspace access"
 	@echo "  make set-password ACCOUNT=<u>                  Reset a user's password"
 	@echo "  make delete-user ACCOUNT=<u> [YES=1]           Delete a user account and its grants"
@@ -175,7 +175,7 @@ add-user:
 	./venv/bin/python access.py add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(ADMIN),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),)
 
 grant:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review]" && exit 1)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review,auto_approve]" && exit 1)
 	./venv/bin/python access.py grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
 
 revoke:

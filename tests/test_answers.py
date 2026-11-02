@@ -200,3 +200,42 @@ def test_rejections_are_listed_with_their_reasons(tmp_path):
     rejections = list_rejections(path=path)
     assert len(rejections) == 1
     assert rejections[0]["data"]["reason"] == "Missing the sign-off clause"
+
+
+def test_auto_approve_grant_releases_answer_without_human_pause(rollback_index):
+    from access import set_grant
+
+    set_grant("dave", "default", ["query", "auto_approve"])
+    try:
+        engine = workflow.compile(checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "auto-approve-thread-1"}}
+        inputs = {
+            "workspace_id": "default",
+            "session_id": "auto-approve-thread-1",
+            "principal_token": token_for("dave"),
+            "question": ROLLBACK_QUESTION,
+            "original_question": ROLLBACK_QUESTION,
+            "sanitized_question": "",
+            "documents": [],
+            "citations": [],
+            "generation": "",
+            "intent": "",
+            "cache_hit": False,
+            "is_safe": True,
+            "grade_status": "",
+            "hallucination_status": "",
+            "relevance_status": "",
+            "retry_count": 0,
+            "history": [],
+            "telemetry": {},
+            "degraded": [],
+        }
+
+        for _ in engine.stream(inputs, config=config):
+            pass
+
+        state = engine.get_state(config)
+        assert state.next == ()
+        assert "rollback sla is strictly under 5 minutes" in state.values.get("generation", "").lower()
+    finally:
+        set_grant("dave", "default", [])
