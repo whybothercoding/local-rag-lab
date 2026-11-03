@@ -231,7 +231,10 @@ def fetch_checkpoint_threads(
 def _is_waiting_for_review(saver: BaseCheckpointSaver, thread_id: str) -> bool:
     config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
     snapshot = saver.get_tuple(config)
-    return snapshot is not None and any(channel == "__interrupt__" for _, channel, _ in snapshot.pending_writes)
+    # pending_writes is optional on a checkpoint tuple; a thread with none is simply not waiting.
+    return snapshot is not None and any(
+        channel == "__interrupt__" for _, channel, _ in (snapshot.pending_writes or ())
+    )
 
 
 def prune_checkpoints(retention_days: int, uri: str | None = None, now: float | None = None) -> int:

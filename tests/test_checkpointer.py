@@ -224,3 +224,20 @@ def test_clearing_the_ui_cache_closes_the_shared_connection(monkeypatch):
     st.cache_resource.clear()
     with pytest.raises(sqlite3.ProgrammingError):
         opened[0].get_tuple({"configurable": {"thread_id": "x", "checkpoint_ns": ""}})
+
+
+def test_a_checkpoint_without_pending_writes_is_not_waiting_for_review():
+    from checkpointer import _is_waiting_for_review
+
+    class Snapshot:
+        pending_writes = None
+
+    class Saver:
+        def __init__(self, snapshot):
+            self.snapshot = snapshot
+
+        def get_tuple(self, config):
+            return self.snapshot
+
+    assert _is_waiting_for_review(Saver(Snapshot()), "t") is False
+    assert _is_waiting_for_review(Saver(None), "t") is False
