@@ -134,10 +134,12 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         q_vec = get_embedding_model().embed_query(query)
         try:
             results = collection.query(
-                query_embeddings=[q_vec], n_results=5, where={"clearance": {"$in": authorized_clrs}}
+                query_embeddings=[q_vec],  # type: ignore[arg-type]  # chroma stubs want numpy; lists are accepted
+                n_results=5,
+                where={"clearance": {"$in": authorized_clrs}},  # type: ignore[dict-item]
             )
         except Exception:
-            results = collection.query(query_embeddings=[q_vec], n_results=20)
+            results = collection.query(query_embeddings=[q_vec], n_results=20)  # type: ignore[arg-type]
         docs = (results.get("documents") or [[]])[0]
         metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
         ids = (results.get("ids") or [[]])[0]

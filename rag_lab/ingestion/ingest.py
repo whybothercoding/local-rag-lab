@@ -79,7 +79,8 @@ def _load_manifest(ws_id: str) -> dict | None:
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded: dict = json.load(f)
+                return loaded
         except Exception:
             return None
     return None

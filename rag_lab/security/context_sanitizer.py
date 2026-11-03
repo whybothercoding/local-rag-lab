@@ -137,7 +137,8 @@ def scan_chunk(text: str) -> tuple[bool, str | None]:
     text = normalize_for_scan(text)
     if RUST_ACCEL:
         try:
-            return rag_accel.scan_chunk(text)
+            verdict: tuple[bool, str | None] = rag_accel.scan_chunk(text)
+            return verdict
         except Exception:
             pass
 

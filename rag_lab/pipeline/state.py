@@ -37,7 +37,8 @@ class GraphState(TypedDict, total=False):
     dropped_chunks: List[Dict[str, Any]]
 
 
-StateInput = GraphState | dict[str, Any]
+# Node input. Tests and callers pass plain dicts; GraphState is total=False, so every key is optional.
+StateInput = GraphState
 
 
 def _sha256(text: str) -> str:

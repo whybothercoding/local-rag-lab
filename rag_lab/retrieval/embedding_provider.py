@@ -87,7 +87,7 @@ class LocalFastEmbeddings(Embeddings):
         vectors = list(self.model.embed([text]))
         if not vectors:
             return []
-        return vectors[0].tolist()
+        return [float(x) for x in vectors[0]]
 
 
 def embedding_fingerprint(provider: str | None = None) -> str:

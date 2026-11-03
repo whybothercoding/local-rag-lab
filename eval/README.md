@@ -1,6 +1,6 @@
 # Offline evaluation
 
-`eval.py` runs the real LangGraph pipeline over a fixed corpus and golden set, then gates on the results.
+`rag_lab/ops/eval.py` (`make eval`) runs the real LangGraph pipeline over a fixed corpus and golden set, then gates on the results.
 Everything runs locally: a fresh index is built in `eval/out/`, and no production store is read or written.
 
 ## Corpus and golden set
@@ -15,7 +15,7 @@ Everything runs locally: a fresh index is built in `eval/out/`, and no productio
 
 ```bash
 make eval                         # gated run: prints the test split and fails below thresholds
-./venv/bin/python eval.py --calibrate   # per-case retrieval signals for the calibration split
+make eval-calibrate              # per-case retrieval signals for the calibration split
 make eval-judge                   # also asks the local Ollama model whether each answer is supported (reported, not gated)
 ```
 

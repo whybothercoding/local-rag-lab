@@ -35,7 +35,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 try:  # advisory file locking for the policy file (POSIX)
     import fcntl
@@ -65,6 +66,9 @@ _WORKSPACE_ID = re.compile(r"[a-z0-9_]{1,48}")
 _SCRYPT_PARAMS = {"n": 2**17, "r": 8, "p": 1}
 _SCRYPT_MAXMEM = 256 * 1024 * 1024
 _DENYLIST_PATH = Path(__file__).resolve().parent / "common_passwords.txt"
+
+
+_T = TypeVar("_T")
 
 
 class PolicyIntegrityError(RuntimeError):
@@ -240,7 +244,7 @@ def _policy_lock(path: str | None = None):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _update(path: str | None, mutate):
+def _update(path: str | None, mutate: Callable[[dict[str, Any]], _T]) -> _T:
     """Load the policy, apply `mutate(policy)`, and save it, all under the policy lock."""
     with _policy_lock(path):
         policy = load_policy(path)
@@ -488,7 +492,8 @@ def _normalize_clearance(clearance: str) -> str:
 def _existing(policy: dict[str, Any], name: str) -> dict[str, Any]:
     if name not in policy["users"]:
         raise ValueError(f"User '{name}' does not exist.")
-    return policy["users"][name]
+    user: dict[str, Any] = policy["users"][name]
+    return user
 
 
 def _admin_count(policy: dict[str, Any]) -> int:

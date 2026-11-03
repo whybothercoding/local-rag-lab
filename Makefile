@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -56,6 +56,7 @@ help:
 	@echo "  make test                                      Run test suite (pytest -v)"
 	@echo "  make test-offline                              Run test suite with all network sockets blocked"
 	@echo "  make lint                                      Lint with ruff (pinned rule set)"
+	@echo "  make typecheck                                 Type-check the rag_lab package with mypy"
 	@echo "  make coverage                                  Run the suite with a per-module coverage report"
 	@echo "  make eval                                      Run offline RAG evaluation gate (eval/golden.json)"
 	@echo "  make eval-judge                                Run evaluation with local Ollama LLM-as-a-judge"
@@ -120,6 +121,9 @@ test-offline:
 # Lint gate (rule set pinned in pyproject.toml) and the coverage report CI prints
 lint:
 	./venv/bin/ruff check .
+
+typecheck:
+	./venv/bin/mypy rag_lab
 
 coverage:
 	./venv/bin/pytest -q --cov=. --cov-report=term-missing:skip-covered

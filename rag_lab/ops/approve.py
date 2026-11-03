@@ -111,7 +111,7 @@ def process_decision(app, thread_id: str, decision: str, approver_token: str, re
         "approver_token": approver_token,
         "reason": reason.strip(),
     }
-    resume_cmd = Command(resume=payload)
+    resume_cmd: Command = Command(resume=payload)
 
     reviewer = verify_token(approver_token) or "unknown"
     logger.info(f"Submitting '{payload['decision']}' by {reviewer} to thread: {thread_id}...")

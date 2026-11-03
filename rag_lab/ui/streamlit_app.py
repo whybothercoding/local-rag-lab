@@ -3,6 +3,7 @@ import streamlit as st
 import json
 import time
 import uuid
+from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
@@ -139,7 +140,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
         )
         return True
 
-    interrupt_payload = {}
+    interrupt_payload: dict[str, Any] = {}
     for task in state.tasks or []:
         if getattr(task, "interrupts", None):
             interrupt_payload = task.interrupts[0].value or {}
@@ -531,12 +532,12 @@ if admin:
                 st.sidebar.error(f"'{uf.name}' is larger than {settings.max_source_bytes // (1024 * 1024)} MB and was not saved.")
                 continue
             try:
-                target = staged_path(active_ws, uf.name)
+                staged = staged_path(active_ws, uf.name)
             except ValueError as exc:
                 st.sidebar.error(f"'{uf.name}' was not saved: {exc}")
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as handle:
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            with open(staged, "wb") as handle:
                 handle.write(uf.getbuffer())
             accepted += 1
 

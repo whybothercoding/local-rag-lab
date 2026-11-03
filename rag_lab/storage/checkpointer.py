@@ -12,10 +12,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from typing import cast
 from contextlib import closing, contextmanager
 from pathlib import Path
 from collections.abc import Generator
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from rag_lab.config import ROOT, settings
@@ -138,7 +140,7 @@ def open_checkpointer(uri: str | None = None, max_pool_size: int | None = None) 
     conn = sqlite3.connect(db_path, check_same_thread=False)
     try:
         saver = _bound_sqlite_saver(conn)
-        saver.setup()
+        saver.setup()  # type: ignore[attr-defined]  # SqliteSaver.setup; the base class has none
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA busy_timeout=5000;")
@@ -232,7 +234,7 @@ def fetch_checkpoint_threads(
 
 def _is_waiting_for_review(saver: BaseCheckpointSaver, thread_id: str) -> bool:
     config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    snapshot = saver.get_tuple(config)
+    snapshot = saver.get_tuple(cast(RunnableConfig, config))
     # pending_writes is optional on a checkpoint tuple; a thread with none is simply not waiting.
     return snapshot is not None and any(
         channel == "__interrupt__" for _, channel, _ in (snapshot.pending_writes or ())

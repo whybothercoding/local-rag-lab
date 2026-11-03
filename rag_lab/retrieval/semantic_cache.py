@@ -27,7 +27,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
@@ -156,7 +155,7 @@ def _open_row(row: tuple) -> dict[str, Any] | None:
 @contextmanager
 def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, None]:
     """Context manager guaranteeing connection termination and WAL-mode configuration."""
-    target = db_path or os.getenv("CACHE_DB_PATH", settings.cache_db_path)
+    target = db_path or settings.cache_db_path
     Path(target).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=10.0)
     try:
@@ -463,7 +462,7 @@ def clear_cache(db_path: str | None = None) -> None:
 
 def cache_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve cache entry counts, workspace distribution, and on-disk size."""
-    target = db_path or os.getenv("CACHE_DB_PATH", settings.cache_db_path)
+    target = db_path or settings.cache_db_path
     path = Path(target)
     if not path.is_file():
         return {"total_entries": 0, "workspaces": {}, "bytes": 0}
@@ -583,7 +582,7 @@ class PersistentCitationsCache(collections.abc.MutableMapping):
                 if entry and entry["citations"]:
                     with _L1_LOCK:
                         _L1_CITATIONS[key] = entry["citations"]
-                    return entry["citations"]
+                    return list(entry["citations"])
         except Exception:
             pass
         raise KeyError(key)

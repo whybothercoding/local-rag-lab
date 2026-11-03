@@ -336,4 +336,4 @@ def extract_text_from_file(file_path: Path) -> str:
     lines = completed.stdout.strip().splitlines()
     if not lines:
         raise ParseError("the parser returned no output")
-    return json.loads(lines[-1])["text"]
+    return str(json.loads(lines[-1])["text"])
