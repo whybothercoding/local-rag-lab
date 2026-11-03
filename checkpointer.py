@@ -117,7 +117,13 @@ def open_checkpointer(uri: str | None = None, max_pool_size: int = CHECKPOINT_PO
     if is_postgres_uri(target):
         from psycopg_pool import ConnectionPool
 
-        pool = ConnectionPool(conninfo=target, max_size=max_pool_size, open=True, kwargs={"autocommit": True})
+        if max_pool_size < 1:
+            raise ValueError(f"CHECKPOINT_POOL_SIZE must be at least 1, got {max_pool_size}")
+        # One idle connection, growing on demand: psycopg_pool's default min_size (4) would also reject
+        # any CHECKPOINT_POOL_SIZE below 4.
+        pool = ConnectionPool(
+            conninfo=target, min_size=1, max_size=max_pool_size, open=True, kwargs={"autocommit": True}
+        )
         try:
             saver = _bound_postgres_saver(pool)
             saver.setup()  # type: ignore[attr-defined]

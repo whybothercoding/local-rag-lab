@@ -133,6 +133,20 @@ def test_postgres_checkpointer_is_shared_and_pool_is_reused(postgres_uri, monkey
     assert pool.closed
 
 
+@pytest.mark.parametrize("size", [1, 2, 8])
+def test_postgres_pool_accepts_any_positive_size(postgres_uri, size):
+    saver = open_checkpointer(postgres_uri, max_pool_size=size)
+    try:
+        assert shared_pool(saver).max_size == size
+    finally:
+        close_checkpointer(saver)
+
+
+def test_pool_size_below_one_is_refused():
+    with pytest.raises(ValueError, match="at least 1"):
+        open_checkpointer("postgresql://user:pw@localhost:1/none", max_pool_size=0)
+
+
 def test_ui_opens_the_checkpointer_once_across_reruns(monkeypatch):
     import streamlit as st
     from streamlit.testing.v1 import AppTest
@@ -158,3 +172,55 @@ def test_ui_opens_the_checkpointer_once_across_reruns(monkeypatch):
     assert not app.exception
     assert len(calls) == 1, f"every rerun reopened the checkpointer: {len(calls)} opens"
     st.cache_resource.clear()
+
+
+def test_postgres_retention_prunes_idle_threads_and_keeps_those_awaiting_review(postgres_uri, rollback_index):
+    import uuid
+
+    from checkpointer import prune_checkpoints
+
+    run = uuid.uuid4().hex
+    idle = {"configurable": {"thread_id": f"idle-{run}"}}
+    waiting = {"configurable": {"thread_id": f"waiting-{run}"}}
+    with get_checkpointer(uri=postgres_uri) as saver:
+        engine = workflow.compile(checkpointer=saver)
+        engine.invoke({"workspace_id": "default", "principal_token": token_for("dave"),
+                       "question": "anything", "telemetry": {}}, config=idle)
+        for _ in engine.stream(_inputs(f"waiting-{run}"), config=waiting):
+            pass
+        assert engine.get_state(waiting).next == ("human_approval",)
+
+    # A negative period puts every thread past the cutoff, so only the review gate can keep one.
+    assert prune_checkpoints(-1, uri=postgres_uri) >= 1
+    with get_checkpointer(uri=postgres_uri) as saver:
+        assert saver.get_tuple(waiting) is not None
+        assert saver.get_tuple(idle) is None
+
+
+def test_postgres_tests_use_a_dedicated_database(postgres_uri):
+    from conftest import POSTGRES_TEST_URI
+
+    assert postgres_uri.rsplit("/", 1)[-1].endswith("_pytest")
+    assert postgres_uri != POSTGRES_TEST_URI
+
+
+def test_clearing_the_ui_cache_closes_the_shared_connection(monkeypatch):
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+
+    import checkpointer
+
+    opened = []
+    real_open = checkpointer.open_checkpointer
+    monkeypatch.setattr(checkpointer, "open_checkpointer", lambda *a, **k: opened.append(real_open(*a, **k)) or opened[-1])
+    st.cache_resource.clear()
+
+    app = AppTest.from_file(UI, default_timeout=120).run()
+    app.text_input[0].input("alice")
+    app.text_input[1].input(TEST_PASSWORD)
+    [b for b in app.button if b.label == "Sign in"][0].click().run()
+    assert not app.exception and len(opened) == 1
+
+    st.cache_resource.clear()
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].get_tuple({"configurable": {"thread_id": "x", "checkpoint_ns": ""}})

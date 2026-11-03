@@ -94,7 +94,27 @@ def postgres_uri() -> str:
         unavailable("no PostgreSQL configured (set POSTGRES_TEST_URI, e.g. after 'make up')")
     if not _postgres_reachable(POSTGRES_TEST_URI):
         unavailable(f"PostgreSQL not reachable at {POSTGRES_TEST_URI.split('@')[-1]}")
-    return POSTGRES_TEST_URI
+    return _dedicated_test_database(POSTGRES_TEST_URI)
+
+
+def _dedicated_test_database(uri: str) -> str:
+    """Point the tests at `<database>_pytest` on the same server, recreated for every test session.
+
+    POSTGRES_TEST_URI is often the app's own database (after `make up`); tests that prune or list every
+    thread must never touch the threads a developer is working with. Recreating it matters too: each
+    session generates a fresh data key, so threads sealed by an earlier session could not be opened.
+    """
+    from urllib.parse import urlsplit
+
+    import psycopg
+    from psycopg import sql
+
+    parts = urlsplit(uri)
+    test_db = f"{(parts.path.lstrip('/') or 'postgres')}_pytest"
+    with psycopg.connect(uri, autocommit=True) as conn:
+        conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(test_db)))
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(test_db)))
+    return parts._replace(path=f"/{test_db}").geturl()
 
 
 def token_for(name: str) -> str:
