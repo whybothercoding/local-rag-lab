@@ -178,3 +178,17 @@ def test_embedding_router_never_takes_a_real_question():
     questions = {q for c in golden if c.get("expect") != "chitchat" for q in [c["question"], *c.get("history", [])]}
     misrouted = [q for q in questions if router_node({"sanitized_question": q})["intent"] == "chitchat"]
     assert misrouted == []
+
+
+@pytest.mark.parametrize(("question", "parts"), [
+    ("What is the office dress code, and how long is the rollback SLA?", 2),
+    ("Gibt es Parkplätze für Mitarbeitende und wie lange dauert die Probezeit?", 2),
+    ("Y a-t-il une salle de sport ou un parking pour les employés ?", 2),
+    ("Πόσες ημέρες τηλεργασίας επιτρέπονται και πόσα χρήματα δίνει η εταιρεία;", 2),
+    ("Are deployments on Tuesday and Thursday?", 0),   # one part has no two content words: not compound
+    ("What is the rollback SLA?", 0),
+])
+def test_compound_questions_split_into_answerable_parts(question, parts):
+    from rag_lab.pipeline.retrieval import _question_parts
+
+    assert len(_question_parts(question)) == parts

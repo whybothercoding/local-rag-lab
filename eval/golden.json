@@ -2025,5 +2025,42 @@
   "expected_keywords": [
    "5"
   ]
+ },
+ {
+  "id": "compound-en-dresscode-rollback",
+  "split": "test",
+  "suite": "en",
+  "lang": "en",
+  "workspace": "engineering",
+  "question": "What is the office dress code, and how long is the rollback SLA for tier-1 services?",
+  "expected_sources": [
+   "rollback.md"
+  ],
+  "expected_keywords": [
+   "5"
+  ]
+ },
+ {
+  "id": "compound-de-parking-probezeit",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "de",
+  "workspace": "zurich",
+  "question": "Gibt es Parkplätze für Mitarbeitende und wie lange dauert die Probezeit?",
+  "expected_sources": [
+   "kuendigung.md"
+  ],
+  "expected_keywords": [
+   "3"
+  ]
+ },
+ {
+  "id": "compound-fr-both-out-of-scope",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "fr",
+  "workspace": "geneve",
+  "question": "Y a-t-il une salle de sport ou un parking pour les employés ?",
+  "expect": "abstain"
  }
 ]

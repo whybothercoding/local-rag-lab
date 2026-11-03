@@ -1,6 +1,8 @@
 """Hybrid retrieval with a relevance gate, context sanitizing, document grading, and query rewriting."""
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -71,6 +73,16 @@ def _embedding_mismatch(ws_id: str, collection_metadata: Any) -> str | None:
         f"dense_retrieval_unavailable: the index was built with {built_with} but the runtime uses {runtime}; "
         "re-index with 'make sync FORCE=1' or restore EMBEDDING_PROVIDER"
     )
+
+
+_CONJUNCTION = re.compile(r"\s*(?:,\s*)?\b(?:and|or|und|oder|et|ou|και|ή)\b\s*", re.IGNORECASE)
+
+
+def _question_parts(question: str) -> list[str]:
+    """The parts of a compound question, each with at least two content words; [] if it is not one."""
+    parts = [p.strip(" ,;?") for p in _CONJUNCTION.split(question) if p.strip(" ,;?")]
+    parts = [p for p in parts if len(_content_terms(p)) >= 2]
+    return parts if len(parts) >= 2 else []
 
 
 def _top_rerank_score(query: str, reranked: List[Dict[str, Any]], rerank_note: str | None) -> float | None:
@@ -224,6 +236,16 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     if best_rerank is not None and settings.relevance_gate == "reranker":
         relevant = best_rerank >= settings.relevance_min_rerank_score
         telemetry["relevance_gate"] = "reranker"
+        if not relevant:
+            # A two-part question ("the dress code, and the rollback SLA?") scores low as a whole when the
+            # documents cover only one part. Each part is scored on its own; the full question still goes to
+            # the model, which says what the documents do not contain.
+            for part in _question_parts(query):
+                part_docs, part_note = rerank_with_status(part, clean_pool, top_n=3)
+                part_score = _top_rerank_score(part, part_docs, part_note)
+                if part_score is not None and part_score >= settings.relevance_min_rerank_score and part_score > best_rerank:
+                    reranked_docs, best_rerank, relevant = part_docs, part_score, True
+                    telemetry["answered_part"] = part
     else:
         relevant = bool(candidates) and (
             best_similarity >= settings.relevance_min_similarity or best_coverage >= settings.relevance_min_coverage
