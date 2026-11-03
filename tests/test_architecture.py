@@ -26,3 +26,36 @@ def test_every_graph_node_appears_in_the_hand_drawn_diagrams():
 def test_agent_guides_are_byte_identical():
     """CLAUDE.md is the source; AGENTS.md mirrors it for other coding agents."""
     assert (ROOT / "CLAUDE.md").read_bytes() == (ROOT / "AGENTS.md").read_bytes(), "copy CLAUDE.md over AGENTS.md"
+
+
+def _make_targets() -> tuple[set[str], set[str], set[str]]:
+    """(defined targets, .PHONY targets, targets advertised by `make help`)."""
+    import re
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    defined = set(re.findall(r"^([a-z][a-z0-9-]*):", makefile, re.MULTILINE))
+    phony_line = re.search(r"^\.PHONY:(.*)$", makefile, re.MULTILINE)
+    phony = set(phony_line.group(1).split()) if phony_line else set()
+    helped = set(re.findall(r'@echo "  make ([a-z][a-z0-9-]*)', makefile))
+    helped |= set(re.findall(r'@echo "  make [a-z][a-z0-9-]* / make ([a-z][a-z0-9-]*)', makefile))
+    return defined, phony, helped
+
+
+def test_every_documented_make_command_exists():
+    import re
+
+    defined, phony, helped = _make_targets()
+    for doc in ("CLAUDE.md", "README.md"):
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        documented = set(re.findall(r"(?m)^\s*make ([a-z][a-z0-9-]*)", text))
+        assert documented, doc
+        assert documented <= defined, f"{doc} documents missing targets: {sorted(documented - defined)}"
+    assert helped <= defined, f"make help lists missing targets: {sorted(helped - defined)}"
+
+
+def test_every_make_target_is_phony_and_listed_in_help():
+    defined, phony, helped = _make_targets()
+    # `ingest` is a documented alias of `sync`; `help` describes itself.
+    assert defined - phony == set(), f"targets missing from .PHONY: {sorted(defined - phony)}"
+    unlisted = defined - helped - {"help", "ingest"}
+    assert not unlisted, f"targets missing from make help: {sorted(unlisted)}"

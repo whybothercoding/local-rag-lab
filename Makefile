@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -11,6 +11,7 @@ help:
 	@echo "  make verify-models                             Verify cached ONNX model SHA-256 hashes offline"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
 	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
+	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker)"
 	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
 	@echo ""
 	@echo "RBAC & User Management (Admin-Only after first admin is created):"
@@ -54,6 +55,8 @@ help:
 	@echo "Testing, Evaluation & Maintenance:"
 	@echo "  make test                                      Run test suite (pytest -v)"
 	@echo "  make test-offline                              Run test suite with all network sockets blocked"
+	@echo "  make lint                                      Lint with ruff (pinned rule set)"
+	@echo "  make coverage                                  Run the suite with a per-module coverage report"
 	@echo "  make eval                                      Run offline RAG evaluation gate (eval/golden.json)"
 	@echo "  make eval-judge                                Run evaluation with local Ollama LLM-as-a-judge"
 	@echo "  make eval-calibrate                            Print retrieval calibration split signals"
@@ -113,6 +116,13 @@ test:
 # 7. Same suite with every outbound connection blocked, proving the app needs no network
 test-offline:
 	RAG_OFFLINE=1 ./venv/bin/pytest -v
+
+# Lint gate (rule set pinned in pyproject.toml) and the coverage report CI prints
+lint:
+	./venv/bin/ruff check .
+
+coverage:
+	./venv/bin/pytest -q --cov=. --cov-report=term-missing:skip-covered
 
 # 8. Workspace management & document ingestion
 workspaces:

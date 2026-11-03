@@ -55,6 +55,8 @@ make reject THREAD=<id> [ACCOUNT=<reviewer>] [REASON="..."]
 # Testing, Evaluation & Governance
 make test                   # Run full test suite (pytest -v)
 make test-offline           # Run test suite with outbound network sockets blocked (RAG_OFFLINE=1)
+make lint                   # Ruff lint gate (rule set pinned in pyproject.toml)
+make coverage               # Test suite with per-module coverage report
 make eval                   # Run offline RAG benchmark evaluation (eval/golden.json)
 make eval-judge             # Evaluation with local Ollama LLM-as-a-judge support checks
 make eval-calibrate         # Print retrieval similarity and coverage signals on calibration split
