@@ -28,6 +28,7 @@ When retrieved documents fail relevance grading or an answer is found irrelevant
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
 * **Dense Retrieval**: Cosine similarity via ChromaDB and fast local embeddings (ONNX `bge-small-en-v1.5`).
+  Set `EMBEDDING_PROVIDER=ollama` to embed with `nomic-embed-text` instead. The two models produce vectors of different sizes, so there is no automatic switch between them: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`).
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
 * **Neural Cross-Encoder Reranker (`reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
@@ -106,7 +107,7 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
 ### 1. Prerequisites & Environment Setup
 
 * **Python**: `>= 3.11` (tested up to 3.14)
-* **Ollama** (optional, recommended for local generative LLM): `ollama pull qwen2.5-coder:7b`
+* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen2.5-coder:7b`) and the alternative embedding model (`nomic-embed-text`)
 * **Rust Toolchain** (optional, for compiling the native `rag_accel` PyO3 extension)
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 

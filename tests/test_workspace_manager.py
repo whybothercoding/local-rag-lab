@@ -159,3 +159,56 @@ def test_workspace_stats_counts_nested_supported_files_and_ignores_unsupported(t
     stats = get_workspace_stats("engineering")
     assert stats["files"] == 2
 
+
+
+# --- make status: provider-aware readiness ---------------------------------------
+
+def _status(capsys, monkeypatch, *, embedding="fastembed", llm="deterministic", pulled=None):
+    from workspace_manager import print_status
+
+    monkeypatch.setattr("embedding_provider.EMBEDDING_PROVIDER", embedding)
+    monkeypatch.setattr("config.LLM_PROVIDER", llm)
+    monkeypatch.setattr("llm_provider.ollama_models", lambda *a, **k: pulled)
+    code = print_status()
+    return code, capsys.readouterr().out
+
+
+def test_status_default_configuration_is_healthy_without_ollama(rollback_index, capsys, monkeypatch):
+    code, out = _status(capsys, monkeypatch)
+    assert code == 0, out
+    assert "Embedding provider  : fastembed:" in out
+    assert "deterministic in-process fallback" in out
+    assert "indexed with" not in out
+
+
+def test_status_flags_ollama_embeddings_when_ollama_is_offline(rollback_index, capsys, monkeypatch):
+    from config import FASTEMBED_MODEL
+
+    code, out = _status(capsys, monkeypatch, embedding="ollama")
+    assert code == 1
+    assert "the configuration requires it" in out
+    assert f"Model verified      : {FASTEMBED_MODEL}" not in out, "FastEmbed weights are not needed on Ollama"
+
+
+def test_status_flags_missing_ollama_models(rollback_index, capsys, monkeypatch):
+    from config import EMBED_MODEL, OLLAMA_MODEL
+
+    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="auto", pulled=set())
+    assert code == 1
+    assert f"{OLLAMA_MODEL} is not pulled" in out
+    assert f"{EMBED_MODEL} is not pulled" in out
+
+
+def test_status_reports_a_workspace_indexed_with_another_model(rollback_index, capsys, monkeypatch):
+    from config import EMBED_MODEL, OLLAMA_MODEL
+
+    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="ollama", pulled={EMBED_MODEL, OLLAMA_MODEL})
+    assert code == 1
+    assert "default: indexed with fastembed:" in out
+    assert "make sync WS=default FORCE=1" in out
+
+
+def test_status_rejects_an_unknown_embedding_provider(rollback_index, capsys, monkeypatch):
+    code, out = _status(capsys, monkeypatch, embedding="bogus")
+    assert code == 1
+    assert "Unknown EMBEDDING_PROVIDER" in out

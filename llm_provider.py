@@ -168,6 +168,28 @@ def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -
         return False
 
 
+def ollama_models(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -> set[str] | None:
+    """Names of the models pulled into the local Ollama server, or None when it is unreachable.
+
+    Names are returned both as listed ("nomic-embed-text:latest") and without a ":latest" tag, so a
+    configured name matches either way.
+    """
+    try:
+        resp = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=timeout_sec)
+        if resp.status_code != 200:
+            return None
+        names: set[str] = set()
+        for entry in resp.json().get("models", []):
+            name = str(entry.get("name") or entry.get("model") or "")
+            if name:
+                names.add(name)
+                if name.endswith(":latest"):
+                    names.add(name[: -len(":latest")])
+        return names
+    except Exception:
+        return None
+
+
 def _ollama_chat() -> BaseChatModel:
     from langchain_ollama import ChatOllama
 

@@ -1,7 +1,12 @@
-"""In-process and remote embedding adapters for dense vector retrieval.
+"""In-process and Ollama embedding adapters for dense vector retrieval.
 
-Defaults to an in-process ONNX runtime (`fastembed`) requiring zero external daemons
-or network calls. Seamlessly falls back to `langchain-ollama` if configured or requested.
+Defaults to an in-process ONNX runtime (`fastembed`) requiring zero external daemons or network
+calls. Setting EMBEDDING_PROVIDER=ollama switches to the local Ollama embedding model instead.
+
+There is no automatic fallback between the two: they produce vectors of different sizes, so a
+silent switch would index or query with a model the stored vectors were not built with. Changing
+provider is a deliberate setting followed by a re-index (`make sync FORCE=1`). The fingerprint of
+the model that built an index is stored with it, and retrieval refuses to query across a mismatch.
 """
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ import logging
 from typing import Any
 from langchain_core.embeddings import Embeddings
 
-from model_integrity import verify_model
+from model_integrity import ModelIntegrityError, verify_model
 
 from config import (
     EMBED_MODEL,
@@ -22,6 +27,23 @@ from config import (
 logger = logging.getLogger("embedding_provider")
 
 _FASTEMBED_CACHE: dict[str, Any] = {}
+
+PROVIDERS = ("fastembed", "ollama")
+# Collection metadata key recording which embedding model built a workspace's vectors.
+FINGERPRINT_KEY = "embedding_fingerprint"
+
+
+class EmbeddingUnavailableError(RuntimeError):
+    """The configured embedding model cannot be loaded. The message says how to fix it."""
+
+
+def _active_provider(provider: str | None) -> str:
+    active = (provider or EMBEDDING_PROVIDER).lower().strip()
+    if active not in PROVIDERS:
+        raise EmbeddingUnavailableError(
+            f"Unknown EMBEDDING_PROVIDER '{active}'. Use one of: {', '.join(PROVIDERS)}."
+        )
+    return active
 
 
 class LocalFastEmbeddings(Embeddings):
@@ -39,13 +61,25 @@ class LocalFastEmbeddings(Embeddings):
     def model(self):
         cache_key = f"{self.model_name}:{self.cache_dir}"
         if cache_key not in _FASTEMBED_CACHE:
-            verified_path = verify_model(self.model_name, self.cache_dir)
-            from fastembed import TextEmbedding
-            _FASTEMBED_CACHE[cache_key] = TextEmbedding(
-                model_name=self.model_name,
-                cache_dir=self.cache_dir,
-                specific_model_path=str(verified_path),
-            )
+            # Loaded on first use, then kept: the hash check runs once per process, not per query.
+            try:
+                verified_path = verify_model(self.model_name, self.cache_dir)
+                from fastembed import TextEmbedding
+                _FASTEMBED_CACHE[cache_key] = TextEmbedding(
+                    model_name=self.model_name,
+                    cache_dir=self.cache_dir,
+                    specific_model_path=str(verified_path),
+                )
+            except ModelIntegrityError as exc:
+                raise EmbeddingUnavailableError(
+                    f"Embedding model {self.model_name} is not available: {exc}. "
+                    "Run 'make models', or set EMBEDDING_PROVIDER=ollama and re-index with 'make sync FORCE=1'."
+                ) from exc
+            except Exception as exc:
+                raise EmbeddingUnavailableError(
+                    f"Embedding model {self.model_name} failed to load ({type(exc).__name__}: {exc}). "
+                    "Run 'make verify-models', or set EMBEDDING_PROVIDER=ollama and re-index with 'make sync FORCE=1'."
+                ) from exc
         return _FASTEMBED_CACHE[cache_key]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -62,34 +96,37 @@ class LocalFastEmbeddings(Embeddings):
 
 
 def embedding_fingerprint(provider: str | None = None) -> str:
-    """Identify the embedding model that produced stored vectors.
+    """Identify the embedding model that produces vectors under the current configuration.
 
-    Stored in ingestion manifests so a model change forces re-indexing.
+    Stored in ingestion manifests and collection metadata so a model change forces re-indexing and
+    retrieval can refuse to compare vectors from two different models.
     """
-    active_provider = (provider or EMBEDDING_PROVIDER).lower().strip()
-    if active_provider == "ollama":
+    if _active_provider(provider) == "ollama":
         return f"ollama:{EMBED_MODEL}"
     return f"fastembed:{FASTEMBED_MODEL}"
+
+
+def stored_fingerprint(collection_metadata: Any, manifest: dict | None = None) -> str | None:
+    """The fingerprint of the model that built an index, or None when it cannot be told.
+
+    Collections built before the fingerprint was stored in their metadata fall back to the
+    ingestion manifest, which has recorded it from the start.
+    """
+    if isinstance(collection_metadata, dict) and collection_metadata.get(FINGERPRINT_KEY):
+        return str(collection_metadata[FINGERPRINT_KEY])
+    if isinstance(manifest, dict) and manifest.get("embedding"):
+        return str(manifest["embedding"])
+    return None
 
 
 def get_embedding_model(provider: str | None = None) -> Embeddings:
     """Factory returning the configured embedding model instance.
 
-    Uses `LocalFastEmbeddings` by default (zero daemons, pure Python in-process),
-    or `OllamaEmbeddings` if provider is set to 'ollama'.
+    `LocalFastEmbeddings` by default (in-process ONNX, no daemon), or `OllamaEmbeddings` when the
+    provider is 'ollama'. A FastEmbed load failure raises EmbeddingUnavailableError on first use;
+    it never switches model silently.
     """
-    active_provider = (provider or EMBEDDING_PROVIDER).lower().strip()
-
-    if active_provider == "ollama":
+    if _active_provider(provider) == "ollama":
         from langchain_ollama import OllamaEmbeddings
         return OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
-
-    try:
-        return LocalFastEmbeddings()
-    except Exception as exc:
-        logger.warning(
-            "FastEmbed initialization failed (%s); falling back to OllamaEmbeddings.",
-            exc,
-        )
-        from langchain_ollama import OllamaEmbeddings
-        return OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+    return LocalFastEmbeddings()

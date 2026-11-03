@@ -10,7 +10,7 @@ help:
 	@echo "  make models                                    Download & verify pinned ONNX models (one-time)"
 	@echo "  make verify-models                             Verify cached ONNX model SHA-256 hashes offline"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
-	@echo "  make ollama-pull                               Pull local Ollama chat model (qwen2.5-coder:7b)"
+	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
 	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
 	@echo ""
 	@echo "RBAC & User Management (Admin-Only after first admin is created):"
@@ -100,9 +100,10 @@ down:
 	@command -v docker >/dev/null 2>&1 || exit 0
 	docker compose down
 
-# 5. Optional: pull the Ollama chat model when using the Ollama backend
+# 5. Optional: pull the Ollama chat and embedding models (names resolved by config.py, so .env applies)
 ollama-pull:
-	ollama pull qwen2.5-coder:7b
+	ollama pull "$$(./venv/bin/python -c 'import config; print(config.CHAT_MODEL)')"
+	ollama pull "$$(./venv/bin/python -c 'import config; print(config.EMBED_MODEL)')"
 
 # 6. Run the test suite
 test:

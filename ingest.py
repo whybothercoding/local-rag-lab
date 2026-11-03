@@ -28,7 +28,7 @@ from access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
 from audit import record as audit_record
 from config import MAX_SOURCE_BYTES
 from context_sanitizer import scan_chunk
-from embedding_provider import embedding_fingerprint, get_embedding_model
+from embedding_provider import FINGERPRINT_KEY, embedding_fingerprint, get_embedding_model
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
 from sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
 from workspace_manager import ensure_base_dirs, sanitize_workspace_id
@@ -39,6 +39,11 @@ logger = logging.getLogger("ingest")
 _ADD_BATCH = 256
 # Cosine distance keeps similarity meaningful whichever embedding model produced the vectors.
 _COLLECTION_METADATA = {"hnsw:space": "cosine"}
+
+
+def _collection_metadata(fingerprint: str) -> dict[str, str]:
+    """Metadata for a new collection: distance space plus the model that built its vectors."""
+    return {**_COLLECTION_METADATA, FINGERPRINT_KEY: fingerprint}
 _FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _HEADER_TAG = re.compile(r"\A(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)[ \t]*(?:\r?\n|\Z)", re.IGNORECASE)
 
@@ -104,7 +109,7 @@ def _delete_quiet(client, name: str) -> None:
         logger.info("Collection %s was not deleted (%s)", name, exc)
 
 
-def _publish_collection(client, name: str, ids, documents, metadatas, embeddings) -> None:
+def _publish_collection(client, name: str, ids, documents, metadatas, embeddings, fingerprint: str) -> None:
     """Build the new collection beside the live one, then swap them by renaming.
 
     Readers see the old index until the swap, and the gap while it happens is two renames long.
@@ -113,7 +118,7 @@ def _publish_collection(client, name: str, ids, documents, metadatas, embeddings
     build_name, old_name = f"{name}__build", f"{name}__old"
     _delete_quiet(client, build_name)
     _delete_quiet(client, old_name)
-    building = client.create_collection(name=build_name, metadata=_COLLECTION_METADATA)
+    building = client.create_collection(name=build_name, metadata=_collection_metadata(fingerprint))
     _add_in_batches(building, ids, documents, metadatas, embeddings)
 
     live_exists = name in [getattr(c, "name", str(c)) for c in client.list_collections()]
@@ -388,6 +393,8 @@ def ingest_workspace(
         return result
 
     try:
+        # Taken before embedding, so the stored fingerprint names the model that produced these vectors.
+        fingerprint = embedding_fingerprint()
         embeddings = get_embedding_model()
         vectors = embeddings.embed_documents(chunks)
     except Exception as exc:
@@ -407,7 +414,7 @@ def ingest_workspace(
     collection_name = f"ws_{ws_id}"
     try:
         client = chromadb.PersistentClient(path=chroma_path)
-        _publish_collection(client, collection_name, chunk_ids, chunks, metadatas, vectors)
+        _publish_collection(client, collection_name, chunk_ids, chunks, metadatas, vectors, fingerprint)
     except Exception as exc:
         logger.exception("Chroma write failed for workspace %s", ws_id)
         result.error = f"Vector index write failed: {exc}"
@@ -430,7 +437,7 @@ def ingest_workspace(
             "files": file_hashes,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
-            "embedding": embedding_fingerprint(),
+            "embedding": fingerprint,
             "total_chunks": len(chunks),
             "total_docs": len(raw_docs),
         })

@@ -286,6 +286,7 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
     chunk_count = 0
     file_count = 0
     bm25_indexed = False
+    embedding = None
 
     # Chunks from Chroma
     try:
@@ -309,6 +310,7 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
             with open(manifest_file, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
                 file_count = len(manifest.get("files", {}))
+                embedding = manifest.get("embedding")
         except Exception:
             pass
 
@@ -336,7 +338,8 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
         "workspace_id": ws_id,
         "files": file_count,
         "chunks": chunk_count,
-        "bm25_indexed": bm25_indexed
+        "bm25_indexed": bm25_indexed,
+        "embedding": embedding,
     }
 
 
@@ -347,16 +350,36 @@ def print_status() -> int:
     from app import workflow
     from audit import verify_anchors, verify_chain
     from checkpointer import get_checkpointer
-    from config import FASTEMBED_MODEL, MODELS_DIR, OLLAMA_BASE_URL, OLLAMA_MODEL, RERANKER_MODEL
+    from config import (
+        EMBED_MODEL,
+        ENABLE_RERANKER,
+        FASTEMBED_MODEL,
+        LLM_PROVIDER,
+        MODELS_DIR,
+        OLLAMA_BASE_URL,
+        OLLAMA_MODEL,
+        RERANKER_MODEL,
+    )
     from context_sanitizer import RUST_ACCEL
-    from llm_provider import is_ollama_alive
+    from embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
+    from llm_provider import ollama_models
     from model_integrity import ModelIntegrityError, verify_model
 
     ok = True
     print("=== Local Enterprise RAG Lab: System Status ===")
 
-    # 1. Pinned ONNX models
-    for model_name in (FASTEMBED_MODEL, RERANKER_MODEL):
+    # 1. Embedding provider and pinned ONNX models. Only the models this configuration loads are required.
+    runtime_fingerprint: str | None = None
+    provider = ""
+    try:
+        runtime_fingerprint = embedding_fingerprint()
+        provider = runtime_fingerprint.split(":", 1)[0]
+        print(f"[OK] Embedding provider  : {runtime_fingerprint}")
+    except EmbeddingUnavailableError as exc:
+        print(f"[!!] Embedding provider  : {exc}")
+        ok = False
+    required = ([FASTEMBED_MODEL] if provider == "fastembed" else []) + ([RERANKER_MODEL] if ENABLE_RERANKER else [])
+    for model_name in required:
         try:
             verify_model(model_name, MODELS_DIR)
             print(f"[OK] Model verified      : {model_name}")
@@ -364,15 +387,31 @@ def print_status() -> int:
             print(f"[!!] Model unverified    : {model_name} ({exc})")
             ok = False
 
-    # 2. Rust accelerator & Ollama LLM
+    # 2. Rust accelerator & Ollama. Ollama is optional unless a setting depends on it.
     accel_state = "active (native PyO3)" if RUST_ACCEL else "fallback (pure Python; run 'make rust-build' to compile)"
     print(f"[OK] Context sanitizer   : {accel_state}")
-    ollama_state = (
-        f"reachable ({OLLAMA_MODEL} at {OLLAMA_BASE_URL})"
-        if is_ollama_alive(OLLAMA_BASE_URL)
-        else f"offline at {OLLAMA_BASE_URL} (using deterministic in-process fallback)"
-    )
-    print(f"[OK] LLM backend         : {ollama_state}")
+    pulled = ollama_models(OLLAMA_BASE_URL)
+    chat_provider = LLM_PROVIDER.lower().strip()
+    if pulled is None:
+        if chat_provider == "ollama" or provider == "ollama":
+            print(f"[!!] Ollama              : offline at {OLLAMA_BASE_URL}, but the configuration requires it")
+            ok = False
+        else:
+            print(f"[OK] LLM backend         : Ollama offline at {OLLAMA_BASE_URL} (using deterministic in-process fallback)")
+    else:
+        if OLLAMA_MODEL in pulled:
+            print(f"[OK] LLM backend         : reachable ({OLLAMA_MODEL} at {OLLAMA_BASE_URL})")
+        elif chat_provider in ("ollama", "auto"):
+            print(f"[!!] LLM backend         : Ollama is up but {OLLAMA_MODEL} is not pulled (run 'make ollama-pull')")
+            ok = False
+        else:
+            print(f"[--] LLM backend         : {chat_provider}; {OLLAMA_MODEL} is not pulled into Ollama")
+        if provider == "ollama":
+            if EMBED_MODEL in pulled:
+                print(f"[OK] Ollama embeddings   : {EMBED_MODEL} pulled")
+            else:
+                print(f"[!!] Ollama embeddings   : {EMBED_MODEL} is not pulled (run 'make ollama-pull')")
+                ok = False
 
     # 3. Accounts & RBAC policy
     try:
@@ -393,6 +432,12 @@ def print_status() -> int:
             st = get_workspace_stats(ws)
             fts = "ready" if st["bm25_indexed"] else "not indexed"
             print(f"     - {ws:<18} files={st['files']}  chunks={st['chunks']}  fts5={fts}")
+            if st["embedding"] and runtime_fingerprint and st["embedding"] != runtime_fingerprint:
+                print(
+                    f"[!!]   {ws}: indexed with {st['embedding']} but the runtime uses {runtime_fingerprint}; "
+                    f"dense retrieval is disabled until 'make sync WS={ws} FORCE=1'"
+                )
+                ok = False
 
     # 5. Pending HITL reviews
     try:

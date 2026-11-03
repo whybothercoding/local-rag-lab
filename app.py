@@ -1,6 +1,8 @@
 import re
+import json
 import time
 import hashlib
+from pathlib import Path
 from typing import TypedDict, List, Dict, Any
 
 import chromadb
@@ -27,7 +29,12 @@ from access import (
     verify_token,
 )
 from audit import record as audit_record
-from embedding_provider import get_embedding_model
+from embedding_provider import (
+    EmbeddingUnavailableError,
+    embedding_fingerprint,
+    get_embedding_model,
+    stored_fingerprint,
+)
 from llm_provider import DeterministicContextLLM, get_chat_llm, llm_is_fallback
 from redaction import redact_pii
 from context_sanitizer import sanitize_chunks, scan_chunk, scan_user_input
@@ -163,6 +170,36 @@ def _similarity(distance: float, space: str) -> float:
     if space == "cosine":
         return 1.0 - distance
     return 1.0 - distance / 2.0
+
+
+class _EmbeddingMismatch(RuntimeError):
+    """Raised inside dense retrieval to skip it with a labelled note."""
+
+
+def _manifest(ws_id: str) -> dict | None:
+    """The workspace's ingestion manifest, or None. Used for indexes that predate fingerprinted collections."""
+    path = Path(BM25_DIR) / f"{ws_id}_manifest.json"
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _embedding_mismatch(ws_id: str, collection_metadata: Any) -> str | None:
+    """A labelled note when the index was built by another embedding model than the runtime uses.
+
+    Vectors from two models are not comparable (and usually differ in size), so dense retrieval is
+    skipped instead of returning wrong neighbours or failing with an opaque dimension error.
+    """
+    built_with = stored_fingerprint(collection_metadata, _manifest(ws_id))
+    runtime = embedding_fingerprint()
+    if built_with is None or built_with == runtime:
+        return None
+    return (
+        f"dense_retrieval_unavailable: the index was built with {built_with} but the runtime uses {runtime}; "
+        "re-index with 'make sync FORCE=1' or restore EMBEDDING_PROVIDER"
+    )
 
 
 # --- HELPER: RECIPROCAL RANK FUSION (RRF) ---
@@ -362,6 +399,9 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
         raw_meta = getattr(collection, "metadata", None)
         space = str(raw_meta.get("hnsw:space", "l2")) if isinstance(raw_meta, dict) else "l2"
+        mismatch = _embedding_mismatch(ws_id, raw_meta)
+        if mismatch:
+            raise _EmbeddingMismatch(mismatch)
         q_vec = get_embedding_model().embed_query(query)
         try:
             results = collection.query(
@@ -387,6 +427,10 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             })
     except NotFoundError:
         degraded.append("not_indexed: this workspace has no vector index yet")
+    except _EmbeddingMismatch as exc:
+        degraded.append(str(exc))
+    except EmbeddingUnavailableError as exc:
+        degraded.append(f"dense_retrieval_unavailable: {exc}")
     except Exception as exc:
         degraded.append(f"dense_retrieval_unavailable: {type(exc).__name__}")
 

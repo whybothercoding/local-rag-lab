@@ -59,9 +59,9 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
     assert res3.unchanged is False
 
 
-def test_embedding_fingerprint_and_ollama_fallback(mocker):
+def test_embedding_fingerprint_and_no_silent_ollama_fallback(mocker):
     import embedding_provider
-    from embedding_provider import embedding_fingerprint, get_embedding_model
+    from embedding_provider import EmbeddingUnavailableError, embedding_fingerprint, get_embedding_model
     from langchain_ollama import OllamaEmbeddings
 
     assert embedding_fingerprint("ollama").startswith("ollama:")
@@ -70,10 +70,10 @@ def test_embedding_fingerprint_and_ollama_fallback(mocker):
     ollama_emb = get_embedding_model("ollama")
     assert isinstance(ollama_emb, OllamaEmbeddings)
 
-    # When LocalFastEmbeddings raises during initialization, get_embedding_model falls back to OllamaEmbeddings
-    mocker.patch.object(embedding_provider, "LocalFastEmbeddings", side_effect=RuntimeError("ONNX init error"))
-    fallback_emb = get_embedding_model("fastembed")
-    assert isinstance(fallback_emb, OllamaEmbeddings)
+    # A FastEmbed failure surfaces as an actionable error; it never swaps in a model of another vector size.
+    mocker.patch.object(embedding_provider, "LocalFastEmbeddings", side_effect=EmbeddingUnavailableError("run make models"))
+    with pytest.raises(EmbeddingUnavailableError):
+        get_embedding_model("fastembed")
 
 
 def test_get_chat_llm_auto_fallback_and_openai_provider(mocker):
