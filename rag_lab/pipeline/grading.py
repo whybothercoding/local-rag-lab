@@ -10,7 +10,7 @@ from rag_lab.security.audit import record as audit_record
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
 import re
 
-from rag_lab.lang import fold, is_no_info_sentence, words
+from rag_lab.lang import fold, is_no_info_sentence, strip_attribution, words
 from rag_lab.pipeline.text import STOPWORDS, _unsupported_numbers, split_sentences
 
 
@@ -50,7 +50,7 @@ def _nli_verdict(gen: str, docs: list[str], telemetry: dict[str, Any]) -> list[s
     """Unsupported answer sentences ([] when every claim is entailed), or None when NLI is unavailable."""
     from rag_lab.retrieval.nli import NLIUnavailableError, sentence_support
 
-    claims = [s for s in split_sentences(_EXTRACTIVE_PREFIX.sub("", gen)) if not is_no_info_sentence(s)]
+    claims = [strip_attribution(s) for s in split_sentences(_EXTRACTIVE_PREFIX.sub("", gen)) if not is_no_info_sentence(s)]
     try:
         scores = [(sentence_support(s, docs), s) for s in claims]
     except NLIUnavailableError:

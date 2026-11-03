@@ -87,6 +87,21 @@ def same_word(a: str, b: str) -> bool:
 NO_INFO_MARKERS: tuple[str, ...] = tuple(sorted({fold(m) for lang in LANGUAGES for m in _load(lang)["no_info_markers"]}))
 
 
+_ATTRIBUTION = re.compile(
+    "^(?:" + "|".join(re.escape(fold(x)) for lang in LANGUAGES for x in _load(lang)["attribution_prefixes"]) + r")\s*,?\s*",
+)
+
+
+def strip_attribution(sentence: str) -> str:
+    """Drop a leading "According to the documents," / "Selon les documents," so only the claim is judged."""
+    match = _ATTRIBUTION.match(fold(sentence))
+    if not match:
+        return sentence
+    rest = sentence[len(match.group(0)):] if len(fold(sentence)) == len(sentence) else sentence.split(",", 1)[-1]
+    rest = rest.strip()
+    return rest[:1].upper() + rest[1:] if rest else sentence
+
+
 def is_no_info_sentence(sentence: str) -> bool:
     """True for a sentence that only says the documents lack something ("The documents do not mention the
     dress code."). It makes no claim to check. A sentence that also states a figure is not skipped."""

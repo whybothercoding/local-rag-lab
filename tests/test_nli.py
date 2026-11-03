@@ -81,3 +81,29 @@ def test_unavailable_nli_falls_back_to_the_lexical_check(monkeypatch):
 def test_extractive_prefix_is_not_judged_as_a_claim():
     out = _grade("Based on available documentation: Economy class is the default for flights under six hours.", [TRAVEL])
     assert out["hallucination_status"] == "grounded"
+
+
+@pytest.mark.parametrize("sentence", [
+    "The context does not provide specific information about the travel policy for longer flights.",
+    "The documents do not provide information about the office dress code.",
+    "Die Dokumente geben keine Auskunft über Parkplätze.",
+    "Les documents ne précisent pas la politique de stationnement.",
+    "Τα έγγραφα δεν παρέχουν πληροφορίες για στάθμευση.",
+])
+def test_no_information_phrasings_in_every_language(sentence):
+    from rag_lab.lang import is_no_info_sentence
+
+    assert is_no_info_sentence(sentence)
+
+
+def test_attribution_phrases_are_not_part_of_the_claim():
+    teleworking = open("eval/corpus/geneve/teletravail.md", encoding="utf-8").read()
+    out = _grade("Selon les documents, le télétravail est autorisé jusqu'à 2 jours par semaine.", [teleworking])
+    assert out["hallucination_status"] == "grounded", out["telemetry"]
+
+
+def test_an_added_condition_from_a_real_model_answer_is_rejected():
+    """qwen3:8b added 'before reimbursement'; the source states no such condition."""
+    expenses = open("eval/corpus/finance/expenses.md", encoding="utf-8").read()
+    out = _grade("Receipts for business expenses above $50 require manager sign-off before reimbursement.", [expenses])
+    assert out["hallucination_status"] == "retry"

@@ -93,7 +93,11 @@ qwen3:8b, and gemma4:12b runs, against perturbed negatives:
 Two findings shaped the premises: whole passages made true claims look contradicted ("2 months after probation"
 next to "4 months from year 10" scored 0.002), and unrelated two-sentence premises could "entail" a claim (a Greek
 leave passage, 0.995, for a sentence about expense receipts). Single source sentences plus neighbour pairs that
-share at least a quarter of the claim's content words separate the two cleanly. MiniLM-L6-mnli-xnli was rejected
+share at least a quarter of the claim's content words separate the two cleanly. With qwen3:8b (test split) every suite clears the 0.9 entailment gate (en 0.94, multilingual 1.0,
+conversation 1.0). The one rejected answer added a condition the source does not state ("... sign-off before
+reimbursement") and went to review, as intended. Attribution openers ("Selon les documents, ...") are stripped
+before the check and "the documents do not provide ..." sentences are not claims; both phrase lists live in the
+language data. MiniLM-L6-mnli-xnli was rejected
 (paraphrases scored 0.37); the 2mil7 mDeBERTa variant does not list Greek.
 
 ## Chat model choice
