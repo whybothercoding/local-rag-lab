@@ -158,3 +158,44 @@ def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tm
     assert ids_from_kb == ids_from_up
 
 
+def test_ingest_reclassifies_when_clearance_changes_and_supports_folder_clearance(storage):
+    import chromadb
+    import workspace_manager
+
+    ws_dir = storage / "ops"
+    ws_dir.mkdir()
+    doc = ws_dir / "runbook.md"
+    doc.write_text("---\nclearance: public\n---\nRotate credentials every 14 days.")
+
+    res1 = ingest_workspace("ops", str(ws_dir))
+    assert res1.ok and not res1.unchanged
+
+    # Changing frontmatter clearance from public -> secret with identical body triggers re-index
+    doc.write_text("---\nClearance: Secret\n---\nRotate credentials every 14 days.")
+    res2 = ingest_workspace("ops", str(ws_dir))
+    assert res2.ok and not res2.unchanged
+
+    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    metas = client.get_collection("ws_ops").get()["metadatas"]
+    assert all(m["clearance"] == "secret" for m in metas)
+
+    # Folder-level .clearance file sets default clearance for unlabelled files in that folder
+    sub = ws_dir / "confidential_notes"
+    sub.mkdir()
+    (sub / ".clearance").write_text("confidential\n")
+    (sub / "note.txt").write_text("Executive board meeting schedule.")
+    res3 = ingest_workspace("ops", str(ws_dir))
+    assert res3.ok and not res3.unchanged
+    all_metas = client.get_collection("ws_ops").get()["metadatas"]
+    note_metas = [m for m in all_metas if "note.txt" in m["source"]]
+    assert note_metas and all(m["clearance"] == "confidential" for m in note_metas)
+
+    # Removing all files and running force=True purges the workspace index
+    for f in ws_dir.rglob("*"):
+        if f.is_file():
+            f.unlink()
+    res_empty = ingest_workspace("ops", str(ws_dir), force=True)
+    assert res_empty.ok and res_empty.documents == 0
+    assert workspace_manager.get_workspace_stats("ops")["chunks"] == 0
+
+

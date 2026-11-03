@@ -72,6 +72,35 @@ def test_sealed_checkpoint_round_trips():
     assert serde.loads_typed(serde.dumps_typed(payload)) == payload
 
 
+def test_thread_bound_checkpoint_cannot_be_replayed_across_threads():
+    from cryptography.exceptions import InvalidTag
+    from vault import bind_thread
+
+    serde = EncryptedSerde(allow_plaintext=False)
+    with bind_thread("thread-alpha"):
+        sealed = serde.dumps_typed({"principal": "alice", "generation": "approved"})
+        assert serde.loads_typed(sealed)["principal"] == "alice"
+
+    # Replaying the exact same ciphertext under a different thread_id fails AES-GCM tag check
+    with bind_thread("thread-beta"):
+        with pytest.raises(InvalidTag):
+            serde.loads_typed(sealed)
+
+    # Unsealed plaintext blob is rejected when allow_plaintext=False
+    legacy = JsonPlusSerializer().dumps_typed({"principal": "forged"})
+    with pytest.raises(InvalidTag):
+        serde.loads_typed(legacy)
+
+
+def test_invalid_vault_key_length_is_refused(tmp_path):
+    from vault import InvalidKeyError, load_or_create_key
+
+    bad_key = tmp_path / "short.key"
+    bad_key.write_bytes(b"too-short")
+    with pytest.raises(InvalidKeyError, match="expected 32"):
+        load_or_create_key(str(bad_key))
+
+
 def test_moving_a_sealed_payload_to_another_row_fails_to_open(audit_path):
     record("query_received", workspace_id="ops", session_id="s1", data={"query": "first"}, path=audit_path)
     record("query_received", workspace_id="ops", session_id="s2", data={"query": "second"}, path=audit_path)

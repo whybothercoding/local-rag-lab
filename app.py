@@ -1,45 +1,42 @@
-import os
 import re
 import time
 import hashlib
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any
 
 import chromadb
 from chromadb.errors import NotFoundError
 
-from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
-from pathlib import Path
-
-import workspace_manager
 from config import (
-    DB_URI,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
-    EMBED_MODEL,
     CHROMA_PATH,
     BM25_DIR,
+    DB_URI,  # noqa: F401
     RELEVANCE_MIN_COVERAGE,
     RELEVANCE_MIN_SIMILARITY,
     GROUNDEDNESS_MIN_RATIO,
     GROUNDEDNESS_CROSS_ENCODER_THRESHOLD,
     RELEVANCE_CROSS_ENCODER_THRESHOLD,
 )
-from access import allowed_clearances, authorize, get_user_clearance, verify_token
+from access import (
+    allowed_clearances,
+    authorize,
+    clearance_covers,
+    get_user_clearance,
+    verify_token,
+)
 from audit import record as audit_record
 from embedding_provider import get_embedding_model
-from llm_provider import DeterministicContextLLM, get_chat_llm
+from llm_provider import DeterministicContextLLM, get_chat_llm, llm_is_fallback
 from redaction import redact_pii
-from context_sanitizer import sanitize_chunks
-from reranker import rerank_documents, score_pairs
-from sparse_search import search_sparse_chunks
+from context_sanitizer import sanitize_chunks, scan_chunk, scan_user_input
+from reranker import rerank_with_status, score_pairs
+from sparse_search import has_sparse_index, search_sparse_chunks
 from semantic_cache import (
     PersistentCitationsCache,
     PersistentSemanticCache,
-    cache_key,
-    clear_workspace_cache,
+    cache_key,  # noqa: F401  (re-exported: the canonical key lives in semantic_cache)
     lookup_cache,
     store_cache,
 )
@@ -66,6 +63,8 @@ class GraphState(TypedDict, total=False):
     history: List[str]
     telemetry: Dict[str, Any]
     degraded: List[str]
+    principal_clearance: str
+    dropped_chunks: List[Dict[str, Any]]
 
 
 StateInput = GraphState | dict[str, Any]
@@ -88,6 +87,61 @@ STOPWORDS = frozenset({
 })
 _WORD = re.compile(r"[a-z0-9]+")
 
+# Retrieval problems that mean the evidence behind an answer may be incomplete or tampered with.
+# An answer carrying one of these is never auto-approved: a person must look at it.
+BLOCKING_DEGRADED_PREFIXES = (
+    "security_warning",
+    "dense_retrieval_unavailable",
+    "sparse_retrieval_unavailable",
+)
+
+_NUMBER_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+    "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+    "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17", "eighteen": "18",
+    "nineteen": "19", "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50", "sixty": "60",
+    "ninety": "90", "hundred": "100", "thousand": "1000",
+}
+_NUMBER = re.compile(r"\d+(?:[.,:]\d+)*")
+_LIST_MARKER = re.compile(r"(?m)^\s*\d+[.)]\s")
+
+
+def _numbers(text: str, *, include_one: bool = True) -> set[str]:
+    """Numbers in a text, with spelled-out ones folded to digits ("five" == "5", "1,000" == "1000")."""
+    lowered = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text.lower())
+    found = {m.rstrip(".,:") for m in _NUMBER.findall(lowered)}
+    found |= {
+        _NUMBER_WORDS[w]
+        for w in _WORD.findall(lowered)
+        if w in _NUMBER_WORDS and (include_one or w != "one")
+    }
+    return found
+
+
+def _unsupported_numbers(generation: str, documents: List[str], question: str) -> set[str]:
+    """Numbers an answer states that neither the retrieved context nor the question contains."""
+    stated = _numbers(_LIST_MARKER.sub("", generation), include_one=False)
+    return stated - _numbers(" ".join(documents)) - _numbers(question)
+
+
+def _keywords(text: str) -> list[str]:
+    """Distinct content words in order, dropping filler. Used to turn a question into a search query."""
+    seen: dict[str, None] = {}
+    for word in _WORD.findall(text.lower()):
+        if word not in STOPWORDS and (len(word) >= 3 or word.isdigit() or re.fullmatch(r"[a-z]\d+", word)):
+            seen.setdefault(word)
+    return list(seen)
+
+
+def _stem_variants(words: list[str]) -> list[str]:
+    variants: dict[str, None] = {}
+    for word in words:
+        for suffix in ("ing", "ed", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+                variants.setdefault(word[: -len(suffix)])
+                break
+    return [v for v in variants if v not in words]
+
 
 def _content_terms(text: str) -> set[str]:
     return {word for word in _WORD.findall(text.lower()) if len(word) >= 4 and word not in STOPWORDS}
@@ -100,17 +154,15 @@ def _coverage(query_terms: set[str], chunk: str) -> float:
     return len(query_terms & set(_WORD.findall(chunk.lower()))) / len(query_terms)
 
 
-def _index_version(ws_id: str) -> str:
-    """Fingerprint of a workspace's indexed content. It changes whenever the workspace is re-indexed."""
-    manifest = Path(workspace_manager.BM25_DIR) / f"{ws_id}_manifest.json"
-    if not manifest.is_file():
-        return "none"
-    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+def _similarity(distance: float, space: str) -> float:
+    """Convert a Chroma distance to a cosine-like similarity for the collection's distance space.
 
-
-def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
-    """Cached answers are keyed by workspace, clearance, query, and index version, so re-indexing or clearance changes invalidate them."""
-    return _sha256(f"{ws_id}:{clearance}:{_index_version(ws_id)}:{query.strip().lower()}")
+    Collections built by this version use cosine distance. Older ones use squared L2 on unit vectors,
+    where cosine = 1 - d / 2.
+    """
+    if space == "cosine":
+        return 1.0 - distance
+    return 1.0 - distance / 2.0
 
 
 # --- HELPER: RECIPROCAL RANK FUSION (RRF) ---
@@ -169,28 +221,23 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
             "telemetry": telemetry,
         }
 
-    adversarial_patterns = [
-        r"ignore previous instructions",
-        r"system prompt override",
-        r"bypass security rules",
-        r"disregard all prior directives",
-    ]
-    for pattern in adversarial_patterns:
-        if re.search(pattern, raw, re.IGNORECASE):
-            telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-            safe_query = redact_pii(raw)
-            audit_record(
-                "query_received",
-                workspace_id=ws_id,
-                session_id=session_id,
-                data={"status": "blocked", "reason": "prompt_injection", "query": safe_query},
-            )
-            return {
-                "is_safe": False,
-                "generation": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
-                "sanitized_question": safe_query,
-                "telemetry": telemetry,
-            }
+    # Same pattern set as retrieved documents, after Unicode and whitespace normalization.
+    input_safe, injection_reason = scan_user_input(raw)
+    if not input_safe:
+        telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        safe_query = redact_pii(raw)
+        audit_record(
+            "query_received",
+            workspace_id=ws_id,
+            session_id=session_id,
+            data={"status": "blocked", "reason": "prompt_injection", "pattern": injection_reason, "query": safe_query},
+        )
+        return {
+            "is_safe": False,
+            "generation": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
+            "sanitized_question": safe_query,
+            "telemetry": telemetry,
+        }
 
     sanitized = redact_pii(raw)
     audit_record(
@@ -204,6 +251,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     return {
         "is_safe": True,
         "principal": principal,
+        "principal_clearance": get_user_clearance(principal),
         "original_question": sanitized,
         "sanitized_question": sanitized,
         "telemetry": telemetry,
@@ -218,10 +266,13 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     clearance = get_user_clearance(principal) if principal else "public"
     telemetry = dict(state.get("telemetry", {}))
 
+    # A caller who is not on auto_approve is only served answers a person approved.
+    may_use_unreviewed = bool(principal and authorize(principal, ws_id, "auto_approve"))
     cache_res = lookup_cache(
         workspace_id=ws_id,
         query=query,
         clearance=clearance,
+        include_unreviewed=may_use_unreviewed,
     )
     telemetry["cache_lookup_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
@@ -229,6 +280,7 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
         telemetry["cache_hit"] = True
         telemetry["cache_hit_type"] = cache_res.get("hit_type", "exact")
         telemetry["cache_similarity"] = cache_res.get("similarity", 1.0)
+        telemetry["cache_approved_by"] = cache_res.get("approved_by", "")
         cached = cache_res["generation"]
         cached_citations = cache_res.get("citations") or state.get("citations", [])
         audit_record(
@@ -239,6 +291,7 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
                 "query": query,
                 "hit_type": telemetry["cache_hit_type"],
                 "similarity": telemetry["cache_similarity"],
+                "approved_by": telemetry["cache_approved_by"],
                 "answer_sha256": _sha256(str(cached)),
             },
         )
@@ -303,31 +356,34 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     user_clr = get_user_clearance(principal) if principal else "public"
     authorized_clrs = allowed_clearances(user_clr)
 
-    # 1. Dense retrieval (ChromaDB). Stored vectors are unit-normalized, so cosine = 1 - squared_l2 / 2.
+    # 1. Dense retrieval (ChromaDB) with clearance filter + fail-closed post-query verification
     try:
         chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
+        raw_meta = getattr(collection, "metadata", None)
+        space = str(raw_meta.get("hnsw:space", "l2")) if isinstance(raw_meta, dict) else "l2"
         q_vec = get_embedding_model().embed_query(query)
-        where_filter = {"clearance": {"$in": authorized_clrs}}
         try:
-            results = collection.query(query_embeddings=[q_vec], n_results=5, where=where_filter)
+            results = collection.query(
+                query_embeddings=[q_vec], n_results=5, where={"clearance": {"$in": authorized_clrs}}
+            )
         except Exception:
-            # Fallback for unmigrated collections without clearance metadata
-            results = collection.query(query_embeddings=[q_vec], n_results=5)
+            results = collection.query(query_embeddings=[q_vec], n_results=20)
         docs = (results.get("documents") or [[]])[0]
         metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
         ids = (results.get("ids") or [[]])[0]
         distances = (results.get("distances") or [[]])[0] or [2.0] * len(docs)
         for doc, meta, cid, distance in zip(docs, metas, ids, distances):
             meta_dict = meta or {}
-            doc_clr = str(meta_dict.get("clearance", "public")).strip().lower()
-            if doc_clr not in authorized_clrs:
+            # A chunk with no clearance tag is treated as unreadable, never as public.
+            doc_clr = str(meta_dict.get("clearance", "")).strip().lower()
+            if not doc_clr or doc_clr not in authorized_clrs:
                 continue
             dense_candidates.append({
                 "id": cid,
                 "content": doc,
                 "citation": f"[{cid}] {meta_dict.get('source', 'document')}",
-                "similarity": 1.0 - float(distance) / 2.0,
+                "similarity": _similarity(float(distance), space),
             })
     except NotFoundError:
         degraded.append("not_indexed: this workspace has no vector index yet")
@@ -343,8 +399,10 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             allowed_clearances=authorized_clrs,
             base_dir=BM25_DIR,
         )
+        if dense_candidates and not has_sparse_index(ws_id, base_dir=BM25_DIR):
+            degraded.append("sparse_retrieval_unavailable: the keyword index is missing; re-index the workspace")
     except Exception as exc:
-        degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}")
+        degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}: {exc}")
 
     # 3. Relevance gate
     candidates = dense_candidates + sparse_candidates
@@ -355,10 +413,25 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         best_similarity >= RELEVANCE_MIN_SIMILARITY or best_coverage >= RELEVANCE_MIN_COVERAGE
     )
 
-    # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant
-    # Fetch top candidates from RRF, then apply Cross-Encoder Reranker for deep attention scoring
-    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=6) if relevant else []
-    reranked_docs = rerank_documents(query, fused_docs, top_n=3) if fused_docs else []
+    # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant, drop chunks that carry
+    # injected instructions, and only then cut to the final top 3 with the cross-encoder. Screening before
+    # the cut means a poisoned chunk is replaced by the next-best clean one instead of leaving a gap.
+    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=8) if relevant else []
+    clean_pool: List[Dict[str, Any]] = []
+    dropped_chunks: List[Dict[str, Any]] = []
+    for item in fused_docs:
+        is_safe, reason = scan_chunk(item["content"])
+        if is_safe:
+            clean_pool.append(item)
+        else:
+            dropped_chunks.append({
+                "citation": item["citation"],
+                "reason": reason or "unknown_violation",
+                "preview": item["content"][:120],
+            })
+    reranked_docs, rerank_note = rerank_with_status(query, clean_pool, top_n=3) if clean_pool else ([], None)
+    if rerank_note:
+        degraded.append(rerank_note)
 
     chunks_found = [item["content"] for item in reranked_docs]
     citations = [item["citation"] for item in reranked_docs]
@@ -392,6 +465,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         "citations": citations,
         "telemetry": telemetry,
         "degraded": degraded,
+        "dropped_chunks": dropped_chunks,
     }
 
 
@@ -405,7 +479,10 @@ def sanitize_context_node(state: StateInput) -> dict[str, Any]:
     ws_id = state.get("workspace_id", "default")
     session_id = state.get("session_id", "")
 
-    clean_docs, clean_citations, dropped = sanitize_chunks(raw_docs, raw_citations)
+    # Chunks already screened out during retrieval are reported here together with anything this
+    # second pass still finds, so the audit trail and the warning cover both.
+    clean_docs, clean_citations, late_dropped = sanitize_chunks(raw_docs, raw_citations)
+    dropped = list(state.get("dropped_chunks") or []) + late_dropped
 
     telemetry["context_sanitizer_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     telemetry["poisoned_chunks_dropped"] = len(dropped)
@@ -431,6 +508,7 @@ def sanitize_context_node(state: StateInput) -> dict[str, Any]:
         "citations": clean_citations,
         "telemetry": telemetry,
         "degraded": degraded,
+        "dropped_chunks": [],
     }
 
 
@@ -446,9 +524,36 @@ def grade_documents_node(state: StateInput) -> dict[str, Any]:
     return {"grade_status": "approved"}
 
 
+def _llm_keyword_query(question: str) -> str | None:
+    """Ask a real model for a keyword search query. Returns None when only the extractive fallback is available."""
+    try:
+        llm = get_chat_llm()
+        if llm_is_fallback(llm) or isinstance(llm, DeterministicContextLLM):
+            return None
+        prompt = (
+            "Rewrite this question as one short keyword search query for a document index. "
+            "Reply with the query only.\n\nQuestion: " + question
+        )
+        candidate = " ".join(str(llm.invoke(prompt).content).split())[:200]
+        return candidate or None
+    except Exception:
+        return None
+
+
 def query_rewrite_node(state: StateInput) -> dict[str, Any]:
-    q = state.get("sanitized_question", "")
-    return {"sanitized_question": f"{q} details overview"}
+    """Retry retrieval with a different query. Always derived from the user's original question.
+
+    First retry: a model-written keyword query when a model is available, otherwise the question's
+    content words without filler. Later retries add word-stem variants to widen the match.
+    """
+    base = state.get("original_question") or state.get("sanitized_question", "")
+    attempt = int(state.get("retry_count", 0))
+    words = _keywords(base)
+    if attempt <= 1:
+        rewritten = _llm_keyword_query(base) or " ".join(words)
+    else:
+        rewritten = " ".join(words + _stem_variants(words))
+    return {"sanitized_question": rewritten or base}
 
 
 def generate_node(state: StateInput) -> dict[str, Any]:
@@ -468,7 +573,11 @@ def generate_node(state: StateInput) -> dict[str, Any]:
     prompt = f"Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:"
     telemetry["abstained"] = False
     try:
-        response = get_chat_llm().invoke(prompt)
+        llm = get_chat_llm()
+        if llm_is_fallback(llm):
+            degraded.append("generation_fallback: the model server is unavailable; the answer is extractive, not model-written")
+            telemetry["generation_fallback"] = True
+        response = llm.invoke(prompt)
         gen_content = str(response.content).strip()
     except Exception as exc:
         # The model failed. Answer extractively from the same context and flag it for the reviewer.
@@ -505,6 +614,19 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     elif not gen or not str(gen).strip():
         # Blank generation cannot be grounded
         grader_method = "empty_generation"
+        if retries >= 2:
+            status = "circuit_break"
+        else:
+            status = "retry"
+            update["retry_count"] = retries + 1
+    elif docs and (
+        unsupported := _unsupported_numbers(
+            gen, docs, state.get("original_question") or state.get("sanitized_question", "")
+        )
+    ):
+        # A figure the sources do not contain is never grounded, however much other wording overlaps.
+        grader_method = "numeric_mismatch"
+        telemetry["unsupported_numbers"] = sorted(unsupported)
         if retries >= 2:
             status = "circuit_break"
         else:
@@ -577,7 +699,7 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     q = state.get("original_question") or state.get("sanitized_question", "")
     retries = state.get("retry_count", 0)
 
-    q_tokens = [t for t in _WORD.findall(q.lower()) if len(t) > 3]
+    q_tokens = [t for t in _WORD.findall(q.lower()) if len(t) > 3 and t not in STOPWORDS]
     has_lexical_overlap = bool(not q_tokens or any(t in gen_words or t in gen_lower for t in q_tokens))
 
     status = "relevant"
@@ -636,6 +758,24 @@ def _normalize_decision(raw: Any) -> dict[str, str]:
     }
 
 
+def _review_reasons(state: StateInput) -> list[str]:
+    """Why an answer must be looked at by a person even for an account on auto_approve."""
+    gen = state.get("generation", "")
+    abstained = gen == ABSTAIN_MESSAGE or bool(state.get("telemetry", {}).get("abstained"))
+    reasons: list[str] = []
+    hallucination = state.get("hallucination_status", "") or "grounded"
+    relevance = state.get("relevance_status", "") or "relevant"
+    if hallucination != "grounded":
+        reasons.append(f"groundedness check did not pass ({hallucination})")
+    if relevance != "relevant":
+        reasons.append(f"relevance check did not pass ({relevance})")
+    if not abstained:
+        reasons.extend(
+            note for note in state.get("degraded", []) if note.startswith(BLOCKING_DEGRADED_PREFIXES)
+        )
+    return reasons
+
+
 def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     # The payload is what approve.py displays. It carries the redacted question, never the raw input.
     display_q = state.get("original_question") or state.get("sanitized_question", "")
@@ -643,9 +783,14 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     history = list(state.get("history", []))
     ws_id = state.get("workspace_id", "default")
     principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
+    requester_clearance = state.get("principal_clearance") or get_user_clearance(principal)
+    abstained = gen == ABSTAIN_MESSAGE or bool(state.get("telemetry", {}).get("abstained"))
 
+    # auto_approve skips the human gate only for answers that passed every automated check.
+    reasons = _review_reasons(state)
     has_auto_approve = bool(principal and authorize(principal, ws_id, "auto_approve"))
-    if has_auto_approve:
+    auto = has_auto_approve and not reasons
+    if auto:
         review = {
             "decision": "approved",
             "approver": f"auto:{principal}",
@@ -658,6 +803,9 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             "question": display_q,
             "citations": state.get("citations", []),
             "candidate_answer": state.get("generation", ""),
+            "requested_by": principal,
+            "requester_clearance": requester_clearance,
+            "review_reasons": reasons,
         }))
         approved = review["decision"] == "approved"
         if approved and not review["approver"]:
@@ -671,6 +819,10 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         if approved and not authorize(review["approver"], ws_id, "review"):
             approved = False
             review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver lacks review permission"]))
+        if approved and not clearance_covers(get_user_clearance(review["approver"]), requester_clearance):
+            # A reviewer reads the answer, so they must be cleared for what the requester may see.
+            approved = False
+            review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver clearance is below the requester's"]))
 
     # Written before the answer is released, so a failed write releases nothing.
     audit_record(
@@ -683,6 +835,9 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             "approver": review["approver"],
             "reason": review["reason"],
             "released": approved,
+            "auto_approved": bool(auto and approved),
+            "auto_approve_withheld": bool(has_auto_approve and reasons),
+            "review_reasons": reasons,
             "answer_sha256": _sha256(gen),
             "citations": state.get("citations", []),
             "groundedness_ratio": state.get("telemetry", {}).get("groundedness_ratio"),
@@ -696,17 +851,19 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         history.append(f"Assistant: {gen}")
 
         q = state.get("original_question") or state.get("sanitized_question", "")
-        ws_id = state.get("workspace_id", "default")
-        principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
         clearance = get_user_clearance(principal) if principal else "public"
         cites = list(state.get("citations", []))
-        store_cache(
-            workspace_id=ws_id,
-            query=q,
-            clearance=clearance,
-            generation=gen,
-            citations=cites,
-        )
+        # An abstention is not an answer worth remembering: the next question may find the documents.
+        if not abstained:
+            store_cache(
+                workspace_id=ws_id,
+                query=q,
+                clearance=clearance,
+                generation=gen,
+                citations=cites,
+                reviewed=not auto,
+                approved_by=review["approver"],
+            )
 
         return {"generation": gen, "history": history}
 

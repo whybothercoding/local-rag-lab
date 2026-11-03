@@ -245,3 +245,110 @@ def test_cache_stats_and_malformed_vector_handling(tmp_path: Path):
     assert "finance" in st["workspaces"]
     assert st["bytes"] > 0
 
+
+def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path):
+    db_file = str(tmp_path / "cache.db")
+    secret_answer = "Project-Omega-Confidential-998811"
+
+    store_cache(
+        workspace_id="ops",
+        query="What is the Omega code?",
+        clearance="secret",
+        generation=secret_answer,
+        citations=["omega.md"],
+        db_path=db_file,
+    )
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    raw_bytes = Path(db_file).read_bytes()
+    assert secret_answer.encode("utf-8") not in raw_bytes
+    assert b"What is the Omega code?" not in raw_bytes
+
+    # Tamper with row clearance in SQLite directly (attempting to downgrade secret row to public):
+    # AAD includes clearance, so decryption fails and the tampered row is refused!
+    _L1_GENERATIONS.clear()
+    _L1_CITATIONS.clear()
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE semantic_cache SET clearance = 'public'")
+        conn.commit()
+
+    tampered_lookup = lookup_cache(
+        "ops",
+        "What is the Omega code?",
+        clearance="public",
+        allowed_clearances=["public"],
+        db_path=db_file,
+    )
+    assert tampered_lookup["hit"] is False
+
+
+def test_semantic_cache_numeric_and_negation_signature_guard(tmp_path: Path):
+    """Near-identical questions with different numbers or negations must never collide on semantic lookup."""
+    db_file = str(tmp_path / "cache.db")
+
+    store_cache(
+        workspace_id="default",
+        query="What is the rollback SLA for tier 1 services?",
+        clearance="public",
+        generation="Tier 1 rollback SLA is 5 minutes.",
+        citations=["sla.md"],
+        db_path=db_file,
+        compute_vector=True,
+    )
+
+    # Different number ("tier 2" vs "tier 1"): must miss even at low cosine threshold
+    num_mismatch = lookup_cache(
+        "default",
+        "What is the rollback SLA for tier 2 services?",
+        clearance="public",
+        threshold=0.70,
+        db_path=db_file,
+    )
+    assert num_mismatch["hit"] is False
+
+    # Negation mismatch ("not" vs affirmative): must miss
+    neg_mismatch = lookup_cache(
+        "default",
+        "What is not the rollback SLA for tier 1 services?",
+        clearance="public",
+        threshold=0.70,
+        db_path=db_file,
+    )
+    assert neg_mismatch["hit"] is False
+
+
+def test_unreviewed_cache_entries_withheld_from_users_requiring_human_review(tmp_path: Path):
+    db_file = str(tmp_path / "cache.db")
+
+    store_cache(
+        workspace_id="default",
+        query="What is the deploy window?",
+        clearance="public",
+        generation="Tuesday 02:00 UTC.",
+        citations=["deploy.md"],
+        reviewed=False,
+        approved_by="auto_approve:alice",
+        db_path=db_file,
+    )
+
+    # User without auto_approve (include_unreviewed=False) misses unreviewed entry
+    strict_res = lookup_cache(
+        "default",
+        "What is the deploy window?",
+        clearance="public",
+        include_unreviewed=False,
+        db_path=db_file,
+    )
+    assert strict_res["hit"] is False
+
+    # User with auto_approve (include_unreviewed=True) hits it
+    auto_res = lookup_cache(
+        "default",
+        "What is the deploy window?",
+        clearance="public",
+        include_unreviewed=True,
+        db_path=db_file,
+    )
+    assert auto_res["hit"] is True
+

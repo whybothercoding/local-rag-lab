@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-password delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -13,20 +13,23 @@ help:
 	@echo "  make ollama-pull                               Pull local Ollama chat model (qwen2.5-coder:7b)"
 	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
 	@echo ""
-	@echo "RBAC & User Management:"
-	@echo "  make users                                     List accounts, clearance levels, and workspace grants"
-	@echo "  make add-user ACCOUNT=<u> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]"
-	@echo "  make set-clearance ACCOUNT=<u> CLEARANCE=<lvl> Update a user's document clearance level"
-	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve]"
-	@echo "  make revoke ACCOUNT=<u> WS=<ws|w1,w2|all>      Revoke workspace access"
-	@echo "  make set-password ACCOUNT=<u>                  Reset a user's password"
-	@echo "  make delete-user ACCOUNT=<u> [YES=1]           Delete a user account and its grants"
-	@echo "  make reset-users [CONFIRM=yes]                 Delete all user accounts"
+	@echo "RBAC & User Management (Admin-Only after first admin is created):"
+	@echo "  make users                                     List accounts, clearance levels, defaults, and grants"
+	@echo "  make add-user ACCOUNT=<u> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [CLEARANCE=public|internal|confidential|secret]"
+	@echo "  make set-clearance ACCOUNT=<u> CLEARANCE=<lvl> ADMIN=<admin>"
+	@echo "  make set-admin ACCOUNT=<u> ADMIN=<admin> [REVOKE=1]"
+	@echo "  make set-default PERMS=query,auto_approve ADMIN=<admin>"
+	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>"
+	@echo "  make revoke ACCOUNT=<u> WS=<ws|w1,w2|all> ADMIN=<admin>"
+	@echo "  make set-password ACCOUNT=<u> ADMIN=<admin>    Reset a user's password and revoke active tokens"
+	@echo "  make revoke-sessions ACCOUNT=<u> ADMIN=<admin> Sign a user out everywhere"
+	@echo "  make delete-user ACCOUNT=<u> ADMIN=<admin> [YES=1]"
+	@echo "  make reset-users ADMIN=<admin> [CONFIRM=yes]"
 	@echo ""
 	@echo "Workspaces, Ingestion & UI:"
 	@echo "  make workspaces                                List workspaces with file and chunk counts"
-	@echo "  make create-workspace WS=<ws>                  Initialize a new workspace bundle"
-	@echo "  make delete-workspace WS=<ws> [YES=1]          Purge a workspace, its indexes, checkpoints, and grants"
+	@echo "  make create-workspace WS=<ws> [ADMIN=<admin>]  Initialize a new workspace bundle"
+	@echo "  make delete-workspace WS=<ws> [ADMIN=<admin>] [YES=1]"
 	@echo "  make sync ADMIN=<u> [WS=<ws>] [DIR=<path>] [FORCE=1]  Index all or one workspace"
 	@echo "  make ui [ADMIN=<u>]                            Launch Streamlit web interface"
 	@echo ""
@@ -114,12 +117,12 @@ workspaces:
 	./venv/bin/python workspace_manager.py list
 
 create-workspace:
-	@test -n "$(WS)" || (echo "Usage: make create-workspace WS=<workspace>" && exit 1)
-	./venv/bin/python workspace_manager.py create $(WS)
+	@test -n "$(WS)" || (echo "Usage: make create-workspace WS=<workspace> [ADMIN=<admin>]" && exit 1)
+	./venv/bin/python workspace_manager.py $(if $(ADMIN),--as $(ADMIN),) create $(WS)
 
 delete-workspace:
-	@test -n "$(WS)" || (echo "Usage: make delete-workspace WS=<workspace> [YES=1]" && exit 1)
-	./venv/bin/python workspace_manager.py delete $(WS) $(if $(or $(YES),$(CONFIRM)),-y,)
+	@test -n "$(WS)" || (echo "Usage: make delete-workspace WS=<workspace> [ADMIN=<admin>] [YES=1]" && exit 1)
+	./venv/bin/python workspace_manager.py $(if $(ADMIN),--as $(ADMIN),) delete $(WS) $(if $(or $(YES),$(CONFIRM)),-y,)
 
 # Discover every folder under knowledge_base/ and index it, or index a single WS.
 # Idempotent: unchanged workspaces are skipped unless FORCE=1.
@@ -171,28 +174,44 @@ users:
 	./venv/bin/python access.py list
 
 add-user:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
-	./venv/bin/python access.py add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(ADMIN),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
+	@if [ "$(ADMIN)" = "1" ] || [ "$(ADMIN)" = "true" ] || [ "$(ADMIN)" = "yes" ]; then \
+		./venv/bin/python access.py $(if $(AS),--as $(AS),) add-user $(or $(ACCOUNT),$(USERNAME)) --admin $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+	else \
+		./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(MAKE_ADMIN),$(IS_ADMIN)),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+	fi
 
 grant:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review,auto_approve]" && exit 1)
-	./venv/bin/python access.py grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
 
 revoke:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all>" && exit 1)
-	./venv/bin/python access.py revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all> ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
 
 set-clearance:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret" && exit 1)
-	./venv/bin/python access.py set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
+
+set-admin:
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-admin ACCOUNT=<username> ADMIN=<admin> [REVOKE=1]" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-admin $(or $(ACCOUNT),$(USERNAME)) $(if $(REVOKE),--revoke,)
+
+set-default:
+	@test -n "$(PERMS)" || (echo "Usage: make set-default PERMS=query,auto_approve ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-default --perms $(PERMS)
 
 set-password:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-password ACCOUNT=<username>" && exit 1)
-	./venv/bin/python access.py set-password $(or $(ACCOUNT),$(USERNAME))
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-password ACCOUNT=<username> ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-password $(or $(ACCOUNT),$(USERNAME))
+
+revoke-sessions:
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make revoke-sessions ACCOUNT=<username> ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) revoke-sessions $(or $(ACCOUNT),$(USERNAME))
 
 delete-user:
-	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make delete-user ACCOUNT=<username> [YES=1]" && exit 1)
-	./venv/bin/python access.py delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(YES),$(CONFIRM)),-y,)
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make delete-user ACCOUNT=<username> ADMIN=<admin> [YES=1]" && exit 1)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(YES),$(CONFIRM)),-y,)
 
 # 12. Human-in-the-Loop compliance review CLI targets
 # List all threads awaiting human review
@@ -241,7 +260,7 @@ clean:
 
 # 19. Delete all users and reset the access policy
 reset-users:
-	./venv/bin/python access.py reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
+	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
 
 # 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
 factory-reset:

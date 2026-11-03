@@ -293,9 +293,12 @@ def _extract_in_process(file_path: Path) -> str:
 
 def _limit_child_resources() -> None:
     """Cap CPU time and address space inside the parser child, where the OS supports it."""
-    import resource
+    try:
+        import resource
+    except ImportError:
+        return
 
-    cpu_seconds = PARSE_TIMEOUT_SEC + 5
+    cpu_seconds = int(PARSE_TIMEOUT_SEC) + 5
     for kind, limit in (
         (resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds)),
         (resource.RLIMIT_AS, (PARSER_MEMORY_LIMIT_BYTES, PARSER_MEMORY_LIMIT_BYTES)),

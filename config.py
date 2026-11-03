@@ -33,6 +33,8 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto")
 CHAT_MODEL = os.getenv("OLLAMA_MODEL", DEFAULT_CHAT_MODEL)
 OLLAMA_MODEL = CHAT_MODEL
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
+# A hung model server must not hang the app: every chat request gives up after this many seconds.
+OLLAMA_TIMEOUT_SEC = float(os.getenv("OLLAMA_TIMEOUT_SEC", "120"))
 
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "fastembed")
 FASTEMBED_MODEL = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")

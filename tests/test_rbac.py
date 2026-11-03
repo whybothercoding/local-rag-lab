@@ -305,7 +305,8 @@ class _DummyBM25:
         return [1.0, 2.0]
 
 
-def test_legacy_pickle_sparse_search_filters_by_clearance(tmp_path: Path):
+def test_legacy_pickle_sparse_search_is_refused_fail_closed(tmp_path: Path):
+    """Legacy .pkl files are never unpickled (preventing arbitrary code execution) and fail closed."""
     import pickle
 
     bm25_dir = tmp_path / "bm25_legacy"
@@ -325,20 +326,12 @@ def test_legacy_pickle_sparse_search_filters_by_clearance(tmp_path: Path):
             handle,
         )
 
-    pub_only = search_sparse_chunks(
-        "legacy_ws",
-        "encryption key handbook",
-        allowed_clearances=["public"],
-        base_dir=str(bm25_dir),
-    )
-    assert [r["id"] for r in pub_only] == ["id_pub"]
-
-    with_secret = search_sparse_chunks(
+    res = search_sparse_chunks(
         "legacy_ws",
         "encryption key handbook",
         allowed_clearances=["public", "secret"],
         base_dir=str(bm25_dir),
     )
-    assert {r["id"] for r in with_secret} == {"id_pub", "id_sec"}
+    assert res == []
 
 

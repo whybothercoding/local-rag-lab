@@ -450,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export":
         events = export_events()
+        record("audit_export", workspace_id="", session_id="", data={"actor": "cli", "records": len(events)})
         if args.output:
             out_path = Path(args.output)
             out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,20 +1,27 @@
 """Persistent, clearance-partitioned semantic and exact cache.
 
-Answers approved by human compliance are stored in a persistent SQLite database
-(CACHE_DB_PATH) with a thread-safe, bounded in-memory L1 cache. Cached answers
-are bound to workspace, clearance level, index manifest version, and query to prevent
-stale answers after re-indexing or unauthorized cross-clearance leakage.
+Released answers are stored in a persistent SQLite database (CACHE_DB_PATH) with a thread-safe,
+bounded LRU in-memory L1 cache. Cached answers are bound to workspace, clearance level, index
+manifest version, and query to prevent stale answers after re-indexing or unauthorized
+cross-clearance leakage. Query, answer, citations, and query vector are sealed at rest
+(AES-256-GCM, vault.py) with the row identity as additional authenticated data; rows that are not
+sealed, or that were moved between rows, are ignored. Each entry records whether a person approved it
+or an auto_approve account did, so a team that requires human review is never served an answer
+nobody reviewed.
 
 Two-stage retrieval:
 1. Exact Match: Sub-millisecond lookup across the caller's authorized clearance
    hierarchy (from caller's clearance down to public).
 2. Semantic Match: In-process vector cosine similarity against cached questions
-   in the same workspace and index version clearing the similarity threshold.
+   in the same workspace and index version clearing the similarity threshold. The two questions must
+   also carry the same numbers and negations, so "VAT in 2024" never answers "VAT in 2025".
 """
 from __future__ import annotations
 
 import array
+import collections
 import collections.abc
+import re
 from contextlib import contextmanager
 import hashlib
 import json
@@ -25,18 +32,29 @@ import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Generator, List, Optional
+from typing import Any, Generator, Optional
 
 import workspace_manager
 from access import allowed_clearances as get_allowed_clearances
 from config import CACHE_DB_PATH, RETENTION_DAYS, SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+from vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
 
 logger = logging.getLogger("semantic_cache")
 
 MAX_L1_SIZE = 2048
+# Semantic matching scans in Python, so it only looks at the newest entries of a workspace.
+MAX_SEMANTIC_CANDIDATES = 2000
 _L1_LOCK = threading.Lock()
-_L1_GENERATIONS: dict[str, str] = {}
+_L1_GENERATIONS: "collections.OrderedDict[str, str]" = collections.OrderedDict()
 _L1_CITATIONS: dict[str, list[str]] = {}
+_L1_REVIEWED: dict[str, bool] = {}
+
+_COLUMNS = (
+    "key, workspace_id, clearance, index_version, query, generation, citations_json, "
+    "query_vector, reviewed, approved_by, created_at"
+)
+_NUMBER = re.compile(r"\d+(?:[.,:/-]\d+)*")
+_NEGATIONS = frozenset({"not", "no", "never", "without", "except", "cannot", "isnt", "dont", "doesnt", "wont"})
 
 
 def _sha256(text: str) -> str:
@@ -57,6 +75,14 @@ def _index_version(ws_id: str) -> str:
 def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
     """Canonical exact cache key binding workspace, clearance, index version, and normalized query."""
     return _sha256(f"{ws_id}:{clearance}:{_index_version(ws_id)}:{query.strip().lower()}")
+
+
+def _signature(text: str) -> tuple[frozenset[str], frozenset[str]]:
+    """The numbers and negations in a question. Two questions that differ in either are not the same question."""
+    lowered = text.lower().replace("'", "")
+    numbers = frozenset(m.group(0) for m in _NUMBER.finditer(lowered))
+    words = frozenset(re.findall(r"[a-z]+", lowered))
+    return numbers, words & _NEGATIONS
 
 
 def _pack_vector(vec: list[float]) -> bytes:
@@ -89,6 +115,45 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
 
 
+# --- Sealing -----------------------------------------------------------------
+
+def _aad(key: str, workspace_id: str, clearance: str, index_version: str) -> bytes:
+    return f"cache|{key}|{workspace_id}|{clearance}|{index_version}".encode("utf-8")
+
+
+def _seal_row(key: str, workspace_id: str, clearance: str, version: str, query: str, generation: str,
+              citations: list[str], vector: bytes | None) -> tuple[str, str, str, bytes | None]:
+    aad = _aad(key, workspace_id, clearance, version)
+    return (
+        seal_text(query, aad),
+        seal_text(generation, aad),
+        seal_text(json.dumps(citations), aad),
+        seal_bytes(vector, aad) if vector else None,
+    )
+
+
+def _open_row(row: tuple) -> dict[str, Any] | None:
+    """Decrypt one cache row. Returns None for rows that are unsealed, moved, or otherwise not trustworthy."""
+    key, workspace_id, clearance, version, query, generation, cites, vector, reviewed, approved_by, created = row
+    aad = _aad(key, workspace_id, clearance, version)
+    try:
+        return {
+            "key": key,
+            "workspace_id": workspace_id,
+            "clearance": clearance,
+            "query": open_text(query, aad, allow_plaintext=False),
+            "generation": open_text(generation, aad, allow_plaintext=False),
+            "citations": json.loads(open_text(cites, aad, allow_plaintext=False)),
+            "vector": _unpack_vector(open_bytes(vector, aad, allow_plaintext=False)) if vector else [],
+            "reviewed": bool(reviewed),
+            "approved_by": approved_by or "",
+            "created_at": created,
+        }
+    except (InvalidTag, ValueError, TypeError):
+        logger.debug("Ignoring cache row %s: it failed to open", key)
+        return None
+
+
 @contextmanager
 def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, None]:
     """Context manager guaranteeing connection termination and WAL-mode configuration."""
@@ -114,6 +179,11 @@ def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, 
             );
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(semantic_cache);")}
+        if "reviewed" not in columns:
+            conn.execute("ALTER TABLE semantic_cache ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1;")
+        if "approved_by" not in columns:
+            conn.execute("ALTER TABLE semantic_cache ADD COLUMN approved_by TEXT NOT NULL DEFAULT '';")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_cache_ws_clr_ver
@@ -125,34 +195,55 @@ def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, 
         conn.close()
 
 
-def _l1_put(key: str, generation: str, citations: list[str]) -> None:
+def _retention_cutoff() -> str:
+    """Entries older than this are expired on read, not only when `make retention` runs."""
+    return (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+
+
+# --- L1 (LRU) ----------------------------------------------------------------
+
+def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = True) -> None:
     with _L1_LOCK:
-        if len(_L1_GENERATIONS) >= MAX_L1_SIZE and key not in _L1_GENERATIONS:
+        if key in _L1_GENERATIONS:
+            _L1_GENERATIONS.move_to_end(key)
+        elif len(_L1_GENERATIONS) >= MAX_L1_SIZE:
             oldest = next(iter(_L1_GENERATIONS))
             _L1_GENERATIONS.pop(oldest, None)
             _L1_CITATIONS.pop(oldest, None)
+            _L1_REVIEWED.pop(oldest, None)
         _L1_GENERATIONS[key] = generation
         _L1_CITATIONS[key] = citations
+        _L1_REVIEWED[key] = reviewed
 
 
 def _l1_get(key: str) -> tuple[bool, str, list[str]]:
     with _L1_LOCK:
         if key in _L1_GENERATIONS:
+            _L1_GENERATIONS.move_to_end(key)
             return True, _L1_GENERATIONS[key], _L1_CITATIONS.get(key, [])
     return False, "", []
+
+
+def _l1_is_reviewed(key: str) -> bool:
+    with _L1_LOCK:
+        return _L1_REVIEWED.get(key, True)
 
 
 def _l1_evict(key: str) -> None:
     with _L1_LOCK:
         _L1_GENERATIONS.pop(key, None)
         _L1_CITATIONS.pop(key, None)
+        _L1_REVIEWED.pop(key, None)
 
 
 def _l1_clear() -> None:
     with _L1_LOCK:
         _L1_GENERATIONS.clear()
         _L1_CITATIONS.clear()
+        _L1_REVIEWED.clear()
 
+
+# --- Store and lookup --------------------------------------------------------
 
 def store_cache(
     workspace_id: str,
@@ -163,51 +254,63 @@ def store_cache(
     key: str | None = None,
     db_path: str | None = None,
     compute_vector: bool = True,
+    reviewed: bool = True,
+    approved_by: str = "",
 ) -> str:
-    """Persist an approved answer into SQLite and L1 memory with optional query embedding vector."""
+    """Persist a released answer into SQLite and L1 memory with optional query embedding vector.
+
+    `reviewed` is True when a person approved the answer and False when an auto_approve account did.
+    """
     cites = list(citations or [])
     ver = _index_version(workspace_id)
     ckey = key or cache_key(workspace_id, query, clearance)
 
-    _l1_put(ckey, generation, cites)
+    _l1_put(ckey, generation, cites, reviewed)
 
-    q_blob: bytes | None = None
+    vector: bytes | None = None
     if compute_vector and query.strip():
         try:
             from embedding_provider import get_embedding_model
 
             vec = get_embedding_model().embed_query(query.strip())
             if vec:
-                q_blob = _pack_vector(vec)
+                vector = _pack_vector(vec)
         except Exception as exc:
             logger.debug("Failed computing query vector for cache: %s", exc)
 
     now = datetime.now(UTC).isoformat(timespec="seconds")
     try:
+        sealed_query, sealed_gen, sealed_cites, sealed_vec = _seal_row(
+            ckey, workspace_id, clearance, ver, query.strip(), generation, cites, vector
+        )
         with _open_db(db_path) as conn:
             conn.execute(
-                """
-                INSERT OR REPLACE INTO semantic_cache (
-                    key, workspace_id, clearance, index_version, query, generation, citations_json, query_vector, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                f"""
+                INSERT OR REPLACE INTO semantic_cache ({_COLUMNS})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
-                (
-                    ckey,
-                    workspace_id,
-                    clearance,
-                    ver,
-                    query.strip(),
-                    generation,
-                    json.dumps(cites),
-                    q_blob,
-                    now,
-                ),
+                (ckey, workspace_id, clearance, ver, sealed_query, sealed_gen, sealed_cites, sealed_vec,
+                 1 if reviewed else 0, approved_by, now),
             )
             conn.commit()
     except Exception as exc:
         logger.warning("Could not persist cache entry %s: %s", ckey, exc)
 
     return ckey
+
+
+def _hit(entry: dict[str, Any], hit_type: str, similarity: float) -> dict[str, Any]:
+    return {
+        "hit": True,
+        "hit_type": hit_type,
+        "similarity": similarity,
+        "key": entry["key"],
+        "generation": entry["generation"],
+        "citations": entry["citations"],
+        "query": entry["query"],
+        "reviewed": entry["reviewed"],
+        "approved_by": entry["approved_by"],
+    }
 
 
 def lookup_cache(
@@ -217,8 +320,13 @@ def lookup_cache(
     allowed_clearances: list[str] | None = None,
     threshold: float | None = None,
     db_path: str | None = None,
+    include_unreviewed: bool = True,
 ) -> dict[str, Any]:
-    """Two-tier lookup: hierarchical exact match (<0.2ms), then vector cosine similarity."""
+    """Two-tier lookup: hierarchical exact match, then vector cosine similarity.
+
+    With include_unreviewed=False, entries that an auto_approve account released (rather than a
+    person) are skipped, so a caller whose team requires review never gets an unreviewed answer.
+    """
     cleaned_query = query.strip()
     if not cleaned_query:
         return {"hit": False}
@@ -228,66 +336,50 @@ def lookup_cache(
         return {"hit": False}
 
     sim_threshold = threshold if threshold is not None else SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+    cutoff = _retention_cutoff()
+    curr_version = _index_version(workspace_id)
 
-    # 1. Hierarchical exact match across caller's authorized clearance levels (highest to lowest)
-    for clr in reversed(authorized):
-        candidate_key = cache_key(workspace_id, cleaned_query, clr)
-
+    # 1. Hierarchical exact match across the caller's authorized clearance levels (highest to lowest)
+    exact_keys = {clr: cache_key(workspace_id, cleaned_query, clr) for clr in reversed(authorized)}
+    for candidate_key in exact_keys.values():
         hit, gen, cites = _l1_get(candidate_key)
-        if hit:
+        if hit and (include_unreviewed or _l1_is_reviewed(candidate_key)):
             return {
-                "hit": True,
-                "hit_type": "exact",
-                "similarity": 1.0,
-                "key": candidate_key,
-                "generation": gen,
-                "citations": cites,
-                "query": cleaned_query,
+                "hit": True, "hit_type": "exact", "similarity": 1.0, "key": candidate_key,
+                "generation": gen, "citations": cites, "query": cleaned_query,
+                "reviewed": _l1_is_reviewed(candidate_key), "approved_by": "",
             }
 
-        try:
-            with _open_db(db_path) as conn:
-                row = conn.execute(
-                    "SELECT generation, citations_json, query FROM semantic_cache WHERE key = ?;",
-                    (candidate_key,),
-                ).fetchone()
-                if row:
-                    gen, cites_json, orig_q = row
-                    cites = json.loads(cites_json) if cites_json else []
-                    _l1_put(candidate_key, gen, cites)
-                    return {
-                        "hit": True,
-                        "hit_type": "exact",
-                        "similarity": 1.0,
-                        "key": candidate_key,
-                        "generation": gen,
-                        "citations": cites,
-                        "query": orig_q,
-                    }
-        except Exception as exc:
-            logger.debug("Exact cache lookup error: %s", exc)
-
-    # 2. Semantic vector similarity search across matching workspace and index version
-    curr_version = _index_version(workspace_id)
-    candidates: list[tuple[str, str, str, str, bytes]] = []
     try:
         with _open_db(db_path) as conn:
+            for clr, candidate_key in exact_keys.items():
+                row = conn.execute(
+                    f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ? AND created_at >= ?;",
+                    (candidate_key, cutoff),
+                ).fetchone()
+                entry = _open_row(row) if row else None
+                if entry and entry["clearance"] == clr and (include_unreviewed or entry["reviewed"]):
+                    _l1_put(candidate_key, entry["generation"], entry["citations"], entry["reviewed"])
+                    return _hit(entry, "exact", 1.0)
+
+            # 2. Semantic vector similarity across the matching workspace and index version
             placeholders = ", ".join("?" for _ in authorized)
-            sql = f"""
-                SELECT key, query, generation, citations_json, query_vector
-                FROM semantic_cache
+            rows = conn.execute(
+                f"""
+                SELECT {_COLUMNS} FROM semantic_cache
                 WHERE workspace_id = ? AND index_version = ? AND clearance IN ({placeholders})
-                  AND query_vector IS NOT NULL;
-            """
-            params = [workspace_id, curr_version] + list(authorized)
-            rows = conn.execute(sql, params).fetchall()
-            for r in rows:
-                if r[4]:
-                    candidates.append(r)
+                  AND query_vector IS NOT NULL AND created_at >= ?
+                ORDER BY created_at DESC LIMIT ?;
+                """,
+                [workspace_id, curr_version, *authorized, cutoff, MAX_SEMANTIC_CANDIDATES],
+            ).fetchall()
     except Exception as exc:
-        logger.debug("Semantic cache candidate fetch error: %s", exc)
+        logger.debug("Cache lookup error: %s", exc)
         return {"hit": False}
 
+    candidates = [e for e in (_open_row(r) for r in rows) if e and e["vector"]]
+    if not include_unreviewed:
+        candidates = [e for e in candidates if e["reviewed"]]
     if not candidates:
         return {"hit": False}
 
@@ -301,87 +393,61 @@ def lookup_cache(
         logger.debug("Embedding generation for semantic cache lookup failed: %s", exc)
         return {"hit": False}
 
-    best_match: Optional[dict[str, Any]] = None
+    query_signature = _signature(cleaned_query)
+    best_entry: Optional[dict[str, Any]] = None
     best_sim = -1.0
-
-    for cand_key, cand_query, cand_gen, cand_cites_json, cand_blob in candidates:
-        cand_vec = _unpack_vector(cand_blob)
-        if not cand_vec:
+    for entry in candidates:
+        if _signature(entry["query"]) != query_signature:
             continue
-        sim = _cosine_similarity(q_vec, cand_vec)
+        sim = _cosine_similarity(q_vec, entry["vector"])
         if sim > best_sim:
-            best_sim = sim
-            cites = json.loads(cand_cites_json) if cand_cites_json else []
-            best_match = {
-                "hit": True,
-                "hit_type": "semantic",
-                "similarity": round(float(sim), 4),
-                "key": cand_key,
-                "generation": cand_gen,
-                "citations": cites,
-                "query": cand_query,
-            }
+            best_sim, best_entry = sim, entry
 
-    if best_match and best_sim >= sim_threshold:
-        return best_match
-
+    if best_entry is not None and best_sim >= sim_threshold:
+        return _hit(best_entry, "semantic", round(float(best_sim), 4))
     return {"hit": False}
+
+
+def _delete_where(sql_select: str, sql_delete: str, params: tuple, db_path: str | None, label: str) -> int:
+    removed = 0
+    try:
+        with _open_db(db_path) as conn:
+            for row in conn.execute(sql_select, params).fetchall():
+                _l1_evict(row[0])
+            removed = conn.execute(sql_delete, params).rowcount
+            conn.commit()
+    except Exception as exc:
+        logger.debug("Error %s: %s", label, exc)
+    return removed
 
 
 def prune_stale_cache(workspace_id: str, db_path: str | None = None) -> int:
     """Evict cached entries whose index_version does not match current workspace manifest."""
-    curr_ver = _index_version(workspace_id)
-    removed = 0
-    try:
-        with _open_db(db_path) as conn:
-            rows = conn.execute(
-                "SELECT key FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
-                (workspace_id, curr_ver),
-            ).fetchall()
-            for r in rows:
-                _l1_evict(r[0])
-            cursor = conn.execute(
-                "DELETE FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
-                (workspace_id, curr_ver),
-            )
-            removed = cursor.rowcount
-            conn.commit()
-    except Exception as exc:
-        logger.debug("Error pruning stale cache for %s: %s", workspace_id, exc)
-    return removed
+    params = (workspace_id, _index_version(workspace_id))
+    return _delete_where(
+        "SELECT key FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
+        "DELETE FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
+        params, db_path, f"pruning stale cache for {workspace_id}",
+    )
 
 
 def prune_cache(retention_days: int = RETENTION_DAYS, db_path: str | None = None, now: datetime | None = None) -> int:
     """Prune cache entries older than the retention threshold."""
     cutoff = ((now or datetime.now(UTC)) - timedelta(days=retention_days)).isoformat(timespec="seconds")
-    removed = 0
-    try:
-        with _open_db(db_path) as conn:
-            rows = conn.execute("SELECT key FROM semantic_cache WHERE created_at < ?;", (cutoff,)).fetchall()
-            for r in rows:
-                _l1_evict(r[0])
-            cursor = conn.execute("DELETE FROM semantic_cache WHERE created_at < ?;", (cutoff,))
-            removed = cursor.rowcount
-            conn.commit()
-    except Exception as exc:
-        logger.debug("Error pruning cache by retention: %s", exc)
-    return removed
+    return _delete_where(
+        "SELECT key FROM semantic_cache WHERE created_at < ?;",
+        "DELETE FROM semantic_cache WHERE created_at < ?;",
+        (cutoff,), db_path, "pruning cache by retention",
+    )
 
 
 def clear_workspace_cache(workspace_id: str, db_path: str | None = None) -> None:
     """Evict all cached entries belonging to a single workspace."""
-    try:
-        with _open_db(db_path) as conn:
-            rows = conn.execute(
-                "SELECT key FROM semantic_cache WHERE workspace_id = ?;",
-                (workspace_id,),
-            ).fetchall()
-            for r in rows:
-                _l1_evict(r[0])
-            conn.execute("DELETE FROM semantic_cache WHERE workspace_id = ?;", (workspace_id,))
-            conn.commit()
-    except Exception as exc:
-        logger.debug("Error clearing workspace cache for %s: %s", workspace_id, exc)
+    _delete_where(
+        "SELECT key FROM semantic_cache WHERE workspace_id = ?;",
+        "DELETE FROM semantic_cache WHERE workspace_id = ?;",
+        (workspace_id,), db_path, f"clearing workspace cache for {workspace_id}",
+    )
 
 
 def clear_cache(db_path: str | None = None) -> None:
@@ -422,6 +488,11 @@ def cache_stats(db_path: str | None = None) -> dict[str, Any]:
     }
 
 
+def _fetch_entry(conn: sqlite3.Connection, key: str) -> dict[str, Any] | None:
+    row = conn.execute(f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
+    return _open_row(row) if row else None
+
+
 class PersistentSemanticCache(collections.abc.MutableMapping):
     """Dict-like proxy providing backward-compatible access to SEMANTIC_CACHE."""
 
@@ -431,10 +502,10 @@ class PersistentSemanticCache(collections.abc.MutableMapping):
             return gen
         try:
             with _open_db() as conn:
-                row = conn.execute("SELECT generation FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
-                if row:
-                    _l1_put(key, row[0], [])
-                    return row[0]
+                entry = _fetch_entry(conn, key)
+                if entry:
+                    _l1_put(key, entry["generation"], entry["citations"], entry["reviewed"])
+                    return entry["generation"]
         except Exception:
             pass
         raise KeyError(key)
@@ -442,15 +513,12 @@ class PersistentSemanticCache(collections.abc.MutableMapping):
     def __setitem__(self, key: str, value: Any) -> None:
         _l1_put(key, str(value), [])
         try:
+            sealed_query, sealed_gen, sealed_cites, _ = _seal_row(key, "", "public", "", "", str(value), [], None)
             with _open_db() as conn:
                 now = datetime.now(UTC).isoformat(timespec="seconds")
                 conn.execute(
-                    """
-                    INSERT OR REPLACE INTO semantic_cache (
-                        key, workspace_id, clearance, index_version, query, generation, citations_json, query_vector, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-                    """,
-                    (key, "", "public", "", "", str(value), "[]", None, now),
+                    f"INSERT OR REPLACE INTO semantic_cache ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                    (key, "", "public", "", sealed_query, sealed_gen, sealed_cites, None, 1, "", now),
                 )
                 conn.commit()
         except Exception as exc:
@@ -511,27 +579,34 @@ class PersistentCitationsCache(collections.abc.MutableMapping):
                 return _L1_CITATIONS[key]
         try:
             with _open_db() as conn:
-                row = conn.execute("SELECT citations_json FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
-                if row and row[0]:
-                    cites = json.loads(row[0])
+                entry = _fetch_entry(conn, key)
+                if entry and entry["citations"]:
                     with _L1_LOCK:
-                        _L1_CITATIONS[key] = cites
-                    return cites
+                        _L1_CITATIONS[key] = entry["citations"]
+                    return entry["citations"]
         except Exception:
             pass
         raise KeyError(key)
+
+    def _rewrite(self, key: str, cites: list[str]) -> None:
+        with _open_db() as conn:
+            row = conn.execute(f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
+            entry = _open_row(row) if row else None
+            if entry is None:
+                return
+            aad = _aad(key, row[1], row[2], row[3])
+            conn.execute(
+                "UPDATE semantic_cache SET citations_json = ? WHERE key = ?;",
+                (seal_text(json.dumps(cites), aad), key),
+            )
+            conn.commit()
 
     def __setitem__(self, key: str, value: list[str]) -> None:
         cites = list(value)
         with _L1_LOCK:
             _L1_CITATIONS[key] = cites
         try:
-            with _open_db() as conn:
-                conn.execute(
-                    "UPDATE semantic_cache SET citations_json = ? WHERE key = ?;",
-                    (json.dumps(cites), key),
-                )
-                conn.commit()
+            self._rewrite(key, cites)
         except Exception as exc:
             logger.debug("PersistentCitationsCache setitem error: %s", exc)
 
@@ -539,12 +614,7 @@ class PersistentCitationsCache(collections.abc.MutableMapping):
         with _L1_LOCK:
             _L1_CITATIONS.pop(key, None)
         try:
-            with _open_db() as conn:
-                conn.execute(
-                    "UPDATE semantic_cache SET citations_json = '[]' WHERE key = ?;",
-                    (key,),
-                )
-                conn.commit()
+            self._rewrite(key, [])
         except Exception:
             pass
 

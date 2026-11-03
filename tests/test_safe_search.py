@@ -1,11 +1,12 @@
 import os
 import pickle
+import sqlite3
 from pathlib import Path
 import pytest
-from rank_bm25 import BM25Okapi
 
 from embedding_provider import LocalFastEmbeddings, get_embedding_model
 from sparse_search import (
+    SparseIndexError,
     index_sparse_chunks,
     search_sparse_chunks,
     delete_sparse_index,
@@ -56,31 +57,28 @@ def test_sqlite_fts5_index_and_search(tmp_path: Path):
     assert not has_sparse_index(ws_id, base_dir=str(tmp_path))
 
 
-def test_sparse_search_legacy_pickle_fallback(tmp_path: Path):
+def test_sparse_search_refuses_legacy_pickle_and_cleans_up(tmp_path: Path):
     ws_id = "legacy_ws"
-    chunks = [
-        "Audit log retention is seven years.",
-        "Password expiration interval is 90 days.",
-    ]
-    tokenized = [c.lower().split() for c in chunks]
-    bm25 = BM25Okapi(tokenized)
-    data = {
-        "bm25": bm25,
-        "chunks": chunks,
-        "ids": ["leg_1", "leg_2"],
-        "metadatas": [{"source": "audit.txt"}, {"source": "auth.txt"}],
-    }
-
     pkl_path = tmp_path / f"{ws_id}.pkl"
     with open(pkl_path, "wb") as f:
-        pickle.dump(data, f)
+        pickle.dump({"chunks": ["Audit log retention is seven years."]}, f)
 
-    assert has_sparse_index(ws_id, base_dir=str(tmp_path))
-
-    results = search_sparse_chunks(ws_id, "audit log retention", top_n=1, base_dir=str(tmp_path))
-    assert len(results) == 1
-    assert results[0]["id"] == "leg_1"
-    assert "seven years" in results[0]["content"]
-
-    delete_sparse_index(ws_id, base_dir=str(tmp_path))
+    # .pkl is never treated as an active sparse index and is never unpickled
     assert not has_sparse_index(ws_id, base_dir=str(tmp_path))
+    assert search_sparse_chunks(ws_id, "audit log retention", top_n=1, base_dir=str(tmp_path)) == []
+
+    # delete_sparse_index still purges any leftover .pkl file
+    delete_sparse_index(ws_id, base_dir=str(tmp_path))
+    assert not pkl_path.exists()
+
+
+def test_sparse_search_missing_clearance_column_raises_sparse_index_error(tmp_path: Path):
+    ws_id = "old_schema_ws"
+    db_path = tmp_path / f"{ws_id}.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, source UNINDEXED, content);")
+        conn.execute("INSERT INTO chunks_fts VALUES ('c1', 'doc.md', 'secret content');")
+        conn.commit()
+
+    with pytest.raises(SparseIndexError, match="no clearance column"):
+        search_sparse_chunks(ws_id, "secret content", base_dir=str(tmp_path))

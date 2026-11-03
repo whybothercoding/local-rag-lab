@@ -73,12 +73,18 @@ def test_delete_workspace(tmp_path: Path, monkeypatch):
 
 def test_workspace_manager_cli(tmp_path: Path, monkeypatch, capsys):
     import workspace_manager
+    from conftest import TEST_PASSWORD
 
     monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr("workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
     monkeypatch.setattr("workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr("access.getpass.getpass", lambda _="": TEST_PASSWORD)
 
-    assert workspace_manager.main(["create", "HR Policy"]) == 0
+    # Without --as or with non-admin, create/delete is refused
+    assert workspace_manager.main(["create", "HR Policy"]) == 1
+    assert workspace_manager.main(["--as", "carol", "create", "HR Policy"]) == 1
+
+    assert workspace_manager.main(["--as", "alice", "create", "HR Policy"]) == 0
     assert "hr_policy" in list_workspaces()
 
     assert workspace_manager.main(["list"]) == 0
@@ -87,11 +93,11 @@ def test_workspace_manager_cli(tmp_path: Path, monkeypatch, capsys):
 
     # Cancelled delete keeps workspace
     monkeypatch.setattr("builtins.input", lambda _: "n")
-    assert workspace_manager.main(["delete", "hr_policy"]) == 0
+    assert workspace_manager.main(["--as", "alice", "delete", "hr_policy"]) == 0
     assert "hr_policy" in list_workspaces()
 
     # Confirmed delete (-y) purges workspace
-    assert workspace_manager.main(["delete", "hr_policy", "-y"]) == 0
+    assert workspace_manager.main(["--as", "alice", "delete", "hr_policy", "-y"]) == 0
     assert "hr_policy" not in list_workspaces()
 
     # Status check exits 0 when models and audit log are intact

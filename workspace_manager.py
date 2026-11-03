@@ -3,6 +3,8 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import chromadb
@@ -30,6 +32,7 @@ logger = logging.getLogger("workspace_manager")
 
 # `ws_<id>__build` must stay inside Chroma's 63-character collection name limit.
 _MAX_WORKSPACE_ID = 48
+_TEMP_SUFFIXES = ("__build", "__old")
 
 
 def sanitize_workspace_id(raw_name: str) -> str:
@@ -78,23 +81,21 @@ def list_workspaces() -> List[str]:
     ensure_base_dirs()
     workspaces = set()
 
-    # 1. Discover collections from ChromaDB
+    # 1. Discover collections from ChromaDB (not the temporary __build/__old copies used while re-indexing)
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         for col in client.list_collections():
             name = getattr(col, "name", str(col))
-            if name.startswith("ws_"):
+            if name.startswith("ws_") and not name.endswith(_TEMP_SUFFIXES):
                 workspaces.add(name[3:])
     except Exception as exc:
         logger.warning("Could not list Chroma collections: %s", exc)
 
-    # 2. Discover serialized sparse indices (SQLite FTS5 and legacy PKL)
+    # 2. Discover SQLite FTS5 keyword indices
     if os.path.exists(BM25_DIR):
         for f in os.listdir(BM25_DIR):
-            if f.endswith(".db") and not f.endswith(("-wal", "-shm")):
+            if f.endswith(".db"):
                 workspaces.add(f[:-3])
-            elif f.endswith(".pkl"):
-                workspaces.add(f[:-4])
 
     # 3. Discover staged upload folders
     if os.path.exists(UPLOADS_DIR):
@@ -153,10 +154,21 @@ def sync_all_workspaces(
     return results
 
 
-def create_workspace(raw_name: str) -> str:
+def _audit_workspace(event: str, ws_id: str, actor: str) -> None:
+    from audit import record
+
+    record(event, workspace_id=ws_id, session_id="", data={"actor": actor})
+
+
+def create_workspace(raw_name: str, actor: str | None = None) -> str:
     """Initializes a new empty workspace staging area and vector collection.
-    Returns the sanitized workspace ID, or empty string on invalid name.
+
+    Returns the sanitized workspace ID, or empty string on invalid name. With `actor`, that account
+    must be an administrator; the change is recorded in the audit log.
     """
+    from access import require_admin
+
+    who = require_admin(actor) if actor is not None else "system"
     ensure_base_dirs()
     ws_id = sanitize_workspace_id(raw_name)
     if not ws_id:
@@ -168,32 +180,44 @@ def create_workspace(raw_name: str) -> str:
     # Initialize empty collection in ChromaDB
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
-        client.get_or_create_collection(name=f"ws_{ws_id}")
+        client.get_or_create_collection(name=f"ws_{ws_id}", metadata={"hnsw:space": "cosine"})
     except Exception as exc:
         logger.warning("Could not create Chroma collection for %s: %s", ws_id, exc)
 
+    _audit_workspace("workspace_created", ws_id, who)
     return ws_id
 
 
-def delete_workspace(raw_name: str) -> bool:
+def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
     """Completely purges a workspace across:
-    1. ChromaDB vector collection
-    2. BM25 pickle index
-    3. Uploaded source files
-    4. LangGraph PostgreSQL checkpoint history for matching threads
+    1. ChromaDB vector collection (and any leftover re-index copies)
+    2. SQLite FTS5 keyword index
+    3. Cached answers and the index manifest
+    4. Uploaded source files
+    5. LangGraph checkpoint history for matching threads
+    6. Per-account grants for the workspace
+
+    With `actor`, that account must be an administrator. The deletion is recorded in the audit log.
     """
+    from access import remove_workspace_grants, require_admin
+
+    who = require_admin(actor) if actor is not None else "system"
     ws_id = sanitize_workspace_id(raw_name)
     if not ws_id:
         return False
 
-    # 1. Delete Chroma collection
+    # 1. Delete Chroma collections
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
-        client.delete_collection(name=f"ws_{ws_id}")
+        for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
+            try:
+                client.delete_collection(name=name)
+            except Exception as exc:
+                logger.debug("Collection %s not deleted: %s", name, exc)
     except Exception as exc:
         logger.warning("Could not delete Chroma collection for %s: %s", ws_id, exc)
 
-    # 2. Delete sparse index (SQLite FTS5 and legacy PKL)
+    # 2. Delete sparse index (SQLite FTS5 and any leftover legacy PKL)
     delete_sparse_index(ws_id, base_dir=BM25_DIR)
 
     # 3. Delete semantic cache entries for this workspace
@@ -211,12 +235,12 @@ def delete_workspace(raw_name: str) -> bool:
         except OSError:
             pass
 
-    # 4. Delete uploaded source files
+    # 5. Delete uploaded source files
     upload_path = os.path.join(UPLOADS_DIR, ws_id)
     if os.path.exists(upload_path):
         shutil.rmtree(upload_path, ignore_errors=True)
 
-    # 4. Clean up checkpoint records for this workspace prefix
+    # 6. Clean up checkpoint records for this workspace prefix
     escaped_ws = ws_id.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
     like_pattern = f"ui-{escaped_ws}-%"
     if is_postgres_uri(DB_URI):
@@ -233,8 +257,7 @@ def delete_workspace(raw_name: str) -> bool:
         try:
             sqlite_db = get_sqlite_path(DB_URI)
             if os.path.exists(sqlite_db):
-                import sqlite3
-                with sqlite3.connect(sqlite_db) as conn:
+                with closing(sqlite3.connect(sqlite_db)) as conn:
                     tables = {
                         row[0]
                         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
@@ -243,24 +266,17 @@ def delete_workspace(raw_name: str) -> bool:
                         conn.execute("DELETE FROM checkpoints WHERE thread_id LIKE ? ESCAPE '\\';", (like_pattern,))
                     if "writes" in tables:
                         conn.execute("DELETE FROM writes WHERE thread_id LIKE ? ESCAPE '\\';", (like_pattern,))
+                    conn.commit()
         except Exception as exc:
             logger.warning("Could not delete SQLite checkpoints for %s: %s", ws_id, exc)
 
-    # 5. Remove stale grants for this workspace from access policy
+    # 7. Remove stale grants for this workspace from the access policy
     try:
-        from access import load_policy, save_policy
-        policy = load_policy()
-        changed = False
-        for user_info in policy.get("users", {}).values():
-            grants = user_info.get("grants", {})
-            if ws_id in grants:
-                del grants[ws_id]
-                changed = True
-        if changed:
-            save_policy(policy)
+        remove_workspace_grants(ws_id)
     except Exception as exc:
-        logger.debug("Could not prune grants for %s: %s", ws_id, exc)
+        logger.warning("Could not prune grants for %s: %s", ws_id, exc)
 
+    _audit_workspace("workspace_deleted", ws_id, who)
     return True
 
 
@@ -419,17 +435,38 @@ def print_status() -> int:
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
+    from access import PolicyIntegrityError, authenticate_admin, has_admin
+
+    signer_parent = argparse.ArgumentParser(add_help=False)
+    signer_parent.add_argument(
+        "--as",
+        dest="signer",
+        default=argparse.SUPPRESS,
+        metavar="ADMIN",
+        help="Administrator performing the workspace change (prompts for password).",
+    )
 
     parser = argparse.ArgumentParser(description="Manage multi-tenant workspaces and inspect system status.")
+    parser.add_argument(
+        "--as",
+        dest="signer",
+        default=None,
+        metavar="ADMIN",
+        help="Administrator performing the workspace change (prompts for password).",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="List all workspaces and their indexing statistics")
     sub.add_parser("status", help="Show system health, model integrity, workspaces, and audit status")
 
-    create_p = sub.add_parser("create", help="Create a new workspace")
+    create_p = sub.add_parser("create", parents=[signer_parent], help="Create a new workspace")
     create_p.add_argument("workspace", help="Workspace name")
 
-    delete_p = sub.add_parser("delete", help="Permanently delete a workspace, its indexes, checkpoints, and grants")
+    delete_p = sub.add_parser(
+        "delete",
+        parents=[signer_parent],
+        help="Permanently delete a workspace, its indexes, checkpoints, and grants",
+    )
     delete_p.add_argument("workspace", help="Workspace name")
     delete_p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
 
@@ -449,27 +486,40 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{ws}: {st['files']} file(s), {st['chunks']} chunk(s) [{fts}]")
         return 0
 
-    if args.command == "create":
-        ws_id = create_workspace(args.workspace)
-        if not ws_id:
-            print("Error: Invalid workspace name.", file=sys.stderr)
-            return 1
-        print(f"Created workspace '{ws_id}'.")
-        return 0
+    try:
+        actor: str | None = None
+        if args.signer:
+            actor = authenticate_admin(args.signer)
+        elif has_admin():
+            raise PermissionError(
+                "Creating or deleting workspaces needs an administrator. "
+                "Re-run with --as <admin account> (make targets: ADMIN=<account>)."
+            )
 
-    if args.command == "delete":
-        ws_id = sanitize_workspace_id(args.workspace)
-        if not ws_id:
-            print("Error: Invalid workspace name.", file=sys.stderr)
-            return 1
-        if not args.yes:
-            ans = input(f"Are you sure you want to permanently delete workspace '{ws_id}'? [y/N]: ").strip().lower()
-            if ans not in ("y", "yes"):
-                print("Deletion cancelled.")
-                return 0
-        delete_workspace(ws_id)
-        print(f"Deleted workspace '{ws_id}'.")
-        return 0
+        if args.command == "create":
+            ws_id = create_workspace(args.workspace, actor=actor)
+            if not ws_id:
+                print("Error: Invalid workspace name.", file=sys.stderr)
+                return 1
+            print(f"Created workspace '{ws_id}'.")
+            return 0
+
+        if args.command == "delete":
+            ws_id = sanitize_workspace_id(args.workspace)
+            if not ws_id:
+                print("Error: Invalid workspace name.", file=sys.stderr)
+                return 1
+            if not args.yes:
+                ans = input(f"Are you sure you want to permanently delete workspace '{ws_id}'? [y/N]: ").strip().lower()
+                if ans not in ("y", "yes"):
+                    print("Deletion cancelled.")
+                    return 0
+            delete_workspace(ws_id, actor=actor)
+            print(f"Deleted workspace '{ws_id}'.")
+            return 0
+    except (ValueError, PolicyIntegrityError, PermissionError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     return 0
 

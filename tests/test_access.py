@@ -56,13 +56,24 @@ def test_authentication_accepts_only_the_right_password(policy_path):
 
 
 def test_authorization_is_default_deny(policy_path):
+    from access import reset_grant, set_default_permissions
+
+    # Out-of-the-box v2 default: query + auto_approve enabled, review disabled
     add_user("erin", TEST_PASSWORD, path=policy_path)
+    assert authorize("erin", "accounting", "query", path=policy_path)
+    assert authorize("erin", "accounting", "auto_approve", path=policy_path)
+    assert not authorize("erin", "accounting", "review", path=policy_path)
+
+    # Admin can switch global default to strict default-deny ([])
+    set_default_permissions([], path=policy_path)
     assert not authorize("erin", "accounting", "query", path=policy_path)
 
     set_grant("erin", "accounting", ["query"], path=policy_path)
     assert authorize("erin", "accounting", "query", path=policy_path)
     assert not authorize("erin", "accounting", "review", path=policy_path)
     assert not authorize("erin", "strategy", "query", path=policy_path)
+    reset_grant("erin", "accounting", path=policy_path)
+    assert not authorize("erin", "accounting", "query", path=policy_path)
 
 
 def test_revoke_removes_access(policy_path):
@@ -94,7 +105,18 @@ def test_policy_file_is_owner_only_and_hashes_are_not_listed(policy_path):
 
 
 def test_allowed_workspaces_includes_query_and_review_grants(policy_path):
+    from access import set_default_permissions
+
     add_user("erin", TEST_PASSWORD, path=policy_path)
+    # With out-of-the-box defaults (query + auto_approve), all workspaces are allowed
+    assert allowed_workspaces("erin", ["accounting", "strategy", "legal"], path=policy_path) == [
+        "accounting",
+        "strategy",
+        "legal",
+    ]
+
+    # When defaults are empty or a workspace is explicitly denied, only granted workspaces appear
+    set_default_permissions([], path=policy_path)
     set_grant("erin", "accounting", ["query"], path=policy_path)
     set_grant("erin", "strategy", ["review"], path=policy_path)
     assert allowed_workspaces("erin", ["accounting", "strategy", "legal"], path=policy_path) == ["accounting", "strategy"]
@@ -337,36 +359,49 @@ def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
     import access
 
     monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr("access.getpass.getpass", lambda _="": TEST_PASSWORD)
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path)
+
+    # Without --as, CLI refuses mutation
+    assert access.main(["delete-user", "erin", "-y"]) == 1
 
     # Cancelled deletion
     monkeypatch.setattr("builtins.input", lambda _: "n")
-    ret = access.main(["delete-user", "erin"])
+    ret = access.main(["--as", "alice", "delete-user", "erin"])
     assert ret == 0
     assert "erin" in [u["username"] for u in list_users(path=policy_path)]
 
     # Confirmed deletion with -y
-    ret = access.main(["delete-user", "erin", "-y"])
+    ret = access.main(["--as", "alice", "delete-user", "erin", "-y"])
     assert ret == 0
     assert "erin" not in [u["username"] for u in list_users(path=policy_path)]
 
+    # Cannot delete the last administrator
+    assert access.main(["--as", "alice", "delete-user", "alice", "-y"]) == 1
+
     # Reset users with -y
     add_user("frank", TEST_PASSWORD, path=policy_path)
-    ret = access.main(["reset-users", "-y"])
+    ret = access.main(["--as", "alice", "reset-users", "-y"])
     assert ret == 0
     assert list_users(path=policy_path) == []
 
 
 def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, capsys):
     import access
-    from access import load_policy
+    from access import authorize, load_policy
 
     monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr("access.getpass.getpass", lambda _="": TEST_PASSWORD)
     monkeypatch.setattr("workspace_manager.list_workspaces", lambda: ["accounting", "strategy", "legal"])
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path)
 
+    # Non-admin --as is rejected
+    assert access.main(["--as", "erin", "grant", "erin", "accounting", "--perms", "query"]) == 1
+
     # 1. Comma-separated grant
-    ret = access.main(["grant", "erin", "accounting,strategy", "--perms", "query,review"])
+    ret = access.main(["--as", "alice", "grant", "erin", "accounting,strategy", "--perms", "query,review"])
     assert ret == 0
     policy = load_policy(path=policy_path)
     assert policy["users"]["erin"]["grants"]["accounting"] == ["query", "review"]
@@ -374,29 +409,35 @@ def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, caps
     assert "legal" not in policy["users"]["erin"]["grants"]
 
     # 2. Grant all
-    ret = access.main(["grant", "erin", "all", "--perms", "query"])
+    ret = access.main(["--as", "alice", "grant", "erin", "all", "--perms", "query"])
     assert ret == 0
     policy = load_policy(path=policy_path)
     assert set(policy["users"]["erin"]["grants"].keys()) == {"accounting", "strategy", "legal"}
     assert policy["users"]["erin"]["grants"]["legal"] == ["query"]
+    assert policy["users"]["erin"]["default_permissions"] == ["query"]
 
-    # 3. Comma-separated revoke
-    ret = access.main(["revoke", "erin", "accounting,strategy"])
+    # 3. Comma-separated revoke (sets explicit denial [] so defaults don't re-grant access)
+    ret = access.main(["--as", "alice", "revoke", "erin", "accounting,strategy"])
     assert ret == 0
     policy = load_policy(path=policy_path)
-    assert "accounting" not in policy["users"]["erin"]["grants"]
-    assert "strategy" not in policy["users"]["erin"]["grants"]
-    assert "legal" in policy["users"]["erin"]["grants"]
+    assert policy["users"]["erin"]["grants"]["accounting"] == []
+    assert policy["users"]["erin"]["grants"]["strategy"] == []
+    assert not authorize("erin", "accounting", "query", path=policy_path)
+    assert not authorize("erin", "strategy", "query", path=policy_path)
+    assert authorize("erin", "legal", "query", path=policy_path)
 
     # 4. Revoke all
-    ret = access.main(["revoke", "erin", "all"])
+    ret = access.main(["--as", "alice", "revoke", "erin", "all"])
     assert ret == 0
     policy = load_policy(path=policy_path)
     assert policy["users"]["erin"]["grants"] == {}
+    assert policy["users"]["erin"]["default_permissions"] == []
+    assert not authorize("erin", "legal", "query", path=policy_path)
+    assert not authorize("erin", "future_ws", "query", path=policy_path)
 
     # 5. Grant/revoke on nonexistent user returns error code 1 even for 'all'
-    assert access.main(["grant", "ghost", "all"]) == 1
-    assert access.main(["revoke", "ghost", "all"]) == 1
+    assert access.main(["--as", "alice", "grant", "ghost", "all"]) == 1
+    assert access.main(["--as", "alice", "revoke", "ghost", "all"]) == 1
 
 
 def test_cli_reviewer_rejects_empty_account_name(mocker, thread_state):
@@ -555,10 +596,19 @@ def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
 def test_auto_approve_permission_and_grant(policy_path):
     from access import add_user, allowed_workspaces, authorize, set_grant
 
+    # Out of the box, new users get query + auto_approve by default
     add_user("dave", TEST_PASSWORD, path=policy_path)
+    assert authorize("dave", "accounting", "query", path=policy_path)
+    assert authorize("dave", "accounting", "auto_approve", path=policy_path)
+    assert not authorize("dave", "accounting", "review", path=policy_path)
+
+    # Admin can disable auto_approve on a workspace (requiring human review) or deny ops
+    set_grant("dave", "accounting", ["query"], path=policy_path)
+    set_grant("dave", "ops", [], path=policy_path)
+    assert authorize("dave", "accounting", "query", path=policy_path)
     assert not authorize("dave", "accounting", "auto_approve", path=policy_path)
 
-    # Test granting with hyphen or underscore
+    # Test granting auto_approve explicitly with hyphen or underscore
     set_grant("dave", "accounting", ["query", "auto-approve"], path=policy_path)
     assert authorize("dave", "accounting", "query", path=policy_path)
     assert authorize("dave", "accounting", "auto_approve", path=policy_path)
@@ -567,6 +617,174 @@ def test_auto_approve_permission_and_grant(policy_path):
     workspaces = allowed_workspaces("dave", ["accounting", "ops"], path=policy_path)
     assert "accounting" in workspaces
     assert "ops" not in workspaces
+
+
+def test_admin_only_enforcement_and_last_admin_protection(policy_path):
+    from access import (
+        add_user,
+        clear_user_permissions_override,
+        delete_user,
+        revoke_sessions,
+        set_admin,
+        set_default_permissions,
+        set_grant,
+        set_password,
+        set_user_clearance,
+        set_user_permissions_everywhere,
+    )
+
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
+    add_user("bob", TEST_PASSWORD, admin=False, path=policy_path, actor="alice")
+
+    # Non-admin actor is refused on every administrative mutation
+    with pytest.raises(PermissionError, match="not an administrator"):
+        add_user("charlie", TEST_PASSWORD, path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_grant("bob", "default", ["query", "review"], path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_user_permissions_everywhere("bob", ["query", "review"], path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        clear_user_permissions_override("bob", path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_default_permissions(["query"], path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_user_clearance("bob", "secret", path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_admin("bob", True, path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        set_password("alice", "another-valid-password-123", path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        revoke_sessions("alice", path=policy_path, actor="bob")
+    with pytest.raises(PermissionError, match="not an administrator"):
+        delete_user("alice", path=policy_path, actor="bob")
+
+    # A user can revoke their own sessions on sign-out
+    revoke_sessions("bob", path=policy_path, actor="bob")
+
+    # Last administrator cannot be deleted or demoted
+    with pytest.raises(ValueError, match="last administrator"):
+        delete_user("alice", path=policy_path, actor="alice")
+    with pytest.raises(ValueError, match="last administrator"):
+        set_admin("alice", False, path=policy_path, actor="alice")
+
+
+def test_token_revocation_on_password_change_delete_and_recreate(policy_path):
+    from access import add_user, delete_user, issue_token, revoke_sessions, set_password, verify_token
+
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
+    add_user("erin", TEST_PASSWORD, path=policy_path, actor="alice")
+    tok1 = issue_token("erin", path=policy_path)
+    assert verify_token(tok1, path=policy_path) == "erin"
+
+    # 1. Explicit session revocation invalidates existing token
+    revoke_sessions("erin", path=policy_path, actor="alice")
+    assert verify_token(tok1, path=policy_path) == ""
+
+    # 2. Password change invalidates existing token
+    tok2 = issue_token("erin", path=policy_path)
+    assert verify_token(tok2, path=policy_path) == "erin"
+    set_password("erin", "new-strong-password-999", path=policy_path, actor="alice")
+    assert verify_token(tok2, path=policy_path) == ""
+
+    # 3. Deleting and recreating an account with the same name does not resurrect old tokens
+    tok3 = issue_token("erin", path=policy_path)
+    assert verify_token(tok3, path=policy_path) == "erin"
+    delete_user("erin", path=policy_path, actor="alice")
+    assert verify_token(tok3, path=policy_path) == ""
+    add_user("erin", TEST_PASSWORD, path=policy_path, actor="alice")
+    assert verify_token(tok3, path=policy_path) == ""
+
+
+def test_concurrent_policy_updates_do_not_drop_writes(policy_path):
+    import threading
+    from access import add_user, load_policy, set_grant
+
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
+    add_user("erin", TEST_PASSWORD, path=policy_path, actor="alice")
+
+    def grant_worker(idx: int) -> None:
+        set_grant("erin", f"ws_{idx}", ["query"], path=policy_path, actor="alice")
+
+    threads = [threading.Thread(target=grant_worker, args=(i,)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    grants = load_policy(policy_path)["users"]["erin"]["grants"]
+    assert {f"ws_{i}" for i in range(12)} <= set(grants.keys())
+
+
+def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
+    from access import set_grant, set_user_clearance
+    from app import ABSTAIN_MESSAGE, human_in_the_loop_node
+
+    # 1. Auto-approve user STILL pauses at human review when answer failed grading or has security warning
+    set_grant("carol", "default", ["query", "auto_approve"])
+    try:
+        mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+        res_ungrounded = human_in_the_loop_node({
+            "workspace_id": "default",
+            "principal": "carol",
+            "principal_clearance": "public",
+            "sanitized_question": "what is the sla",
+            "generation": "Unverified claim after circuit break.",
+            "citations": ["[c1] doc.md"],
+            "hallucination_status": "circuit_break",
+            "relevance_status": "relevant",
+            "degraded": [],
+            "history": [],
+            "telemetry": {},
+        })
+        assert res_ungrounded["generation"] == "Unverified claim after circuit break."
+        event = list_events(limit=1, workspace_id="default")[0]
+        assert event["data"]["approver"] == "alice"
+        assert "groundedness check did not pass (circuit_break)" in event["data"]["review_reasons"]
+
+        # 2. Abstained answers are never stored in semantic cache even when approved
+        from semantic_cache import lookup_cache
+        human_in_the_loop_node({
+            "workspace_id": "default",
+            "principal": "carol",
+            "principal_clearance": "public",
+            "original_question": "Unanswerable question?",
+            "sanitized_question": "unanswerable question?",
+            "generation": ABSTAIN_MESSAGE,
+            "citations": [],
+            "hallucination_status": "grounded",
+            "relevance_status": "relevant",
+            "degraded": [],
+            "history": [],
+            "telemetry": {"abstained": True},
+        })
+        assert lookup_cache("default", "Unanswerable question?", "public")["hit"] is False
+    finally:
+        set_grant("carol", "default", ["query"])
+
+    # 3. Reviewer with lower clearance ('public') cannot approve a 'secret' requester's query
+    set_user_clearance("alice", "secret")
+    set_user_clearance("bob", "public")
+    try:
+        mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+        res_clr = human_in_the_loop_node({
+            "workspace_id": "default",
+            "principal": "alice",
+            "principal_clearance": "secret",
+            "sanitized_question": "secret question",
+            "generation": "Secret answer.",
+            "citations": ["[c1] secret.md"],
+            "hallucination_status": "grounded",
+            "relevance_status": "relevant",
+            "degraded": [],
+            "history": [],
+            "telemetry": {},
+        })
+        assert "rejected by human compliance" in res_clr["generation"].lower()
+        ev = list_events(limit=1, workspace_id="default")[0]
+        assert ev["data"]["released"] is False
+        assert "approver clearance is below the requester's" in ev["data"]["reason"]
+    finally:
+        set_user_clearance("alice", "public")
 
 
 

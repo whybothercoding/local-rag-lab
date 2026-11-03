@@ -66,21 +66,25 @@ def token_for(name: str) -> str:
 
 
 def _seed_access_policy() -> None:
-    from access import add_user, set_grant
+    from access import add_user, set_grant, set_user_permissions_everywhere
 
     add_user("alice", TEST_PASSWORD, admin=True)
+    set_user_permissions_everywhere("alice", [])
     set_grant("alice", "default", ["query", "review"])
     set_grant("alice", "ops", ["query", "review"])
     set_grant("alice", "accounting", ["query", "review"])
 
     add_user("bob", TEST_PASSWORD)
+    set_user_permissions_everywhere("bob", [])
     set_grant("bob", "default", ["query", "review"])
     set_grant("bob", "ops", ["query", "review"])
 
     add_user("carol", TEST_PASSWORD)
+    set_user_permissions_everywhere("carol", [])
     set_grant("carol", "default", ["query"])
 
     add_user("dave", TEST_PASSWORD)
+    set_user_permissions_everywhere("dave", [])
 
 
 _seed_access_policy()

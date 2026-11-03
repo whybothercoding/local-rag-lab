@@ -33,6 +33,7 @@ os.environ["CHROMA_PATH"] = str(OUT_DIR / "chroma")
 os.environ["BM25_DIR"] = str(OUT_DIR / "bm25")
 os.environ["UPLOADS_DIR"] = str(OUT_DIR / "uploads")
 os.environ["AUDIT_DB_PATH"] = str(OUT_DIR / "audit.db")
+os.environ["CACHE_DB_PATH"] = str(OUT_DIR / "cache.db")
 os.environ["ACCESS_POLICY_PATH"] = str(OUT_DIR / "access_policy.json")
 os.environ["ACCESS_KEY_PATH"] = str(OUT_DIR / "access.key")
 os.environ["DATA_KEY_PATH"] = str(OUT_DIR / "data.key")
@@ -54,6 +55,7 @@ from eval_metrics import (
 )
 from ingest import ingest_workspace
 from llm_provider import get_chat_llm, is_ollama_alive
+from semantic_cache import clear_cache
 
 # Pass/fail gates, measured on the held-out test split only. Thresholds were chosen from the
 # calibration split. Judge support is reported but not gated.
@@ -73,15 +75,30 @@ JUDGE_PROMPT = (
 
 
 def seed_policy() -> None:
-    """Evaluation accounts need no passwords; they exist only to exercise authorization."""
+    """Evaluation accounts need no passwords; they exist only to exercise authorization and clearance."""
     save_policy({
-        "version": 1,
+        "version": 2,
+        "defaults": {"permissions": []},
         "users": {
             "eval": {
-                "password_hash": "", "admin": False,
-                "grants": {"engineering": ["query"], "finance": ["query"], "hr": ["query"]},
+                "password_hash": "", "admin": False, "clearance": "public",
+                "uid": "eval0001", "token_version": 0,
+                "grants": {
+                    "engineering": ["query", "auto_approve"],
+                    "finance": ["query", "auto_approve"],
+                    "hr": ["query", "auto_approve"],
+                },
             },
-            "eval-outsider": {"password_hash": "", "admin": False, "grants": {}},
+            "eval-secret": {
+                "password_hash": "", "admin": False, "clearance": "secret",
+                "uid": "eval0002", "token_version": 0,
+                "grants": {"engineering": ["query", "auto_approve"]},
+            },
+            "eval-outsider": {
+                "password_hash": "", "admin": False, "clearance": "public",
+                "uid": "eval0003", "token_version": 0,
+                "grants": {},
+            },
         },
     })
 
@@ -103,6 +120,7 @@ def judge_support(llm, documents: list[str], answer: str) -> bool | None:
 
 
 def run_case(engine, case: dict, judge_llm=None) -> dict:
+    clear_cache()
     thread_id = f"eval-{case['id']}"
     config = {"configurable": {"thread_id": thread_id}}
     inputs = {

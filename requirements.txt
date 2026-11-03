@@ -8,11 +8,13 @@ langchain-text-splitters>=0.3.0
 chromadb>=0.5.0
 fastembed>=0.9.0
 huggingface-hub>=0.25.0
-rank-bm25>=0.2.2
 
-# Document Parsers
+# Document Parsers & Frontmatter
+PyYAML>=6.0
 pypdf>=5.0.0
 python-docx>=1.1.0
+python-pptx>=1.0.0
+openpyxl>=3.1.0
 
 # Encryption at rest (AES-256-GCM for audit payloads and checkpoint state)
 cryptography>=43.0.0
@@ -30,6 +32,7 @@ pydantic>=2.8.0
 # Testing & Quality Assurance
 pytest>=8.3.0
 pytest-mock>=3.14.0
+pytest-cov>=5.0.0
 watchdog>=4.0.0
 
 # Packaging & Tooling

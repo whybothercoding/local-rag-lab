@@ -12,14 +12,14 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from collections.abc import Generator
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from config import DB_URI, ROOT
-from vault import EncryptedSerde
+from vault import EncryptedSerde, bind_thread
 
 logger = logging.getLogger("checkpointer")
 
@@ -54,6 +54,53 @@ def checkpoint_time(checkpoint_id: str) -> float:
     return (ticks - _UUID6_EPOCH_OFFSET) / 1e7
 
 
+def _thread_of(config) -> str | None:
+    thread = ((config or {}).get("configurable") or {}).get("thread_id")
+    return None if thread is None else str(thread)
+
+
+class _ThreadBound:
+    """Mixin: every saver call runs with its thread bound, so sealed state only opens for that thread."""
+
+    def put(self, config, *args, **kwargs):
+        with bind_thread(_thread_of(config) or ""):
+            return super().put(config, *args, **kwargs)  # type: ignore[misc]
+
+    def put_writes(self, config, *args, **kwargs):
+        with bind_thread(_thread_of(config) or ""):
+            return super().put_writes(config, *args, **kwargs)  # type: ignore[misc]
+
+    def get_tuple(self, config):
+        with bind_thread(_thread_of(config) or ""):
+            return super().get_tuple(config)  # type: ignore[misc]
+
+    def list(self, config, *args, **kwargs):
+        thread = _thread_of(config)
+        if thread is None:
+            yield from super().list(config, *args, **kwargs)  # type: ignore[misc]
+            return
+        with bind_thread(thread):
+            yield from super().list(config, *args, **kwargs)  # type: ignore[misc]
+
+
+def _bound_sqlite_saver(conn: sqlite3.Connection) -> BaseCheckpointSaver:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    class BoundSqliteSaver(_ThreadBound, SqliteSaver):
+        pass
+
+    return BoundSqliteSaver(conn, serde=EncryptedSerde())
+
+
+def _bound_postgres_saver(pool) -> BaseCheckpointSaver:
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    class BoundPostgresSaver(_ThreadBound, PostgresSaver):
+        pass
+
+    return BoundPostgresSaver(pool, serde=EncryptedSerde())  # type: ignore[arg-type]
+
+
 @contextmanager
 def get_checkpointer(
     uri: str | None = None,
@@ -64,19 +111,16 @@ def get_checkpointer(
 
     if is_postgres_uri(target):
         from psycopg_pool import ConnectionPool
-        from langgraph.checkpoint.postgres import PostgresSaver
 
         with ConnectionPool(conninfo=target, max_size=max_pool_size, open=True, kwargs={"autocommit": True}) as pool:
-            saver = PostgresSaver(pool, serde=EncryptedSerde())  # type: ignore[arg-type]
-            saver.setup()
+            saver = _bound_postgres_saver(pool)
+            saver.setup()  # type: ignore[attr-defined]
             yield saver
     else:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-
         db_path = get_sqlite_path(target)
         conn = sqlite3.connect(db_path, check_same_thread=False)
         try:
-            saver = SqliteSaver(conn, serde=EncryptedSerde())
+            saver = _bound_sqlite_saver(conn)
             saver.setup()
             try:
                 conn.execute("PRAGMA journal_mode=WAL;")
@@ -88,51 +132,90 @@ def get_checkpointer(
             conn.close()
 
 
-def fetch_checkpoint_threads(uri: str | None = None) -> list[str]:
-    """Retrieve distinct thread IDs stored in the checkpointer database."""
+def fetch_checkpoint_threads(
+    uri: str | None = None,
+    prefix: str | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    """Distinct thread IDs in the checkpointer database.
+
+    With a prefix, only matching threads are returned. With a limit, the most recently active
+    threads come first (checkpoint IDs are time-ordered), so callers do not decrypt every thread.
+    Without either, IDs are sorted alphabetically as before.
+    """
     target = uri if uri is not None else DB_URI
+    escaped = None
+    if prefix:
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    where = " WHERE thread_id LIKE %s ESCAPE '\\'" if escaped else ""
+    order = " ORDER BY MAX(checkpoint_id) DESC" if limit else " ORDER BY thread_id"
+    tail = f" LIMIT {int(limit)}" if limit else ""
 
     if is_postgres_uri(target):
         from psycopg_pool import ConnectionPool
-        query = "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id;"
+
+        query = f"SELECT thread_id FROM checkpoints{where} GROUP BY thread_id{order}{tail};"
         with ConnectionPool(conninfo=target, min_size=1, max_size=1, open=True, kwargs={"autocommit": True}) as pool:
             with pool.connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(query)
+                    cur.execute(query, (escaped,) if escaped else None)
                     return [row[0] for row in cur.fetchall()]
-    else:
-        db_path = get_sqlite_path(target)
-        if not Path(db_path).exists():
+
+    db_path = get_sqlite_path(target)
+    if not Path(db_path).exists():
+        return []
+    query = f"SELECT thread_id FROM checkpoints{where.replace('%s', '?')} GROUP BY thread_id{order}{tail};"
+    with closing(sqlite3.connect(db_path)) as conn:
+        try:
+            cursor = conn.execute(query, (escaped,) if escaped else ())
+        except sqlite3.OperationalError:
             return []
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.execute("SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id;")
-            return [row[0] for row in cursor.fetchall()]
+        return [row[0] for row in cursor.fetchall()]
+
+
+def _is_waiting_for_review(saver: BaseCheckpointSaver, thread_id: str) -> bool:
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    snapshot = saver.get_tuple(config)
+    return snapshot is not None and any(channel == "__interrupt__" for _, channel, _ in snapshot.pending_writes)
 
 
 def prune_checkpoints(retention_days: int, uri: str | None = None, now: float | None = None) -> int:
     """Delete whole threads whose newest checkpoint is older than the retention period.
 
     Threads that are waiting for a human decision are never deleted, however old they are.
-    Returns the number of threads removed. SQLite only; PostgreSQL retention is operator-run.
+    Returns the number of threads removed. Works for SQLite and PostgreSQL.
     """
     target = uri if uri is not None else DB_URI
+    cutoff = (now if now is not None else time.time()) - retention_days * 86400
+    removed = 0
+
     if is_postgres_uri(target):
-        raise NotImplementedError("Checkpoint retention is implemented for SQLite. Apply it to PostgreSQL with your DBA tooling.")
+        from psycopg_pool import ConnectionPool
+
+        with get_checkpointer(uri=target) as saver:
+            pool = saver.conn  # type: ignore[attr-defined]
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT thread_id, MAX(checkpoint_id) FROM checkpoints GROUP BY thread_id")
+                    latest = cur.fetchall()
+            for thread_id, newest_id in latest:
+                if checkpoint_time(newest_id) >= cutoff or _is_waiting_for_review(saver, thread_id):
+                    continue
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                            cur.execute(f"DELETE FROM {table} WHERE thread_id = %s", (thread_id,))
+                removed += 1
+        return removed
+
     db_path = get_sqlite_path(target)
     if not Path(db_path).exists():
         return 0
-
-    cutoff = (now if now is not None else time.time()) - retention_days * 86400
-    removed = 0
     with get_checkpointer(uri=target) as saver:
-        conn = saver.conn
+        conn = saver.conn  # type: ignore[attr-defined]
         latest = conn.execute("SELECT thread_id, MAX(checkpoint_id) FROM checkpoints GROUP BY thread_id").fetchall()
         for thread_id, newest_id in latest:
-            if checkpoint_time(newest_id) >= cutoff:
-                continue
-            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            snapshot = saver.get_tuple(config)
-            if snapshot is not None and any(channel == "__interrupt__" for _, channel, _ in snapshot.pending_writes):
+            if checkpoint_time(newest_id) >= cutoff or _is_waiting_for_review(saver, thread_id):
                 continue
             conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
             conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))

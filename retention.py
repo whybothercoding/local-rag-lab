@@ -26,11 +26,16 @@ def main(argv: list[str] | None = None) -> int:
         f"Audit log: removed {audit_result['removed']} record(s) older than {audit_result['cutoff']}. "
         f"Chain base is now seq {audit_result['base_seq']}."
     )
-    threads = prune_checkpoints(args.days)
-    print(f"Checkpoints: removed {threads} idle thread(s). Threads awaiting review were kept.")
+    checkpoint_failed = False
+    try:
+        threads = prune_checkpoints(args.days)
+        print(f"Checkpoints: removed {threads} idle thread(s). Threads awaiting review were kept.")
+    except Exception as exc:
+        checkpoint_failed = True
+        print(f"Checkpoints: prune skipped ({exc}).", file=sys.stderr)
     cached = prune_cache(args.days)
     print(f"Cache: removed {cached} expired entry(s).")
-    return 0
+    return 1 if checkpoint_failed else 0
 
 
 if __name__ == "__main__":

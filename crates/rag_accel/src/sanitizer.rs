@@ -76,12 +76,31 @@ static REGEX_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         .collect()
 });
 
+fn is_invisible(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00AD
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2063
+            | 0x2066..=0x2069
+            | 0xFEFF
+    )
+}
+
 pub fn scan_chunk(text: &str) -> ScanResult {
+    let cleaned: std::borrow::Cow<'_, str> = if text.chars().any(is_invisible) {
+        std::borrow::Cow::Owned(text.chars().filter(|&c| !is_invisible(c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    };
+    let target = cleaned.as_ref();
+
     // Single-pass automaton scan across all patterns simultaneously; respects word boundaries and priority order.
-    let matches = REGEX_SET.matches(text);
+    let matches = REGEX_SET.matches(target);
     if let Some(idx) = matches.into_iter().next() {
         let (ref re, reason) = REGEX_RULES[idx];
-        if let Some(mat) = re.find(text) {
+        if let Some(mat) = re.find(target) {
             return ScanResult {
                 is_safe: false,
                 reason: Some(format!("{}:{}", reason, mat.as_str())),

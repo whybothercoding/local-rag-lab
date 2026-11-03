@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Parse a folder of source documents into one workspace index.
 
-Dense vectors go to ChromaDB and keyword vectors go to a BM25 pickle.
-Embeddings are computed before either store is replaced, so a failed
-embedding call leaves the previous index in place.
+Dense vectors go to ChromaDB and keywords go to a SQLite FTS5 index. Embeddings are computed
+before either store is replaced, so a failed embedding call leaves the previous index in place.
+
+Clearance comes from, in order: a `clearance:` tag in a file's front matter or first line, and a
+`.clearance` file in the file's folder (or any parent up to the source root). When both exist the
+higher level wins. Untagged files are public. A malformed or unrecognized tag rejects the file.
 """
 import argparse
 import getpass
@@ -24,15 +27,20 @@ import workspace_manager
 from access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
 from audit import record as audit_record
 from config import MAX_SOURCE_BYTES
+from context_sanitizer import scan_chunk
 from embedding_provider import embedding_fingerprint, get_embedding_model
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
-from sparse_search import index_sparse_chunks
+from sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
 from workspace_manager import ensure_base_dirs, sanitize_workspace_id
 
 logger = logging.getLogger("ingest")
 
 # Chroma rejects a single add() above a few thousand rows.
 _ADD_BATCH = 256
+# Cosine distance keeps similarity meaningful whichever embedding model produced the vectors.
+_COLLECTION_METADATA = {"hnsw:space": "cosine"}
+_FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_HEADER_TAG = re.compile(r"\A(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)[ \t]*(?:\r?\n|\Z)", re.IGNORECASE)
 
 
 @dataclass
@@ -43,11 +51,13 @@ class IngestResult:
     indexed_files: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     unchanged: bool = False
+    cleared: bool = False
+    warnings: list[str] = field(default_factory=list)
     error: str | None = None
 
     @property
     def ok(self) -> bool:
-        return self.error is None and (self.chunks > 0 or self.unchanged)
+        return self.error is None and (self.chunks > 0 or self.unchanged or self.cleared)
 
 
 def _get_manifest_path(ws_id: str) -> Path:
@@ -66,12 +76,14 @@ def _load_manifest(ws_id: str) -> dict | None:
 
 
 def _save_manifest(ws_id: str, manifest_data: dict) -> None:
+    """Write the manifest atomically. A failure is raised: without a manifest the cache cannot tell index versions apart."""
     path = _get_manifest_path(ws_id)
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, indent=2)
-    except Exception as exc:
-        logger.warning("Could not save manifest for %s: %s", ws_id, exc)
+    temporary = path.with_suffix(".json.tmp")
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary, path)
 
 
 def _add_in_batches(collection, ids, documents, metadatas, embeddings) -> None:
@@ -93,62 +105,109 @@ def _delete_quiet(client, name: str) -> None:
 
 
 def _publish_collection(client, name: str, ids, documents, metadatas, embeddings) -> None:
-    """Write a side collection first, then replace the live collection.
+    """Build the new collection beside the live one, then swap them by renaming.
 
-    The side collection is removed only after the live copy has been written.
-    If the live write fails, the side collection still holds the new vectors.
+    Readers see the old index until the swap, and the gap while it happens is two renames long.
+    If the swap fails the old collection is put back, so a failed publish never loses the live index.
     """
-    build_name = f"{name}__build"
+    build_name, old_name = f"{name}__build", f"{name}__old"
     _delete_quiet(client, build_name)
-    building = client.create_collection(name=build_name)
+    _delete_quiet(client, old_name)
+    building = client.create_collection(name=build_name, metadata=_COLLECTION_METADATA)
     _add_in_batches(building, ids, documents, metadatas, embeddings)
 
-    _delete_quiet(client, name)
+    live_exists = name in [getattr(c, "name", str(c)) for c in client.list_collections()]
+    if live_exists:
+        client.get_collection(name).modify(name=old_name)
     try:
-        live = client.create_collection(name=name)
-        _add_in_batches(live, ids, documents, metadatas, embeddings)
+        building.modify(name=name)
     except Exception:
-        logger.exception("Live collection %s failed; vectors remain in %s", name, build_name)
+        logger.exception("Could not publish collection %s; restoring the previous index", name)
+        if live_exists:
+            client.get_collection(old_name).modify(name=name)
         raise
-    _delete_quiet(client, build_name)
+    _delete_quiet(client, old_name)
+
+
+def _clear_index(ws_id: str) -> None:
+    """Remove every index artifact of a workspace: vectors, keywords, manifest, and cached answers."""
+    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
+        _delete_quiet(client, name)
+    delete_sparse_index(ws_id, base_dir=workspace_manager.BM25_DIR)
+    manifest = _get_manifest_path(ws_id)
+    if manifest.exists():
+        manifest.unlink()
+    from semantic_cache import clear_workspace_cache
+
+    clear_workspace_cache(ws_id)
+
+
+def _is_indexed(ws_id: str) -> bool:
+    return _get_manifest_path(ws_id).exists() or has_sparse_index(ws_id, base_dir=workspace_manager.BM25_DIR)
+
+
+def _folder_default(file_path: Path, root: Path, cache: dict[Path, str | None]) -> str | None:
+    """Clearance from the nearest `.clearance` file between a document and the source root."""
+    folder = file_path.parent
+    while True:
+        if folder not in cache:
+            marker = folder / ".clearance"
+            cache[folder] = None
+            if marker.is_file() and not marker.is_symlink():
+                lines = [ln.strip() for ln in marker.read_text(encoding="utf-8").splitlines()
+                         if ln.strip() and not ln.strip().startswith("#")]
+                level = lines[0].lower() if lines else ""
+                if level not in CLEARANCE_LEVELS:
+                    raise ValueError(
+                        f"{marker} names clearance '{level}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
+                    )
+                cache[folder] = level
+        if cache[folder] is not None:
+            return cache[folder]
+        if folder == root or folder.parent == folder:
+            return None
+        folder = folder.parent
+
+
+def _higher(first: str, second: str | None) -> str:
+    if second is None:
+        return first
+    return max(first, second, key=CLEARANCE_LEVELS.index)
+
+
+def _check_level(candidate: str) -> str:
+    level = candidate.strip().lower()
+    if level not in CLEARANCE_LEVELS:
+        raise ValueError(f"invalid clearance '{level}' (allowed: {', '.join(CLEARANCE_LEVELS)})")
+    return level
 
 
 def _extract_doc_clearance(raw_text: str) -> tuple[str, str]:
-    """Extract clearance tag from YAML frontmatter or document header, returning (clearance, body).
+    """Extract clearance tag from YAML front matter or document header, returning (clearance, body).
 
-    Raises ValueError if an explicit clearance tag is unrecognized (fail-closed).
+    Fail-closed: an unrecognized level raises ValueError, and so does front matter that is not valid
+    YAML but visibly declares a clearance (it must not silently become public). Keys are matched
+    case-insensitively.
     """
-    clearance = DEFAULT_CLEARANCE
-    text = raw_text
-    fm_match = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n", raw_text, re.DOTALL)
-    if fm_match:
+    front = _FRONT_MATTER.match(raw_text)
+    if front:
+        block = front.group(1)
         try:
-            parsed = yaml.safe_load(fm_match.group(1))
-        except Exception:
+            parsed = yaml.safe_load(block)
+        except yaml.YAMLError:
+            if re.search(r"(?im)^\s*clearance\s*:", block):
+                raise ValueError("front matter declares a clearance but is not valid YAML; fix it") from None
             parsed = None
-        if isinstance(parsed, dict) and "clearance" in parsed:
-            candidate = str(parsed["clearance"]).strip().lower()
-            if candidate not in CLEARANCE_LEVELS:
-                raise ValueError(
-                    f"invalid clearance '{candidate}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
-                )
-            clearance = candidate
-            text = raw_text[fm_match.end():]
-    else:
-        hdr_match = re.match(
-            r"^(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)\s*\r?\n",
-            raw_text,
-            re.IGNORECASE,
-        )
-        if hdr_match:
-            candidate = hdr_match.group(1).strip().lower()
-            if candidate not in CLEARANCE_LEVELS:
-                raise ValueError(
-                    f"invalid clearance '{candidate}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
-                )
-            clearance = candidate
-            text = raw_text[hdr_match.end():]
-    return clearance, text
+        if isinstance(parsed, dict):
+            lowered = {str(key).strip().lower(): value for key, value in parsed.items()}
+            if "clearance" in lowered:
+                return _check_level(str(lowered["clearance"])), raw_text[front.end():]
+        return DEFAULT_CLEARANCE, raw_text
+    header = _HEADER_TAG.match(raw_text)
+    if header:
+        return _check_level(header.group(1)), raw_text[header.end():]
+    return DEFAULT_CLEARANCE, raw_text
 
 
 def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
@@ -159,6 +218,7 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
         for path in source_path.rglob("*")
         if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
     )
+    folder_cache: dict[Path, str | None] = {}
     for file_path in files:
         relative = str(file_path.relative_to(source_path))
         ext = file_path.suffix.lower()
@@ -174,6 +234,7 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
                 skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
                 continue
             clearance, content = _extract_doc_clearance(raw_content)
+            clearance = _higher(clearance, _folder_default(file_path, source_path, folder_cache))
         except Exception as exc:
             skipped.append(f"{relative}: {exc}")
             continue
@@ -181,7 +242,9 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
             "content": content,
             "clearance": clearance,
             "source": relative,
-            "doc_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            # Hash the text as written plus the effective clearance, so changing only a tag (or a folder's
+            # .clearance file) re-indexes the file.
+            "doc_hash": hashlib.sha256(f"{clearance}\0{raw_content}".encode("utf-8")).hexdigest(),
         })
     return raw_docs, skipped
 
@@ -214,12 +277,15 @@ def ingest_workspace(
     raw_docs, skipped = _collect_documents(source_path)
 
     # Also merge documents from the complementary workspace directory (knowledge_base <-> uploads)
-    # when source_dir is one of the managed workspace roots, so UI uploads and CLI sync never overwrite each other.
+    # when source_dir is one of the managed workspace roots, so UI uploads and CLI sync never overwrite
+    # each other. When both hold the same relative path, the knowledge_base copy always wins, whichever
+    # entry point started the sync, and the shadowed copy is reported.
     resolved_src = source_path.resolve()
     kb_root = Path(workspace_manager.KNOWLEDGE_BASE_DIR).resolve()
     up_root = Path(workspace_manager.UPLOADS_DIR).resolve()
     complementary_dirs: list[Path] = []
-    if resolved_src.parent == up_root:
+    source_is_uploads = resolved_src.parent == up_root
+    if source_is_uploads:
         for disc_id, kb_dir in workspace_manager.discover_knowledge_base_workspaces():
             if disc_id == ws_id:
                 complementary_dirs.append(Path(kb_dir))
@@ -228,19 +294,40 @@ def ingest_workspace(
         if up_ws.is_dir():
             complementary_dirs.append(up_ws)
 
-    seen_sources = {doc["source"] for doc in raw_docs}
+    groups: list[tuple[str, list[dict]]] = [("uploads" if source_is_uploads else "knowledge_base", raw_docs)]
     for comp_dir in complementary_dirs:
         if comp_dir.is_dir() and comp_dir.resolve() != resolved_src:
             comp_docs, comp_skipped = _collect_documents(comp_dir)
-            for doc in comp_docs:
-                if doc["source"] not in seen_sources:
-                    raw_docs.append(doc)
-                    seen_sources.add(doc["source"])
             skipped.extend(comp_skipped)
+            groups.append(("knowledge_base" if source_is_uploads else "uploads", comp_docs))
+    groups.sort(key=lambda group: 0 if group[0] == "knowledge_base" else 1)
 
-    raw_docs.sort(key=lambda d: d["source"])
+    merged: dict[str, dict] = {}
+    for origin, docs in groups:
+        for doc in docs:
+            if doc["source"] in merged:
+                skipped.append(f"{doc['source']}: shadowed by the knowledge_base copy; the {origin} copy was not indexed")
+            else:
+                merged[doc["source"]] = doc
+    raw_docs = sorted(merged.values(), key=lambda d: d["source"])
     result.skipped = skipped
     if not raw_docs:
+        if _is_indexed(ws_id):
+            if not force:
+                result.error = (
+                    f"No supported documents found in {source_dir}, but '{ws_id}' is still indexed. "
+                    "If every document was removed on purpose, re-run with --force (make sync FORCE=1) to purge the index."
+                )
+                return result
+            try:
+                _clear_index(ws_id)
+            except Exception as exc:
+                logger.exception("Could not purge index for %s", ws_id)
+                result.error = f"Could not purge the index: {exc}"
+                return result
+            audit_record("index_cleared", workspace_id=ws_id, session_id="", data={"actor": actor})
+            result.cleared = True
+            return result
         result.error = f"No supported documents with extractable text found in {source_dir}"
         return result
 
@@ -267,7 +354,7 @@ def ingest_workspace(
                     logger.info("Workspace '%s' unchanged; skipping redundant embedding.", ws_id)
                     return result
             except Exception:
-                pass
+                logger.debug("Could not confirm the existing index for %s; re-indexing", ws_id, exc_info=True)
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunks: list[str] = []
@@ -279,6 +366,12 @@ def ingest_workspace(
         for chunk_idx, chunk_text in enumerate(splitter.split_text(doc["content"])):
             chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
             cid = f"{ws_id}_{doc_idx}_{chunk_idx}_{chunk_hash}"
+            safe, reason = scan_chunk(chunk_text)
+            if not safe:
+                result.warnings.append(
+                    f"{doc['source']}: chunk {chunk_idx} contains an injected-instruction pattern ({reason}); "
+                    "it will be withheld from answers"
+                )
             chunks.append(chunk_text)
             metadatas.append({
                 "source": doc["source"],
@@ -331,15 +424,20 @@ def ingest_workspace(
         return result
 
     # 3. Save ingestion manifest for idempotent verification
-    _save_manifest(ws_id, {
-        "workspace_id": ws_id,
-        "files": file_hashes,
-        "chunk_size": chunk_size,
-        "chunk_overlap": chunk_overlap,
-        "embedding": embedding_fingerprint(),
-        "total_chunks": len(chunks),
-        "total_docs": len(raw_docs),
-    })
+    try:
+        _save_manifest(ws_id, {
+            "workspace_id": ws_id,
+            "files": file_hashes,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "embedding": embedding_fingerprint(),
+            "total_chunks": len(chunks),
+            "total_docs": len(raw_docs),
+        })
+    except OSError as exc:
+        logger.exception("Manifest write failed for workspace %s", ws_id)
+        result.error = f"Index manifest write failed: {exc}"
+        return result
 
     # 4. Prune stale cache entries from previous index versions for this workspace
     try:
@@ -375,8 +473,13 @@ def authenticate_admin(account: str) -> str:
 def _print_result(result: IngestResult) -> None:
     for note in result.skipped:
         print(f"Skipped {note}")
+    for note in result.warnings:
+        print(f"Warning: {note}")
     if result.error:
         print(f"Error: {result.error}")
+        return
+    if result.cleared:
+        print(f"Workspace '{result.workspace_id}' had no documents left; its index was purged.")
         return
     if result.unchanged:
         print(

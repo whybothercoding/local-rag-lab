@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any, Sequence
-from functools import lru_cache
 
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
@@ -20,32 +19,56 @@ logger = logging.getLogger("reranker")
 _RERANKER_LOCK = threading.Lock()
 
 
-@lru_cache(maxsize=1)
+_RERANKERS: dict[tuple[str, str], TextCrossEncoder] = {}
+
+
 def get_reranker(
     model_name: str = RERANKER_MODEL,
     cache_dir: str = MODELS_DIR,
 ) -> TextCrossEncoder:
-    """Return a verified TextCrossEncoder instance loaded completely offline."""
+    """Return a verified TextCrossEncoder loaded completely offline, from exactly the files that were verified.
+
+    Concurrent first calls load the model once: the check is repeated under the lock.
+    """
+    key = (model_name, cache_dir)
+    cached = _RERANKERS.get(key)
+    if cached is not None:
+        return cached
     with _RERANKER_LOCK:
-        verify_model(model_name, cache_dir)
-        return TextCrossEncoder(model_name=model_name, cache_dir=cache_dir)
+        cached = _RERANKERS.get(key)
+        if cached is None:
+            snapshot = verify_model(model_name, cache_dir)
+            cached = TextCrossEncoder(
+                model_name=model_name, cache_dir=cache_dir, specific_model_path=str(snapshot)
+            )
+            _RERANKERS[key] = cached
+        return cached
 
 
-def rerank_documents(
+def _reset_reranker_cache() -> None:
+    with _RERANKER_LOCK:
+        _RERANKERS.clear()
+
+
+get_reranker.cache_clear = _reset_reranker_cache  # type: ignore[attr-defined]
+
+
+def rerank_with_status(
     query: str,
     candidates: Sequence[dict[str, Any]],
     top_n: int = 3,
     model_name: str = RERANKER_MODEL,
     cache_dir: str = MODELS_DIR,
-) -> list[dict[str, Any]]:
-    """Score and re-order candidate documents using cross-encoder attention over (query, document).
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Like rerank_documents, but also reports why the cross-encoder was skipped after a failure.
 
-    If reranking is disabled or fails, cleanly returns candidates[:top_n] as fallback.
+    The status is None when reranking ran, or was switched off on purpose. It is a short message
+    when the cross-encoder failed and the initial ranking was used instead.
     """
     if not candidates:
-        return []
+        return [], None
     if not ENABLE_RERANKER or len(candidates) <= 1 or not query or not str(query).strip():
-        return list(candidates[:top_n])
+        return list(candidates[:top_n]), None
 
     try:
         reranker = get_reranker(model_name=model_name, cache_dir=cache_dir)
@@ -60,10 +83,24 @@ def rerank_documents(
 
         # Sort descending by cross-encoder score
         scored_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
-        return scored_candidates[:top_n]
+        return scored_candidates[:top_n], None
     except Exception as exc:
         logger.warning("Cross-encoder reranking failed, falling back to initial ranking: %s", exc)
-        return list(candidates[:top_n])
+        return list(candidates[:top_n]), f"rerank_unavailable: {type(exc).__name__}; results use the initial ranking"
+
+
+def rerank_documents(
+    query: str,
+    candidates: Sequence[dict[str, Any]],
+    top_n: int = 3,
+    model_name: str = RERANKER_MODEL,
+    cache_dir: str = MODELS_DIR,
+) -> list[dict[str, Any]]:
+    """Score and re-order candidate documents using cross-encoder attention over (query, document).
+
+    If reranking is disabled or fails, cleanly returns candidates[:top_n] as fallback.
+    """
+    return rerank_with_status(query, candidates, top_n, model_name, cache_dir)[0]
 
 
 def score_pairs(

@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import shutil
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from audit import head_hash, verify_anchors, verify_chain
 from checkpointer import get_sqlite_path, is_postgres_uri
-from config import ACCESS_POLICY_PATH, AUDIT_DB_PATH, ANCHOR_PATH, BACKUP_DIR, DB_URI
+from config import ACCESS_POLICY_PATH, AUDIT_DB_PATH, ANCHOR_PATH, BACKUP_DIR, CACHE_DB_PATH, DB_URI
 
 MANIFEST = "manifest.json"
 
@@ -41,7 +42,7 @@ def _sha256(path: Path) -> str:
 
 def _sqlite_copy(source: Path, destination: Path) -> None:
     """Copy a live SQLite database with its backup API, so the copy is consistent even under writes."""
-    with sqlite3.connect(source) as src, sqlite3.connect(destination) as dst:
+    with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(destination)) as dst:
         src.backup(dst)
 
 
@@ -62,6 +63,11 @@ def create(destination: Path | None = None) -> Path:
             _sqlite_copy(checkpoints, target / "checkpoints.db")
             files["checkpoints.db"] = _sha256(target / "checkpoints.db")
 
+    cache_db = Path(CACHE_DB_PATH)
+    if cache_db.exists():
+        _sqlite_copy(cache_db, target / "cache.db")
+        files["cache.db"] = _sha256(target / "cache.db")
+
     for source, name in ((Path(ANCHOR_PATH), "audit_anchors.jsonl"), (Path(ACCESS_POLICY_PATH), "access_policy.json")):
         if source.exists():
             shutil.copy2(source, target / name)
@@ -74,6 +80,7 @@ def create(destination: Path | None = None) -> Path:
         "audit_records": records,
         "audit_head": head_hash(str(target / "audit.db")),
         "audit_chain_ok": chain_ok,
+        "checkpoints_backend": "postgres (external pg_dump required)" if is_postgres_uri(DB_URI) else "sqlite",
         "excluded": ["data.key", "access.key"],
     }
     (target / MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")

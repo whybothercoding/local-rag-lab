@@ -166,3 +166,32 @@ def test_archive_max_uncompressed_bytes_and_unsupported_hints(tmp_path: Path, mo
     assert "not OCR'd" in unsupported_reason(".png")
     assert "unsupported type .bin" in unsupported_reason(".bin")
     assert extract_text_from_file(tmp_path / "unknown.bin") == ""
+
+
+def test_extract_pptx_and_xlsx(tmp_path: Path):
+    from openpyxl import Workbook
+    from pptx import Presentation
+
+    pptx_path = tmp_path / "deck.pptx"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Quarterly Security Review"
+    slide.placeholders[1].text = "Zero Trust RBAC enabled."
+    prs.save(str(pptx_path))
+
+    pptx_text = extract_text_from_file(pptx_path)
+    assert "Quarterly Security Review" in pptx_text
+    assert "Zero Trust RBAC enabled." in pptx_text
+
+    xlsx_path = tmp_path / "budget.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Q4_Budget"
+    ws.append(["Department", "Allocation"])
+    ws.append(["Security", "250000"])
+    wb.save(str(xlsx_path))
+
+    xlsx_text = extract_text_from_file(xlsx_path)
+    assert "Sheet Q4_Budget" in xlsx_text
+    assert "Department | Allocation" in xlsx_text
+    assert "Security | 250000" in xlsx_text

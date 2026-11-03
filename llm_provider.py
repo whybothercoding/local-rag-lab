@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any
 
 import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -21,6 +21,7 @@ from config import (
     LLM_PROVIDER,
     LOCAL_LLM_URL,
     OLLAMA_BASE_URL,
+    OLLAMA_TIMEOUT_SEC,
 )
 
 logger = logging.getLogger("llm_provider")
@@ -127,7 +128,7 @@ class OpenAICompatibleChat(BaseChatModel):
     base_url: str
     model_name: str = "qwen2.5-coder:7b"
     api_key: str = "local"
-    timeout_sec: float = 120.0
+    timeout_sec: float = OLLAMA_TIMEOUT_SEC
     transport: Any = None
 
     @property
@@ -167,6 +168,27 @@ def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -
         return False
 
 
+def _ollama_chat() -> BaseChatModel:
+    from langchain_ollama import ChatOllama
+
+    return ChatOllama(
+        model=CHAT_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        temperature=0.0,
+        client_kwargs={"timeout": OLLAMA_TIMEOUT_SEC},
+    )
+
+
+def llm_is_fallback(llm: BaseChatModel, provider: str | None = None) -> bool:
+    """True when `llm` is the in-process extractive synthesizer and nobody asked for it.
+
+    Choosing LLM_PROVIDER=deterministic is a deliberate setting. Landing on it because the model
+    server is unreachable is a degradation that the reviewer and the user must be told about.
+    """
+    active = (provider or LLM_PROVIDER).lower().strip()
+    return isinstance(llm, DeterministicContextLLM) and active != "deterministic"
+
+
 def get_chat_llm(provider: str | None = None) -> BaseChatModel:
     """Factory returning the appropriate chat model based on environment and runtime availability."""
     active = (provider or LLM_PROVIDER).lower().strip()
@@ -178,14 +200,12 @@ def get_chat_llm(provider: str | None = None) -> BaseChatModel:
         return DeterministicContextLLM()
 
     if active == "ollama":
-        from langchain_ollama import ChatOllama
-        return ChatOllama(model=CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.0)
+        return _ollama_chat()
 
     # "auto" mode: probe Ollama; if running, use it; otherwise fallback to DeterministicContextLLM
     if is_ollama_alive(OLLAMA_BASE_URL):
         try:
-            from langchain_ollama import ChatOllama
-            return ChatOllama(model=CHAT_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.0)
+            return _ollama_chat()
         except Exception as exc:
             logger.warning("Could not initialize ChatOllama: %s. Using in-process synthesizer.", exc)
 

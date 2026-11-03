@@ -6,6 +6,7 @@ delimiters, jailbreak directives, and exfiltration payloads before they enter th
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 # Compiled heuristic patterns for indirect prompt injection
@@ -89,6 +90,41 @@ except ImportError:
     RUST_ACCEL = False
 
 
+_INVISIBLE = dict.fromkeys(
+    [0x00AD, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062, 0x2063, 0xFEFF]
+    + list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)),
+)
+
+# Reasons that only make sense for retrieved documents. A person asking about web markup in a
+# question is not attacking the model, so these are not applied to user input.
+_DOCUMENT_ONLY_REASONS = frozenset({"script_payload", "image_exfiltration_beacon"})
+
+
+def normalize_for_scan(text: str) -> str:
+    """Fold look-alike characters, drop invisible ones, and collapse whitespace before pattern matching.
+
+    Without this, "ignore  previous\u200b instructions" or full-width letters slip past the patterns.
+    """
+    folded = unicodedata.normalize("NFKC", text or "").translate(_INVISIBLE)
+    return re.sub(r"\s+", " ", folded)
+
+
+def scan_user_input(text: str) -> tuple[bool, str | None]:
+    """Scan a user's question for instruction-override and role-spoofing attempts.
+
+    Uses the same pattern set as retrieved documents, minus document-only markup rules, after
+    Unicode and whitespace normalization. Returns (is_safe, violation_reason).
+    """
+    normalized = normalize_for_scan(text)
+    for pattern, reason in _INJECTION_PATTERNS:
+        if reason in _DOCUMENT_ONLY_REASONS:
+            continue
+        match = pattern.search(normalized)
+        if match:
+            return False, f"{reason}:{match.group(0)}"
+    return True, None
+
+
 def scan_chunk(text: str) -> tuple[bool, str | None]:
     """Scan a text chunk for indirect prompt injection payloads.
 
@@ -98,6 +134,7 @@ def scan_chunk(text: str) -> tuple[bool, str | None]:
     Returns:
         (is_safe, violation_reason)
     """
+    text = normalize_for_scan(text)
     if RUST_ACCEL:
         try:
             return rag_accel.scan_chunk(text)

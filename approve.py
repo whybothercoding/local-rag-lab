@@ -6,22 +6,37 @@ import logging
 from langgraph.types import Command
 
 # Import workflow and checkpointer factory
-from access import authorize, issue_token, sign_in, verify_token
+from access import (
+    authorize,
+    clearance_covers,
+    get_user_clearance,
+    issue_token,
+    sign_in,
+    verify_token,
+)
 from app import workflow
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
 logger = logging.getLogger("HITL-Operator-CLI")
 
 MAX_SIGN_IN_ATTEMPTS = 3
 
 
-def list_pending_threads(app) -> list[str]:
-    """Inspects checkpoints to find threads paused at an interrupt."""
-    thread_ids = fetch_checkpoint_threads()
+def list_pending_threads(
+    app,
+    viewer_clearance: str | None = None,
+    prefix: str | None = None,
+) -> list[str]:
+    """Inspects checkpoints to find threads paused at an interrupt.
+
+    When `viewer_clearance` is given, threads whose requester holds a higher clearance
+    than the viewer are excluded so lower-clearance reviewers cannot browse them.
+    """
+    thread_ids = (
+        fetch_checkpoint_threads(prefix=prefix)
+        if prefix is not None
+        else fetch_checkpoint_threads()
+    )
     pending = []
 
     for thread_id in thread_ids:
@@ -30,6 +45,11 @@ def list_pending_threads(app) -> list[str]:
             state = app.get_state(config)
             # Check if the thread is halted at the human_approval node with an active interrupt
             if state.next == ("human_approval",) and state.tasks and any(t.interrupts for t in state.tasks):
+                if viewer_clearance is not None:
+                    requester = state.values.get("principal", "")
+                    req_clr = state.values.get("principal_clearance") or get_user_clearance(requester)
+                    if not clearance_covers(viewer_clearance, req_clr):
+                        continue
                 pending.append(thread_id)
         except Exception as exc:
             logger.debug("Failed inspecting thread %s: %s", thread_id, exc)
@@ -37,13 +57,22 @@ def list_pending_threads(app) -> list[str]:
     return pending
 
 
-def inspect_thread(app, thread_id: str):
-    """Retrieves and prints the candidate payload held in Postgres."""
+def inspect_thread(app, thread_id: str, viewer_clearance: str | None = None):
+    """Retrieves and prints the candidate payload held in the checkpointer."""
     config = {"configurable": {"thread_id": thread_id}}
     state = app.get_state(config)
 
     if state.next != ("human_approval",):
         print(f"\n[!] Thread '{thread_id}' is not awaiting approval. Current next node: {state.next}")
+        return None
+
+    requester = state.values.get("principal", "")
+    req_clearance = state.values.get("principal_clearance") or get_user_clearance(requester)
+    if viewer_clearance is not None and not clearance_covers(viewer_clearance, req_clearance):
+        print(
+            f"\n[!] Clearance violation: viewer clearance '{viewer_clearance}' cannot inspect "
+            f"thread '{thread_id}' (requires '{req_clearance}')."
+        )
         return None
 
     # Extract pending interrupt payload
@@ -55,15 +84,18 @@ def inspect_thread(app, thread_id: str):
 
     citations_list = interrupt_payload.get("citations") or state.values.get("citations") or []
     degraded_list = state.values.get("degraded") or []
+    reasons_list = interrupt_payload.get("review_reasons") or []
 
     print("\n" + "=" * 65)
     print(f" PENDING AUDIT FOR THREAD: {thread_id}")
     print("=" * 65)
     print(f"Action Type       : {interrupt_payload.get('action', 'N/A')}")
     print(f"Workspace         : {state.values.get('workspace_id', 'N/A')}")
-    print(f"Requested By      : {state.values.get('principal', 'N/A')}")
+    print(f"Requested By      : {requester or 'N/A'} (clearance: {req_clearance})")
     print(f"Original Question : {interrupt_payload.get('question', state.values.get('original_question'))}")
     print(f"Citations         : {', '.join(citations_list) if citations_list else 'none'}")
+    if reasons_list:
+        print(f"Gate Reasons      : {', '.join(reasons_list)}")
     if degraded_list:
         print(f"Degraded Warnings : {'; '.join(degraded_list)}")
     print("-" * 65)
@@ -135,10 +167,22 @@ def confirm_reviewer(state, preset: str | None) -> str:
             f"Separation of Duties: '{result.username}' submitted this query and cannot review their own request. "
             "No decision recorded; the query remains in the queue for another reviewer."
         )
+    req_clearance = state.values.get("principal_clearance") or get_user_clearance(requester)
+    reviewer_clearance = get_user_clearance(result.username)
+    if not clearance_covers(reviewer_clearance, req_clearance):
+        sys.exit(
+            f"Clearance Violation: '{result.username}' [{reviewer_clearance}] cannot review a "
+            f"'{req_clearance}' query. No decision recorded."
+        )
     return issue_token(result.username)
 
 
 def main():
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
     parser = argparse.ArgumentParser(description="Human-in-the-Loop CLI Operator for Checkpoints")
     parser.add_argument("--list", action="store_true", help="List all threads awaiting human review")
     parser.add_argument("--thread", type=str, help="Thread ID to inspect or approve/reject")
