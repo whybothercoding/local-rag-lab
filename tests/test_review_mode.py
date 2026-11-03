@@ -157,4 +157,5 @@ def test_admin_panel_shows_the_review_mode():
     app.text_input[0].input("alice")
     app.text_input[1].input(TEST_PASSWORD)
     [b for b in app.button if b.label == "Sign in"][0].click().run()
+    assert not app.exception, app.exception
     assert any(str(c.value).startswith("Review mode:") for c in app.caption)

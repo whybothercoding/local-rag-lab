@@ -2,25 +2,12 @@ import pytest
 from langgraph.types import Command
 from langchain_core.runnables import RunnableConfig
 
-from app import workflow, DB_URI, GraphState
+from app import workflow, GraphState
 from checkpointer import get_checkpointer, fetch_checkpoint_threads
 from conftest import token_for
 
 # The requester (carol) and the reviewer (bob) are different accounts, as separation of duties requires.
 REVIEW = {"decision": "approved", "approver_token": token_for("bob"), "reason": "automated check"}
-
-
-def is_postgres_available() -> bool:
-    """Quick check to avoid 30-second pytest hanging if PostgreSQL container is off."""
-    try:
-        from psycopg_pool import ConnectionPool
-        with ConnectionPool(conninfo=DB_URI, min_size=1, max_size=1, timeout=1.5, kwargs={"autocommit": True}) as pool:
-            with pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1;")
-                    return True
-    except Exception:
-        return False
 
 
 def _inputs(session: str) -> GraphState:
@@ -75,30 +62,30 @@ def test_full_pipeline_to_sqlite_and_approve_cli(tmp_path, rollback_index):
         assert "rollback sla is strictly under 5 minutes" in final_state.values.get("generation", "").lower()
 
 
-@pytest.mark.skipif(not is_postgres_available(), reason="PostgreSQL container not reachable on localhost:5432")
-def test_full_pipeline_to_postgres_and_approve_cli(rollback_index):
-    pytest.importorskip("langgraph.checkpoint.postgres", reason="langgraph-checkpoint-postgres not installed")
-    from langgraph.checkpoint.postgres import PostgresSaver
-    from psycopg_pool import ConnectionPool
+def test_full_pipeline_to_postgres_and_approve_cli(postgres_uri, rollback_index):
+    """The production PostgreSQL path: encrypted, thread-bound saver from open_checkpointer, shared pool reuse."""
+    import uuid
 
-    config: RunnableConfig = {"configurable": {"thread_id": "test-integration-thread-001"}}
+    from checkpointer import close_checkpointer, open_checkpointer, shared_pool
 
-    with ConnectionPool(conninfo=DB_URI, max_size=5, open=True, kwargs={"autocommit": True}) as pool:
-        checkpointer = PostgresSaver(pool)  # type: ignore[arg-type]
-        checkpointer.setup()
-        engine = workflow.compile(checkpointer=checkpointer)
-
-        # Step until interrupt
-        for _ in engine.stream(_inputs("test-integration-thread-001"), config=config):
+    thread = f"test-integration-{uuid.uuid4().hex}"
+    config: RunnableConfig = {"configurable": {"thread_id": thread}}
+    saver = open_checkpointer(postgres_uri)
+    try:
+        engine = workflow.compile(checkpointer=saver)
+        for _ in engine.stream(_inputs(thread), config=config):
             pass
+        assert engine.get_state(config).next == ("human_approval",)
 
-        state = engine.get_state(config)
-        assert state.next == ("human_approval",)
+        pool = shared_pool(saver)
+        assert pool is not None
+        assert thread in fetch_checkpoint_threads(uri=postgres_uri, prefix="test-integration-", pool=pool)
+        assert thread in fetch_checkpoint_threads(uri=postgres_uri, prefix="test-integration-")
 
-        # Resume with a named reviewer
         for _ in engine.stream(Command(resume=REVIEW), config=config):
             pass
-
         final_state = engine.get_state(config)
         assert final_state.next == ()
         assert "rollback sla is strictly under 5 minutes" in final_state.values.get("generation", "").lower()
+    finally:
+        close_checkpointer(saver)

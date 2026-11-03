@@ -27,6 +27,8 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
 
 DB_URI = os.getenv("DB_URI", DEFAULT_DB_URI)
+# PostgreSQL connections the long-lived UI checkpointer keeps open, shared by every browser session.
+CHECKPOINT_POOL_SIZE = int(os.getenv("CHECKPOINT_POOL_SIZE", "5"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL)
 LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto")

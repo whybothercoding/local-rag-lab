@@ -18,7 +18,7 @@ from collections.abc import Generator
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from config import DB_URI, ROOT
+from config import CHECKPOINT_POOL_SIZE, DB_URI, ROOT
 from vault import EncryptedSerde, bind_thread
 
 logger = logging.getLogger("checkpointer")
@@ -101,47 +101,90 @@ def _bound_postgres_saver(pool) -> BaseCheckpointSaver:
     return BoundPostgresSaver(pool, serde=EncryptedSerde())  # type: ignore[arg-type]
 
 
-@contextmanager
-def get_checkpointer(
-    uri: str | None = None,
-    max_pool_size: int = 5,
-) -> Generator[BaseCheckpointSaver, None, None]:
-    """Context manager yielding an initialized, encrypting checkpointer ready for LangGraph."""
+# The connection or pool each open checkpointer owns, closed by close_checkpointer.
+_OWNED: dict[int, object] = {}
+
+
+def open_checkpointer(uri: str | None = None, max_pool_size: int = CHECKPOINT_POOL_SIZE) -> BaseCheckpointSaver:
+    """Open an initialized, encrypting checkpointer that stays open until close_checkpointer.
+
+    For long-lived processes (the UI server): one SQLite connection or one PostgreSQL pool serves every
+    request instead of being opened per request. SqliteSaver serializes access to its connection with
+    its own lock, and the pool hands each request its own connection, so both are safe to share.
+    """
     target = uri if uri is not None else DB_URI
 
     if is_postgres_uri(target):
         from psycopg_pool import ConnectionPool
 
-        with ConnectionPool(conninfo=target, max_size=max_pool_size, open=True, kwargs={"autocommit": True}) as pool:
+        pool = ConnectionPool(conninfo=target, max_size=max_pool_size, open=True, kwargs={"autocommit": True})
+        try:
             saver = _bound_postgres_saver(pool)
             saver.setup()  # type: ignore[attr-defined]
-            yield saver
-    else:
-        db_path = get_sqlite_path(target)
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        except BaseException:
+            pool.close()
+            raise
+        _OWNED[id(saver)] = pool
+        return saver
+
+    db_path = get_sqlite_path(target)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        saver = _bound_sqlite_saver(conn)
+        saver.setup()
         try:
-            saver = _bound_sqlite_saver(conn)
-            saver.setup()
-            try:
-                conn.execute("PRAGMA journal_mode=WAL;")
-                conn.execute("PRAGMA busy_timeout=5000;")
-            except Exception as exc:
-                logger.debug("SQLite PRAGMA tuning: %s", exc)
-            yield saver
-        finally:
-            conn.close()
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception as exc:
+            logger.debug("SQLite PRAGMA tuning: %s", exc)
+    except BaseException:
+        conn.close()
+        raise
+    _OWNED[id(saver)] = conn
+    return saver
+
+
+def close_checkpointer(saver: BaseCheckpointSaver) -> None:
+    """Close the connection or pool an open_checkpointer saver owns. Safe to call twice."""
+    owned = _OWNED.pop(id(saver), None)
+    if owned is not None:
+        owned.close()  # type: ignore[attr-defined]
+
+
+def shared_pool(saver: BaseCheckpointSaver | None):
+    """The PostgreSQL pool behind a saver, so callers can reuse it instead of opening another; else None."""
+    owned = _OWNED.get(id(saver)) if saver is not None else None
+    return owned if owned is not None and not isinstance(owned, sqlite3.Connection) else None
+
+
+@contextmanager
+def get_checkpointer(
+    uri: str | None = None,
+    max_pool_size: int = CHECKPOINT_POOL_SIZE,
+) -> Generator[BaseCheckpointSaver, None, None]:
+    """Context manager yielding an initialized, encrypting checkpointer ready for LangGraph.
+
+    For one-shot commands. Long-lived servers use open_checkpointer once instead.
+    """
+    saver = open_checkpointer(uri, max_pool_size)
+    try:
+        yield saver
+    finally:
+        close_checkpointer(saver)
 
 
 def fetch_checkpoint_threads(
     uri: str | None = None,
     prefix: str | None = None,
     limit: int | None = None,
+    pool=None,
 ) -> list[str]:
     """Distinct thread IDs in the checkpointer database.
 
     With a prefix, only matching threads are returned. With a limit, the most recently active
     threads come first (checkpoint IDs are time-ordered), so callers do not decrypt every thread.
-    Without either, IDs are sorted alphabetically as before.
+    Without either, IDs are sorted alphabetically as before. Pass `pool` (see shared_pool) to reuse an
+    open PostgreSQL pool instead of opening one for this query.
     """
     target = uri if uri is not None else DB_URI
     escaped = None
@@ -155,11 +198,17 @@ def fetch_checkpoint_threads(
         from psycopg_pool import ConnectionPool
 
         query = f"SELECT thread_id FROM checkpoints{where} GROUP BY thread_id{order}{tail};"
-        with ConnectionPool(conninfo=target, min_size=1, max_size=1, open=True, kwargs={"autocommit": True}) as pool:
-            with pool.connection() as conn:
+
+        def run(active_pool) -> list[str]:
+            with active_pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(query, (escaped,) if escaped else None)
                     return [row[0] for row in cur.fetchall()]
+
+        if pool is not None:
+            return run(pool)
+        with ConnectionPool(conninfo=target, min_size=1, max_size=1, open=True, kwargs={"autocommit": True}) as own:
+            return run(own)
 
     db_path = get_sqlite_path(target)
     if not Path(db_path).exists():

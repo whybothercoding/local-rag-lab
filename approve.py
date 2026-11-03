@@ -15,7 +15,7 @@ from access import (
     verify_token,
 )
 from app import workflow
-from checkpointer import get_checkpointer, fetch_checkpoint_threads
+from checkpointer import get_checkpointer, fetch_checkpoint_threads, shared_pool
 
 logger = logging.getLogger("HITL-Operator-CLI")
 
@@ -32,11 +32,8 @@ def list_pending_threads(
     When `viewer_clearance` is given, threads whose requester holds a higher clearance
     than the viewer are excluded so lower-clearance reviewers cannot browse them.
     """
-    thread_ids = (
-        fetch_checkpoint_threads(prefix=prefix)
-        if prefix is not None
-        else fetch_checkpoint_threads()
-    )
+    pool = shared_pool(getattr(app, "checkpointer", None))
+    thread_ids = fetch_checkpoint_threads(prefix=prefix, pool=pool) if prefix is not None else fetch_checkpoint_threads(pool=pool)
     pending = []
 
     for thread_id in thread_ids:

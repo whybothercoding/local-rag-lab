@@ -13,6 +13,12 @@ import pytest
 
 # Chroma's anonymous telemetry must never run in tests.
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+# A PostgreSQL server for the checkpointer tests: POSTGRES_TEST_URI, or a postgres DB_URI inherited from the
+# environment (CI). Read before DB_URI is pointed at a throwaway SQLite file below.
+_INHERITED_DB_URI = os.environ.get("DB_URI", "")
+POSTGRES_TEST_URI = os.environ.get("POSTGRES_TEST_URI") or (
+    _INHERITED_DB_URI if _INHERITED_DB_URI.startswith(("postgres://", "postgresql://")) else ""
+)
 # Audit log, access policy, and signing key for tests live in throwaway files, never in data/.
 _scratch_dir = tempfile.mkdtemp(prefix="rag-test-")
 atexit.register(shutil.rmtree, _scratch_dir, ignore_errors=True)
@@ -56,6 +62,39 @@ def rollback_index(tmp_path, monkeypatch):
 
     assert ingest_workspace("default", str(source)).ok
     return source
+
+
+def _postgres_reachable(uri: str) -> bool:
+    try:
+        from psycopg_pool import ConnectionPool
+
+        with ConnectionPool(conninfo=uri, min_size=1, max_size=1, timeout=1.5, kwargs={"autocommit": True}) as pool:
+            with pool.connection() as conn:
+                conn.execute("SELECT 1;")
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def postgres_uri() -> str:
+    """The PostgreSQL test server. Skips when there is none, unless REQUIRE_POSTGRES=1 (CI), where it fails.
+
+    The offline run blocks every TCP connection, so it always skips there.
+    """
+    if os.getenv("RAG_OFFLINE") == "1":
+        pytest.skip("network sockets are blocked in the offline run")
+
+    def unavailable(reason: str):
+        if os.getenv("REQUIRE_POSTGRES") == "1":
+            pytest.fail(f"REQUIRE_POSTGRES=1 but {reason}")
+        pytest.skip(reason)
+
+    if not POSTGRES_TEST_URI:
+        unavailable("no PostgreSQL configured (set POSTGRES_TEST_URI, e.g. after 'make up')")
+    if not _postgres_reachable(POSTGRES_TEST_URI):
+        unavailable(f"PostgreSQL not reachable at {POSTGRES_TEST_URI.split('@')[-1]}")
+    return POSTGRES_TEST_URI
 
 
 def token_for(name: str) -> str:

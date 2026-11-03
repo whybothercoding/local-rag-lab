@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      DB_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
+      # Tests run on throwaway SQLite stores; this server backs the PostgreSQL checkpointer tests.
+      POSTGRES_TEST_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
 
     services:
       postgres:
@@ -63,6 +64,9 @@ jobs:
         run: python fetch_models.py
 
       - name: Run test suite (PostgreSQL integration included)
+        env:
+          # A missing or unreachable PostgreSQL fails the run instead of skipping its tests.
+          REQUIRE_POSTGRES: "1"
         run: pytest -v
 
       - name: Run test suite with all outbound network blocked

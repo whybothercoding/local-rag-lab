@@ -1,3 +1,4 @@
+import atexit
 import streamlit as st
 import json
 import time
@@ -33,7 +34,8 @@ from access import (
 from app import workflow, GraphState
 from audit import export_events, list_events, record, verify_anchors, verify_chain
 from approve import list_pending_threads
-from checkpointer import get_checkpointer, fetch_checkpoint_threads
+import checkpointer as checkpointer_module
+from checkpointer import close_checkpointer, fetch_checkpoint_threads, open_checkpointer, shared_pool
 from config import MAX_SOURCE_BYTES, UPLOADS_DIR
 from ingest import ingest_workspace
 from parsers import SUPPORTED_EXTENSIONS
@@ -211,7 +213,7 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
     """Retrieve existing conversation threads for this user in this workspace."""
     prefix = f"ui-{ws_id}-"
     threads = []
-    for tid in fetch_checkpoint_threads(prefix=prefix, limit=50):
+    for tid in fetch_checkpoint_threads(prefix=prefix, limit=50, pool=shared_pool(engine.checkpointer)):
         if not tid.startswith(prefix):
             continue
         try:
@@ -240,6 +242,18 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
         except Exception:
             continue
     return list(reversed(threads))
+
+
+@st.cache_resource(show_spinner=False)
+def compiled_engine(db_uri: str):
+    """One checkpointer and compiled graph per server process and database, shared by every session.
+
+    Reruns (every click) reuse them instead of reconnecting and recompiling. With PostgreSQL this keeps
+    a single pool (CHECKPOINT_POOL_SIZE connections) open instead of opening one per rerun.
+    """
+    saver = open_checkpointer(db_uri)
+    atexit.register(close_checkpointer, saver)
+    return workflow.compile(checkpointer=saver)
 
 
 login_gate()
@@ -294,341 +308,340 @@ active_ws = st.sidebar.selectbox("Active Workspace", visible)
 stats = get_workspace_stats(active_ws)
 st.sidebar.caption(f"Status: **{stats['files']}** files | **{stats['chunks']}** indexed chunks")
 
-with get_checkpointer() as checkpointer:
-    engine = workflow.compile(checkpointer=checkpointer)
+engine = compiled_engine(checkpointer_module.DB_URI)
 
-    user_threads = load_user_threads(engine, user, active_ws)
+user_threads = load_user_threads(engine, user, active_ws)
 
-    # Reset session memory when switching workspace
-    if "current_ws" not in st.session_state or st.session_state.current_ws != active_ws:
-        st.session_state.current_ws = active_ws
-        st.session_state.pop("thread_id", None)
-        st.session_state.pop("messages", None)
+# Reset session memory when switching workspace
+if "current_ws" not in st.session_state or st.session_state.current_ws != active_ws:
+    st.session_state.current_ws = active_ws
+    st.session_state.pop("thread_id", None)
+    st.session_state.pop("messages", None)
 
-    # Auto-restore latest thread if messages not yet initialized
-    if not st.session_state.get("thread_id") or "messages" not in st.session_state:
-        if user_threads:
-            latest = user_threads[0]
-            st.session_state.thread_id = latest["thread_id"]
-            msgs = [{"role": "user", "content": latest["question"]}]
-            if not latest["paused"] and latest["generation"]:
-                msgs.append({
-                    "role": "assistant",
-                    "content": latest["generation"],
-                    "citations": latest["citations"],
-                    "degraded": latest["degraded"],
-                })
-            st.session_state.messages = msgs
-        else:
-            st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
-            st.session_state.messages = []
+# Auto-restore latest thread if messages not yet initialized
+if not st.session_state.get("thread_id") or "messages" not in st.session_state:
+    if user_threads:
+        latest = user_threads[0]
+        st.session_state.thread_id = latest["thread_id"]
+        msgs = [{"role": "user", "content": latest["question"]}]
+        if not latest["paused"] and latest["generation"]:
+            msgs.append({
+                "role": "assistant",
+                "content": latest["generation"],
+                "citations": latest["citations"],
+                "degraded": latest["degraded"],
+            })
+        st.session_state.messages = msgs
+    else:
+        st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
+        st.session_state.messages = []
 
-    # Sidebar: Conversation History
-    with st.sidebar.expander(f"Conversations ({len(user_threads)})", expanded=True):
-        if st.button("➕ New Chat", use_container_width=True, key="new_chat_btn"):
-            st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
-            st.session_state.messages = []
+# Sidebar: Conversation History
+with st.sidebar.expander(f"Conversations ({len(user_threads)})", expanded=True):
+    if st.button("➕ New Chat", use_container_width=True, key="new_chat_btn"):
+        st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
+        st.session_state.messages = []
+        st.rerun()
+
+    if user_threads:
+        opts = {t["thread_id"]: t["label"] for t in user_threads}
+        curr_tid = st.session_state.get("thread_id", "")
+        if curr_tid and curr_tid not in opts:
+            opts[curr_tid] = "➕ New Chat (in progress)"
+
+        opt_keys = list(opts.keys())
+        curr_idx = opt_keys.index(curr_tid) if curr_tid in opt_keys else 0
+        selected_tid = st.selectbox(
+            "Select conversation",
+            options=opt_keys,
+            format_func=lambda tid: opts[tid],
+            index=curr_idx,
+            key="thread_selector",
+        )
+        if selected_tid != curr_tid:
+            st.session_state.thread_id = selected_tid
+            target = next((t for t in user_threads if t["thread_id"] == selected_tid), None)
+            if target:
+                msgs = [{"role": "user", "content": target["question"]}]
+                if not target["paused"] and target["generation"]:
+                    msgs.append({
+                        "role": "assistant",
+                        "content": target["generation"],
+                        "citations": target["citations"],
+                        "degraded": target["degraded"],
+                    })
+                st.session_state.messages = msgs
+            else:
+                st.session_state.messages = []
             st.rerun()
 
-        if user_threads:
-            opts = {t["thread_id"]: t["label"] for t in user_threads}
-            curr_tid = st.session_state.get("thread_id", "")
-            if curr_tid and curr_tid not in opts:
-                opts[curr_tid] = "➕ New Chat (in progress)"
+if admin:
+    # 1. User Grants & Auto-Approval
+    with st.sidebar.expander("User Grants & Auto-Approval (Admin)"):
+        policy_data = load_policy()
+        global_defaults = get_default_permissions()
+        report = review_mode_report(list_workspaces())
+        for line in describe_review_mode(report):
+            st.caption(line)
+        for warning in report.warnings:
+            st.warning(warning)
+        st.caption(f"Global default permissions: `{', '.join(global_defaults) or 'none'}`")
+        def_q = st.checkbox("Default: query", value="query" in global_defaults, key="def_perm_q")
+        def_auto = st.checkbox("Default: auto_approve", value="auto_approve" in global_defaults, key="def_perm_auto")
+        if st.button("Save Global Defaults", use_container_width=True, key="save_global_defaults"):
+            next_defaults = []
+            if def_q:
+                next_defaults.append("query")
+            if def_auto:
+                next_defaults.append("auto_approve")
+            set_default_permissions(next_defaults, actor=user)
+            st.success(f"Global defaults updated to: {', '.join(next_defaults) or 'none'}")
+            st.rerun()
 
-            opt_keys = list(opts.keys())
-            curr_idx = opt_keys.index(curr_tid) if curr_tid in opt_keys else 0
-            selected_tid = st.selectbox(
-                "Select conversation",
-                options=opt_keys,
-                format_func=lambda tid: opts[tid],
-                index=curr_idx,
-                key="thread_selector",
+        st.divider()
+        user_list = sorted(policy_data["users"].keys())
+        if user_list:
+            selected_user = st.selectbox("Account", user_list, key="grant_user_select")
+            user_info = policy_data["users"][selected_user]
+            curr_clr = user_info.get("clearance", "public")
+            curr_admin = bool(user_info.get("admin", False))
+            st.caption(f"Clearance: `{curr_clr}` | Admin: `{curr_admin}`")
+
+            clr_idx = CLEARANCE_LEVELS.index(curr_clr) if curr_clr in CLEARANCE_LEVELS else 0
+            new_clr = st.selectbox(
+                "Clearance Level",
+                list(CLEARANCE_LEVELS),
+                index=clr_idx,
+                key=f"clr_select_{selected_user}",
             )
-            if selected_tid != curr_tid:
-                st.session_state.thread_id = selected_tid
-                target = next((t for t in user_threads if t["thread_id"] == selected_tid), None)
-                if target:
-                    msgs = [{"role": "user", "content": target["question"]}]
-                    if not target["paused"] and target["generation"]:
-                        msgs.append({
-                            "role": "assistant",
-                            "content": target["generation"],
-                            "citations": target["citations"],
-                            "degraded": target["degraded"],
-                        })
-                    st.session_state.messages = msgs
-                else:
-                    st.session_state.messages = []
-                st.rerun()
-
-    if admin:
-        # 1. User Grants & Auto-Approval
-        with st.sidebar.expander("User Grants & Auto-Approval (Admin)"):
-            policy_data = load_policy()
-            global_defaults = get_default_permissions()
-            report = review_mode_report(list_workspaces())
-            for line in describe_review_mode(report):
-                st.caption(line)
-            for warning in report.warnings:
-                st.warning(warning)
-            st.caption(f"Global default permissions: `{', '.join(global_defaults) or 'none'}`")
-            def_q = st.checkbox("Default: query", value="query" in global_defaults, key="def_perm_q")
-            def_auto = st.checkbox("Default: auto_approve", value="auto_approve" in global_defaults, key="def_perm_auto")
-            if st.button("Save Global Defaults", use_container_width=True, key="save_global_defaults"):
-                next_defaults = []
-                if def_q:
-                    next_defaults.append("query")
-                if def_auto:
-                    next_defaults.append("auto_approve")
-                set_default_permissions(next_defaults, actor=user)
-                st.success(f"Global defaults updated to: {', '.join(next_defaults) or 'none'}")
-                st.rerun()
-
-            st.divider()
-            user_list = sorted(policy_data["users"].keys())
-            if user_list:
-                selected_user = st.selectbox("Account", user_list, key="grant_user_select")
-                user_info = policy_data["users"][selected_user]
-                curr_clr = user_info.get("clearance", "public")
-                curr_admin = bool(user_info.get("admin", False))
-                st.caption(f"Clearance: `{curr_clr}` | Admin: `{curr_admin}`")
-
-                clr_idx = CLEARANCE_LEVELS.index(curr_clr) if curr_clr in CLEARANCE_LEVELS else 0
-                new_clr = st.selectbox(
-                    "Clearance Level",
-                    list(CLEARANCE_LEVELS),
-                    index=clr_idx,
-                    key=f"clr_select_{selected_user}",
-                )
-                new_admin = st.checkbox(
-                    "Administrator privilege",
-                    value=curr_admin,
-                    key=f"admin_chk_{selected_user}",
-                )
-                if (new_clr != curr_clr or new_admin != curr_admin) and st.button(
-                    "Update Role / Clearance",
-                    use_container_width=True,
-                    key=f"save_role_{selected_user}",
-                ):
-                    try:
-                        if new_clr != curr_clr:
-                            set_user_clearance(selected_user, new_clr, actor=user)
-                        if new_admin != curr_admin:
-                            set_admin(selected_user, new_admin, actor=user)
-                        st.success(f"Updated role/clearance for '{selected_user}'.")
-                        st.rerun()
-                    except (ValueError, PermissionError) as exc:
-                        st.error(str(exc))
-
-                ws_options = ["all"] + all_workspaces
-                target_ws = st.selectbox("Workspace", ws_options, key="grant_ws_select")
-
-                effective_ws = active_ws if target_ws == "all" else target_ws
-                curr_grants = effective_permissions(selected_user, effective_ws)
-                q_checked = "query" in curr_grants
-                r_checked = "review" in curr_grants
-                auto_checked = "auto_approve" in curr_grants
-
-                grant_q = st.checkbox("query (ask questions)", value=q_checked, key=f"g_q_{selected_user}_{target_ws}")
-                grant_r = st.checkbox("review (approve answers)", value=r_checked, key=f"g_r_{selected_user}_{target_ws}")
-                grant_auto = st.checkbox("auto_approve (bypass compliance gate)", value=auto_checked, key=f"g_a_{selected_user}_{target_ws}")
-
-                if st.button("Save Grants", use_container_width=True, key=f"save_grants_{selected_user}_{target_ws}"):
-                    new_perms = []
-                    if grant_q:
-                        new_perms.append("query")
-                    if grant_r:
-                        new_perms.append("review")
-                    if grant_auto:
-                        new_perms.append("auto_approve")
-
-                    if target_ws == "all":
-                        set_user_permissions_everywhere(selected_user, new_perms, actor=user)
-                    else:
-                        set_grant(selected_user, target_ws, new_perms, actor=user)
-                    st.success(f"Updated grants for '{selected_user}' on {target_ws}: {', '.join(new_perms) or 'none'}")
-                    st.rerun()
-
-                if st.button("Reset to Defaults", use_container_width=True, key=f"reset_grants_{selected_user}_{target_ws}"):
-                    if target_ws == "all":
-                        from access import clear_user_permissions_override
-                        clear_user_permissions_override(selected_user, actor=user)
-                    else:
-                        reset_grant(selected_user, target_ws, actor=user)
-                    st.success(f"Reset '{selected_user}' on {target_ws} to follow default permissions.")
-                    st.rerun()
-
-        # 1b. Add New User Account
-        with st.sidebar.expander("Add User Account (Admin)"):
-            new_u_name = st.text_input("New Username", key="new_user_name").strip()
-            new_u_pass = st.text_input("Initial Password (min 12 chars)", type="password", key="new_user_pass")
-            new_u_clr = st.selectbox("Initial Clearance", list(CLEARANCE_LEVELS), index=0, key="new_user_clr")
-            new_u_adm = st.checkbox("Grant Admin Role", value=False, key="new_user_adm")
-            if st.button("Create User", use_container_width=True, key="create_user_btn"):
+            new_admin = st.checkbox(
+                "Administrator privilege",
+                value=curr_admin,
+                key=f"admin_chk_{selected_user}",
+            )
+            if (new_clr != curr_clr or new_admin != curr_admin) and st.button(
+                "Update Role / Clearance",
+                use_container_width=True,
+                key=f"save_role_{selected_user}",
+            ):
                 try:
-                    add_user(new_u_name, new_u_pass, admin=new_u_adm, clearance=new_u_clr, actor=user)
-                    st.success(f"Created account '{new_u_name.lower()}' with default workspace access.")
+                    if new_clr != curr_clr:
+                        set_user_clearance(selected_user, new_clr, actor=user)
+                    if new_admin != curr_admin:
+                        set_admin(selected_user, new_admin, actor=user)
+                    st.success(f"Updated role/clearance for '{selected_user}'.")
                     st.rerun()
                 except (ValueError, PermissionError) as exc:
                     st.error(str(exc))
 
-        # 2. Add New Workspace
-        with st.sidebar.expander("Create Workspace Bundle"):
-            new_name = st.text_input("Name (e.g., accounting, strategy, marketing)").strip()
-            if st.button("Create Bundle", use_container_width=True):
-                clean_name = sanitize_workspace_id(new_name)
-                if not clean_name:
-                    st.error("Enter a valid alphanumeric workspace name.")
-                elif clean_name not in all_workspaces:
-                    create_workspace(clean_name, actor=user)
-                    st.success(f"Workspace '{clean_name}' created.")
-                    st.rerun()
-                else:
-                    st.warning("A workspace with that name already exists.")
+            ws_options = ["all"] + all_workspaces
+            target_ws = st.selectbox("Workspace", ws_options, key="grant_ws_select")
 
-        # 3. Delete Workspace
-        with st.sidebar.expander("Delete Bundle"):
-            st.write(f"Active: **{active_ws}**")
-            confirm = st.checkbox(f"Confirm deletion of '{active_ws}'")
-            if st.button("Delete Permanently", type="primary", disabled=not confirm, use_container_width=True):
-                delete_workspace(active_ws, actor=user)
-                st.success(f"Removed '{active_ws}'.")
+            effective_ws = active_ws if target_ws == "all" else target_ws
+            curr_grants = effective_permissions(selected_user, effective_ws)
+            q_checked = "query" in curr_grants
+            r_checked = "review" in curr_grants
+            auto_checked = "auto_approve" in curr_grants
+
+            grant_q = st.checkbox("query (ask questions)", value=q_checked, key=f"g_q_{selected_user}_{target_ws}")
+            grant_r = st.checkbox("review (approve answers)", value=r_checked, key=f"g_r_{selected_user}_{target_ws}")
+            grant_auto = st.checkbox("auto_approve (bypass compliance gate)", value=auto_checked, key=f"g_a_{selected_user}_{target_ws}")
+
+            if st.button("Save Grants", use_container_width=True, key=f"save_grants_{selected_user}_{target_ws}"):
+                new_perms = []
+                if grant_q:
+                    new_perms.append("query")
+                if grant_r:
+                    new_perms.append("review")
+                if grant_auto:
+                    new_perms.append("auto_approve")
+
+                if target_ws == "all":
+                    set_user_permissions_everywhere(selected_user, new_perms, actor=user)
+                else:
+                    set_grant(selected_user, target_ws, new_perms, actor=user)
+                st.success(f"Updated grants for '{selected_user}' on {target_ws}: {', '.join(new_perms) or 'none'}")
                 st.rerun()
 
-        st.sidebar.divider()
-
-        # 4. Multi-Format Document Ingestion into Active Workspace
-        st.sidebar.subheader(f"Add Files to [{active_ws}]")
-        uploaded_files = st.sidebar.file_uploader(
-            "Upload Documents",
-            accept_multiple_files=True,
-            type=[ext.lstrip(".") for ext in sorted(SUPPORTED_EXTENSIONS)],
-        )
-
-        if st.sidebar.button(f"Index into '{active_ws}'", use_container_width=True) and uploaded_files:
-            accepted = 0
-            for uf in uploaded_files:
-                if uf.size > MAX_SOURCE_BYTES:
-                    st.sidebar.error(f"'{uf.name}' is larger than {MAX_SOURCE_BYTES // (1024 * 1024)} MB and was not saved.")
-                    continue
-                try:
-                    target = staged_path(active_ws, uf.name)
-                except ValueError as exc:
-                    st.sidebar.error(f"'{uf.name}' was not saved: {exc}")
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, "wb") as handle:
-                    handle.write(uf.getbuffer())
-                accepted += 1
-
-            if accepted:
-                with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
-                    res = ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
-                for skipped_note in res.skipped:
-                    st.sidebar.warning(f"Skipped {skipped_note}")
-                if not res.ok:
-                    st.sidebar.error(f"Indexing failed: {res.error}")
+            if st.button("Reset to Defaults", use_container_width=True, key=f"reset_grants_{selected_user}_{target_ws}"):
+                if target_ws == "all":
+                    from access import clear_user_permissions_override
+                    clear_user_permissions_override(selected_user, actor=user)
                 else:
-                    st.sidebar.success(f"Successfully indexed {res.documents} file(s) ({res.chunks} chunks).")
-                    st.rerun()
+                    reset_grant(selected_user, target_ws, actor=user)
+                st.success(f"Reset '{selected_user}' on {target_ws} to follow default permissions.")
+                st.rerun()
 
-    # --- MAIN CHAT AREA ---
-    st.title(f"Workspace: `{active_ws}`")
+    # 1b. Add New User Account
+    with st.sidebar.expander("Add User Account (Admin)"):
+        new_u_name = st.text_input("New Username", key="new_user_name").strip()
+        new_u_pass = st.text_input("Initial Password (min 12 chars)", type="password", key="new_user_pass")
+        new_u_clr = st.selectbox("Initial Clearance", list(CLEARANCE_LEVELS), index=0, key="new_user_clr")
+        new_u_adm = st.checkbox("Grant Admin Role", value=False, key="new_user_adm")
+        if st.button("Create User", use_container_width=True, key="create_user_btn"):
+            try:
+                add_user(new_u_name, new_u_pass, admin=new_u_adm, clearance=new_u_clr, actor=user)
+                st.success(f"Created account '{new_u_name.lower()}' with default workspace access.")
+                st.rerun()
+            except (ValueError, PermissionError) as exc:
+                st.error(str(exc))
 
-    # Display conversation history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-            render_degraded(msg.get("degraded"))
-            if msg.get("citations"):
-                render_citations(msg["citations"])
+    # 2. Add New Workspace
+    with st.sidebar.expander("Create Workspace Bundle"):
+        new_name = st.text_input("Name (e.g., accounting, strategy, marketing)").strip()
+        if st.button("Create Bundle", use_container_width=True):
+            clean_name = sanitize_workspace_id(new_name)
+            if not clean_name:
+                st.error("Enter a valid alphanumeric workspace name.")
+            elif clean_name not in all_workspaces:
+                create_workspace(clean_name, actor=user)
+                st.success(f"Workspace '{clean_name}' created.")
+                st.rerun()
+            else:
+                st.warning("A workspace with that name already exists.")
 
-    config: RunnableConfig = {"configurable": {"thread_id": st.session_state.thread_id}}
-
-    review_queue(engine, active_ws, user, own_thread=st.session_state.thread_id)
-    paused = pending_review_panel(engine, st.session_state.thread_id, active_ws, user)
-
-    # Sync completed answer back into chat if approved/rejected externally (e.g. via CLI or another reviewer tab)
-    if not paused and st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-        completed_state = engine.get_state(config)
-        if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
-            gen_text = completed_state.values.get("generation", "")
-            rejected = "REJECTED BY HUMAN COMPLIANCE" in gen_text
-            cites = [] if rejected else completed_state.values.get("citations", [])
-            deg = [] if rejected else completed_state.values.get("degraded", [])
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": gen_text,
-                "citations": cites,
-                "degraded": deg,
-            })
+    # 3. Delete Workspace
+    with st.sidebar.expander("Delete Bundle"):
+        st.write(f"Active: **{active_ws}**")
+        confirm = st.checkbox(f"Confirm deletion of '{active_ws}'")
+        if st.button("Delete Permanently", type="primary", disabled=not confirm, use_container_width=True):
+            delete_workspace(active_ws, actor=user)
+            st.success(f"Removed '{active_ws}'.")
             st.rerun()
 
-    can_query = authorize(user, active_ws, "query")
-    user_query = st.chat_input(
-        f"Ask a question grounded in '{active_ws}'..." if can_query else f"Your account does not have query permission on '{active_ws}'.",
-        disabled=paused or not can_query,
+    st.sidebar.divider()
+
+    # 4. Multi-Format Document Ingestion into Active Workspace
+    st.sidebar.subheader(f"Add Files to [{active_ws}]")
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload Documents",
+        accept_multiple_files=True,
+        type=[ext.lstrip(".") for ext in sorted(SUPPORTED_EXTENSIONS)],
     )
 
-    if user_query:
-        # If active thread was already completed, start fresh thread
-        prior_state = engine.get_state(config)
-        if prior_state.values and not prior_state.next and prior_state.values.get("generation"):
-            st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
-            config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            st.session_state.messages = []
+    if st.sidebar.button(f"Index into '{active_ws}'", use_container_width=True) and uploaded_files:
+        accepted = 0
+        for uf in uploaded_files:
+            if uf.size > MAX_SOURCE_BYTES:
+                st.sidebar.error(f"'{uf.name}' is larger than {MAX_SOURCE_BYTES // (1024 * 1024)} MB and was not saved.")
+                continue
+            try:
+                target = staged_path(active_ws, uf.name)
+            except ValueError as exc:
+                st.sidebar.error(f"'{uf.name}' was not saved: {exc}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(uf.getbuffer())
+            accepted += 1
 
-        st.session_state.messages.append({"role": "user", "content": user_query})
-        with st.chat_message("user"):
-            st.write(user_query)
+        if accepted:
+            with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
+                res = ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
+            for skipped_note in res.skipped:
+                st.sidebar.warning(f"Skipped {skipped_note}")
+            if not res.ok:
+                st.sidebar.error(f"Indexing failed: {res.error}")
+            else:
+                st.sidebar.success(f"Successfully indexed {res.documents} file(s) ({res.chunks} chunks).")
+                st.rerun()
 
-        inputs: GraphState = {
-            "workspace_id": active_ws,
-            "session_id": st.session_state.thread_id,
-            # The pipeline verifies this token itself. The plain name is never sent.
-            "principal_token": st.session_state.token,
-            # Redacted before submission: LangGraph persists the input in the checkpoint before any node runs.
-            "question": redact_pii(user_query),
-            "original_question": redact_pii(user_query),
-            "sanitized_question": "",
-            "documents": [],
-            "citations": [],
-            "generation": "",
-            "intent": "",
-            "cache_hit": False,
-            "is_safe": True,
-            "grade_status": "",
-            "hallucination_status": "",
-            "relevance_status": "",
-            "retry_count": 0,
-            "generation_retry_count": 0,
-            "grader_feedback": "",
-            "history": [],
-            "telemetry": {}
-        }
+# --- MAIN CHAT AREA ---
+st.title(f"Workspace: `{active_ws}`")
 
-        with st.spinner("Processing query via guardrails, hybrid search, and Self-RAG..."):
-            for _ in engine.stream(inputs, config=config):
-                pass
+# Display conversation history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        render_degraded(msg.get("degraded"))
+        if msg.get("citations"):
+            render_citations(msg["citations"])
 
-        state = engine.get_state(config)
+config: RunnableConfig = {"configurable": {"thread_id": st.session_state.thread_id}}
 
-        if state.next == ("human_approval",):
-            # The review panel renders on the next run.
-            st.rerun()
+review_queue(engine, active_ws, user, own_thread=st.session_state.thread_id)
+paused = pending_review_panel(engine, st.session_state.thread_id, active_ws, user)
 
-        ans = state.values.get("generation", "No answer generated.")
-        citations = state.values.get("citations", [])
-        degraded = state.values.get("degraded", [])
+# Sync completed answer back into chat if approved/rejected externally (e.g. via CLI or another reviewer tab)
+if not paused and st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    completed_state = engine.get_state(config)
+    if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
+        gen_text = completed_state.values.get("generation", "")
+        rejected = "REJECTED BY HUMAN COMPLIANCE" in gen_text
+        cites = [] if rejected else completed_state.values.get("citations", [])
+        deg = [] if rejected else completed_state.values.get("degraded", [])
         st.session_state.messages.append({
             "role": "assistant",
-            "content": ans,
-            "citations": citations,
-            "degraded": degraded,
+            "content": gen_text,
+            "citations": cites,
+            "degraded": deg,
         })
-        with st.chat_message("assistant"):
-            st.write(ans)
-            render_degraded(degraded)
-            render_citations(citations)
         st.rerun()
+
+can_query = authorize(user, active_ws, "query")
+user_query = st.chat_input(
+    f"Ask a question grounded in '{active_ws}'..." if can_query else f"Your account does not have query permission on '{active_ws}'.",
+    disabled=paused or not can_query,
+)
+
+if user_query:
+    # If active thread was already completed, start fresh thread
+    prior_state = engine.get_state(config)
+    if prior_state.values and not prior_state.next and prior_state.values.get("generation"):
+        st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        st.session_state.messages = []
+
+    st.session_state.messages.append({"role": "user", "content": user_query})
+    with st.chat_message("user"):
+        st.write(user_query)
+
+    inputs: GraphState = {
+        "workspace_id": active_ws,
+        "session_id": st.session_state.thread_id,
+        # The pipeline verifies this token itself. The plain name is never sent.
+        "principal_token": st.session_state.token,
+        # Redacted before submission: LangGraph persists the input in the checkpoint before any node runs.
+        "question": redact_pii(user_query),
+        "original_question": redact_pii(user_query),
+        "sanitized_question": "",
+        "documents": [],
+        "citations": [],
+        "generation": "",
+        "intent": "",
+        "cache_hit": False,
+        "is_safe": True,
+        "grade_status": "",
+        "hallucination_status": "",
+        "relevance_status": "",
+        "retry_count": 0,
+        "generation_retry_count": 0,
+        "grader_feedback": "",
+        "history": [],
+        "telemetry": {}
+    }
+
+    with st.spinner("Processing query via guardrails, hybrid search, and Self-RAG..."):
+        for _ in engine.stream(inputs, config=config):
+            pass
+
+    state = engine.get_state(config)
+
+    if state.next == ("human_approval",):
+        # The review panel renders on the next run.
+        st.rerun()
+
+    ans = state.values.get("generation", "No answer generated.")
+    citations = state.values.get("citations", [])
+    degraded = state.values.get("degraded", [])
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": ans,
+        "citations": citations,
+        "degraded": degraded,
+    })
+    with st.chat_message("assistant"):
+        st.write(ans)
+        render_degraded(degraded)
+        render_citations(citations)
+    st.rerun()
