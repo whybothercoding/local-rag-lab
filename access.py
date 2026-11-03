@@ -669,6 +669,12 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
             f"open review mode with {report.accounts} accounts: answers that pass every automated check are "
             "released without a person reading them. For team use run 'make team-mode ADMIN=<admin>'."
         )
+        classified = _workspaces_with_classified_documents(workspace_ids)
+        if classified:
+            report.warnings.append(
+                f"confidential or secret documents are indexed in: {', '.join(classified)}. In open mode their "
+                "answers are released to cleared accounts without review."
+            )
     if without_reviewer:
         report.warnings.append(
             f"no reviewer on: {', '.join(without_reviewer)}. Answers that fail an automated check, or come from "
@@ -682,6 +688,14 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
         )
     report.auto_approve_holdouts = sorted(holdouts)
     return report
+
+
+def _workspaces_with_classified_documents(workspace_ids: list[str]) -> list[str]:
+    import workspace_manager
+    from sparse_search import indexed_clearances
+
+    classified = {"confidential", "secret"}
+    return [ws for ws in workspace_ids if indexed_clearances(ws, base_dir=workspace_manager.BM25_DIR) & classified]
 
 
 def enable_team_mode(workspace_ids: list[str], path: str | None = None, actor: str | None = None) -> ReviewReport:

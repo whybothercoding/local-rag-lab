@@ -159,3 +159,41 @@ def test_admin_panel_shows_the_review_mode():
     [b for b in app.button if b.label == "Sign in"][0].click().run()
     assert not app.exception, app.exception
     assert any(str(c.value).startswith("Review mode:") for c in app.caption)
+
+
+def test_open_mode_flags_indexed_classified_documents(policy, tmp_path, monkeypatch):
+    from ingest import ingest_workspace
+
+    for target in ("workspace_manager", "app"):
+        monkeypatch.setattr(f"{target}.CHROMA_PATH", str(tmp_path / "chroma"))
+        monkeypatch.setattr(f"{target}.BM25_DIR", str(tmp_path / "bm25"))
+    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    for ws, level in (("finance", "secret"), ("ops", "public")):
+        source = tmp_path / "kb" / ws
+        source.mkdir(parents=True)
+        (source / "doc.md").write_text(f"---\nclearance: {level}\n---\nQuarterly figures for {ws}.\n")
+        assert ingest_workspace(ws, str(source)).ok
+
+    alone = review_mode_report(WORKSPACES, policy)
+    assert not any("confidential or secret" in w for w in alone.warnings), "one account: nobody else reads it"
+
+    add_user("ann", TEST_PASSWORD, path=policy)
+    shared = review_mode_report(WORKSPACES, policy)
+    flagged = [w for w in shared.warnings if "confidential or secret" in w]
+    assert len(flagged) == 1 and "finance" in flagged[0] and "ops" not in flagged[0]
+
+    add_user("rev", TEST_PASSWORD, clearance="secret", path=policy)
+    set_user_permissions_everywhere("rev", ["query", "review"], path=policy)
+    enable_team_mode(WORKSPACES, path=policy, actor="root")
+    assert not any("confidential or secret" in w for w in review_mode_report(WORKSPACES, policy).warnings)
+
+
+def test_indexed_clearances_reads_the_keyword_index(tmp_path):
+    from sparse_search import index_sparse_chunks, indexed_clearances
+
+    assert indexed_clearances("none", base_dir=str(tmp_path)) == set()
+    index_sparse_chunks("ws", ["a", "b"], ["x.md", "y.md"], ["one", "two"], clearances=["public", "SECRET"],
+                        base_dir=str(tmp_path))
+    assert indexed_clearances("ws", base_dir=str(tmp_path)) == {"public", "secret"}
+    (tmp_path / "broken.db").write_text("not a database")
+    assert indexed_clearances("broken", base_dir=str(tmp_path)) == set()

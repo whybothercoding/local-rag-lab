@@ -145,6 +145,19 @@ def delete_sparse_index(workspace_id: str, base_dir: str | None = None) -> None:
                 logger.debug("Could not remove %s: %s", fpath, exc)
 
 
+def indexed_clearances(workspace_id: str, base_dir: str | None = None) -> set[str]:
+    """Clearance levels present among a workspace's indexed chunks; empty when it is not indexed."""
+    db_path = get_fts_db_path(workspace_id, base_dir)
+    if not os.path.exists(db_path):
+        return set()
+    try:
+        with closing(sqlite3.connect(db_path)) as conn:
+            rows = conn.execute("SELECT DISTINCT clearance FROM fts_chunks;").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {str(row[0]).strip().lower() for row in rows if row[0]}
+
+
 def has_sparse_index(workspace_id: str, base_dir: str | None = None) -> bool:
     """Return True if an FTS5 index exists for the workspace."""
     return (Path(base_dir or BM25_DIR) / f"{workspace_id}.db").exists()
