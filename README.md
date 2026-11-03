@@ -93,14 +93,16 @@ An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval 
    │ (approved / max retries)
 [generate]
    │
-[grade_hallucination] ──(retry)──> [generate]
-   │ (grounded / circuit break)
+[grade_hallucination] ──(retry + grader feedback)──> [generate]
+   │ (grounded)          └──(circuit break)──> [human_approval]
 [grade_relevance] ──(irrelevant)──> [rewrite]
-   │ (relevant)
+   │ (relevant / circuit break)
 [human_approval] (HITL Compliance Checkpoint)
    │
  [END]
 ```
+
+The generated topology is [`docs/architecture.mmd`](docs/architecture.mmd) (`make graph`); a test fails when it no longer matches the code.
 
 ---
 

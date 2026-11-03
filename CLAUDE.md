@@ -78,22 +78,27 @@ make factory-reset [CONFIRM=yes]
 Graph execution in [`app.py`](app.py) follows a cyclic Self-RAG state machine:
 
 ```text
-[START] ──> [guardrail] ──(pass)──> [cache_lookup] ──(miss)──> [router]
-                 │                        │                        ├──(chitchat)──> [chitchat] ──> [END]
-              (fail)                    (hit)                      └──(rag)──> [retrieve]
-                 │                        │                                       │
-                 ▼                        ▼                               [sanitize_context]
-               [END]                    [END]                                     │
-                                                                             [grade_docs] ──(rewrite)──┐
-                                                                                  │ (pass)             │
-                                                                             [generate] <──────────────┘
-                                                                                  │
-                                                                       [grade_hallucination] ──(retry)──┐
-                                                                                  │ (grounded)          │
-                                                                          [grade_relevance]             │
-                                                                           ├──(irrelevant)──> [rewrite] ┘
-                                                                           └──(relevant)──> [human_approval] ──> [END]
+[START] ──> [guardrail] ──(fail)──> [END]
+                 │ (pass)
+           [cache_lookup] ──(hit)──> [END]
+                 │ (miss)
+             [router] ──(chitchat)──> [chitchat] ──> [END]
+                 │ (rag)
+             [retrieve] <──────── [rewrite] <──────────────────┐
+                 │                    ▲                        │
+          [sanitize_context]          │                        │
+                 │                    │                        │
+            [grade_docs] ──(rewrite)──┘                        │
+                 │ (approved | circuit_break)                  │
+             [generate] <────────────────────┐                 │
+                 │                           │ (retry)         │
+        [grade_hallucination] ───────────────┘                 │
+                 │ (grounded)                                  │
+          [grade_relevance] ──(irrelevant)─────────────────────┘
+                 │ (relevant | circuit_break)
+          [human_approval] ──> [END]
 ```
+`grade_hallucination` also exits to `human_approval` on `circuit_break` (not drawn). Rewrite edges spend `retry_count` (`MAX_RETRIEVAL_RETRIES`); the retry edge spends `generation_retry_count` (`MAX_GENERATION_RETRIES`) and carries `grader_feedback` into the prompt. The generated topology [`docs/architecture.mmd`](docs/architecture.mmd) is authoritative: run `make graph` after changing edges (a test fails when it is stale).
 
 ### State & Tenancy Invariants
 * **State Schema**: `GraphState` ([`app.py`](app.py)) preserves `original_question` (post-PII redaction) separately from `sanitized_question` (which [`query_rewrite_node`](app.py) may expand) so semantic caching, relevance grading, and review panels always key on the user's original question.
@@ -103,7 +108,7 @@ Graph execution in [`app.py`](app.py) follows a cyclic Self-RAG state machine:
 * **Workspaces**: Sanitized slugs (`ws_<workspace_id>`). Each workspace deterministically merges `knowledge_base/<ws>` and `uploads/<ws>` (with `knowledge_base` taking precedence on filename collisions) and performs an atomic Chroma collection swap (`__build` -> live) during `FORCE=1` re-syncs. Deleting a workspace requires admin privileges, escapes SQL `LIKE` wildcards, and prunes its grants from `access_policy.json`.
 * **Human-in-the-Loop & Safety Escalation**: Answers release automatically when the user holds `auto_approve` **and** the generation is grounded, relevant, non-abstaining, and free of blocking degradation (`security_warning`, `dense_retrieval_unavailable`, `sparse_retrieval_unavailable`). Otherwise, execution pauses at `interrupt()` for a reviewer who holds `review` permission, is not the requester (`requester != approver`), and whose clearance dominates (`clearance_covers`) the thread's `principal_clearance`.
 * **Hybrid Self-RAG Graders**: [`grade_hallucination_node`](app.py) and [`grade_answer_relevance_node`](app.py) combine lexical/numeric grounding checks (`_unsupported_numbers` rejects fabricated digits or number words) with an in-process pinned ONNX cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) via [`reranker.py`](reranker.py).
-* **Rust Accelerator Parity & Graceful Degradation**: `crates/rag_accel` strips zero-width Unicode obfuscation and runs a single-pass `RegexSet` automaton with 100% verdict and reason parity with [`context_sanitizer.py`](context_sanitizer.py). If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently.
+* **Rust Accelerator Parity & Graceful Degradation**: `crates/rag_accel` strips zero-width Unicode obfuscation and runs a single-pass `RegexSet` automaton with 100% verdict and reason parity with [`context_sanitizer.py`](context_sanitizer.py). If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently. Never switch embedding models automatically: indexes store their `embedding_fingerprint`, and a mismatch skips dense retrieval until re-index.
 
 ---
 
