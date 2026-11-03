@@ -35,6 +35,7 @@ from typing import Any, Generator, Optional
 
 from rag_lab.security.access import allowed_clearances as get_allowed_clearances
 from rag_lab.config import settings
+from rag_lab.lang import NEGATIONS, fold, words
 from rag_lab.security.vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
 
 logger = logging.getLogger("semantic_cache")
@@ -52,7 +53,7 @@ _COLUMNS = (
     "query_vector, reviewed, approved_by, created_at"
 )
 _NUMBER = re.compile(r"\d+(?:[.,:/-]\d+)*")
-_NEGATIONS = frozenset({"not", "no", "never", "without", "except", "cannot", "isnt", "dont", "doesnt", "wont"})
+# Negations in every supported language (rag_lab.lang): "nicht", "pas", "δεν" change a question as much as "not".
 
 
 def _sha256(text: str) -> str:
@@ -77,10 +78,9 @@ def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
 
 def _signature(text: str) -> tuple[frozenset[str], frozenset[str]]:
     """The numbers and negations in a question. Two questions that differ in either are not the same question."""
-    lowered = text.lower().replace("'", "")
+    lowered = fold(text).replace("'", "").replace("\u2019", "")
     numbers = frozenset(m.group(0) for m in _NUMBER.finditer(lowered))
-    words = frozenset(re.findall(r"[a-z]+", lowered))
-    return numbers, words & _NEGATIONS
+    return numbers, frozenset(words(lowered)) & NEGATIONS
 
 
 def _pack_vector(vec: list[float]) -> bytes:

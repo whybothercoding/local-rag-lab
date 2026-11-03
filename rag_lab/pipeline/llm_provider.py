@@ -19,6 +19,10 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from rag_lab.config import settings
+from rag_lab.lang import STOPWORDS, words
+
+# Words the extractive synthesizer ignores when matching a question to context sentences.
+_EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"}
 
 logger = logging.getLogger("llm_provider")
 
@@ -62,9 +66,7 @@ class DeterministicContextLLM(BaseChatModel):
             return "I could not find relevant documentation in this workspace to answer your query."
 
         # Find the most relevant sentences in context matching question tokens
-        q_tokens = set(re.findall(r"\w+", question.lower())) - {
-            "what", "is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"
-        }
+        q_tokens = set(words(question)) - _EXTRACTOR_IGNORE
         sentences = re.split(r"(?<=[.!?])\s+", context)
 
         matched_sentences = []
@@ -72,7 +74,7 @@ class DeterministicContextLLM(BaseChatModel):
             s_clean = s.strip()
             if not s_clean:
                 continue
-            s_tokens = set(re.findall(r"\w+", s_clean.lower()))
+            s_tokens = set(words(s_clean))
             overlap = len(q_tokens & s_tokens)
             if overlap > 0:
                 matched_sentences.append((overlap, s_clean))
