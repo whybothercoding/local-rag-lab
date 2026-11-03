@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -19,6 +19,7 @@ help:
 	@echo "  make set-clearance ACCOUNT=<u> CLEARANCE=<lvl> ADMIN=<admin>"
 	@echo "  make set-admin ACCOUNT=<u> ADMIN=<admin> [REVOKE=1]"
 	@echo "  make set-default PERMS=query,auto_approve ADMIN=<admin>"
+	@echo "  make team-mode ADMIN=<admin>                   Require human review by default (needs a reviewer)"
 	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>"
 	@echo "  make revoke ACCOUNT=<u> WS=<ws|w1,w2|all> ADMIN=<admin>"
 	@echo "  make set-password ACCOUNT=<u> ADMIN=<admin>    Reset a user's password and revoke active tokens"
@@ -201,6 +202,10 @@ set-admin:
 set-default:
 	@test -n "$(PERMS)" || (echo "Usage: make set-default PERMS=query,auto_approve ADMIN=<admin>" && exit 1)
 	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-default --perms $(PERMS)
+
+team-mode:
+	@test -n "$(ADMIN)" || (echo "Usage: make team-mode ADMIN=<admin>" && exit 1)
+	./venv/bin/python access.py --as $(ADMIN) team-mode
 
 set-password:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-password ACCOUNT=<username> ADMIN=<admin>" && exit 1)

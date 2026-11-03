@@ -12,6 +12,7 @@ from access import (
     allowed_workspaces,
     authorize,
     clearance_covers,
+    describe_review_mode,
     effective_permissions,
     get_default_permissions,
     get_user_clearance,
@@ -19,6 +20,7 @@ from access import (
     is_idle_expired,
     load_policy,
     reset_grant,
+    review_mode_report,
     revoke_sessions,
     set_admin,
     set_default_permissions,
@@ -365,6 +367,11 @@ with get_checkpointer() as checkpointer:
         with st.sidebar.expander("User Grants & Auto-Approval (Admin)"):
             policy_data = load_policy()
             global_defaults = get_default_permissions()
+            report = review_mode_report(list_workspaces())
+            for line in describe_review_mode(report):
+                st.caption(line)
+            for warning in report.warnings:
+                st.warning(warning)
             st.caption(f"Global default permissions: `{', '.join(global_defaults) or 'none'}`")
             def_q = st.checkbox("Default: query", value="query" in global_defaults, key="def_perm_q")
             def_auto = st.checkbox("Default: auto_approve", value="auto_approve" in global_defaults, key="def_perm_auto")

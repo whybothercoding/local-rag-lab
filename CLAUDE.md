@@ -32,6 +32,7 @@ make add-user ACCOUNT=<u_name> [ADMIN=1] [CLEARANCE=public|internal|confidential
 make grant ACCOUNT=<u_name> WS=<ws|ws1,ws2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>
 make revoke ACCOUNT=<u_name> WS=<ws|ws1,ws2|all> ADMIN=<admin>
 make set-default [PERMS=query,auto_approve|none] ADMIN=<admin>
+make team-mode ADMIN=<admin>  # Drop auto_approve from defaults (open -> team review mode); needs a reviewer
 make set-admin ACCOUNT=<u_name> ADMIN=<admin> [REVOKE=1]
 make set-clearance ACCOUNT=<u_name> CLEARANCE=<level> ADMIN=<admin>
 make set-password ACCOUNT=<u_name> ADMIN=<admin>

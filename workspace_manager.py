@@ -345,7 +345,7 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
 def print_status() -> int:
     """Print an end-to-end operational readiness and health summary."""
-    from access import PolicyIntegrityError, list_users
+    from access import PolicyIntegrityError, describe_review_mode, list_users, review_mode_report
     from approve import list_pending_threads
     from app import workflow
     from audit import verify_anchors, verify_chain
@@ -418,6 +418,12 @@ def print_status() -> int:
         users = list_users()
         admins = [u["username"] for u in users if u["admin"]]
         print(f"[OK] RBAC accounts       : {len(users)} user(s), {len(admins)} admin(s)")
+        # Advisory: a release-mode gap is a governance choice to review, not a broken installation.
+        report = review_mode_report(list_workspaces())
+        for line in describe_review_mode(report):
+            print(f"[OK] {line}")
+        for warning in report.warnings:
+            print(f"[--] Review coverage     : {warning}")
     except PolicyIntegrityError as exc:
         print(f"[!!] RBAC policy error   : {exc}")
         ok = False

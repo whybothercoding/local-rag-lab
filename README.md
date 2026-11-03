@@ -139,7 +139,9 @@ make status
 
 ### 2. User Accounts & Role-Based Access Control (RBAC)
 
-The system denies all access by default until accounts and workspace permissions are granted. Passwords are encrypted using **scrypt** with automatic hash upgrades.
+Nothing is reachable without a signed-in account. Passwords are hashed with **scrypt** with automatic hash upgrades.
+
+**Review modes.** A fresh install runs in **open** mode: the global defaults are `query` + `auto_approve`, so every account can chat on every workspace and answers that pass every automated check are released without a person reading them. Answers that fail a check still pause for review. For team use, appoint at least one reviewer and run `make team-mode ADMIN=<admin>`: it removes only `auto_approve` from the defaults, so answers wait for a reviewer unless an account holds `auto_approve` through its own grants. `make status`, `make users` and the admin panel show the current mode, and flag workspaces where a paused answer could not be decided (no reviewer, only the requester as reviewer, or no reviewer cleared as high as the requester).
 
 All operations can be managed directly via `make` commands without activating the virtual environment:
 
@@ -166,6 +168,10 @@ make revoke ACCOUNT=bob WS=all
 
 # List accounts, clearance, and assigned permissions (never displays hashes)
 make users
+
+# Require human review by default once a reviewer is appointed
+make grant ACCOUNT=bob WS=all PERMS=query,review ADMIN=alice
+make team-mode ADMIN=alice
 
 # Reset an account password (prompts securely)
 make set-password ACCOUNT=bob

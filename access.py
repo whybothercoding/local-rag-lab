@@ -31,7 +31,7 @@ import secrets
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -608,6 +608,111 @@ def get_default_permissions(path: str | None = None) -> list[str]:
     return list(load_policy(path)["defaults"]["permissions"])
 
 
+@dataclass
+class ReviewReport:
+    """How answers get released, and the gaps that would leave an answer waiting with nobody to decide.
+
+    "open" mode: the global defaults include auto_approve, so every account releases answers that pass
+    every automated check without a person reading them (the out-of-the-box single-user setup).
+    "team" mode: auto_approve is not a default; answers wait for a reviewer unless an account holds
+    auto_approve through its own grants.
+    """
+
+    mode: str
+    defaults: list[str]
+    accounts: int
+    warnings: list[str] = field(default_factory=list)
+    reviewers: dict[str, list[str]] = field(default_factory=dict)
+    auto_approve_holdouts: list[str] = field(default_factory=list)
+
+
+def review_mode_report(workspace_ids: list[str], path: str | None = None) -> ReviewReport:
+    """Describe the release mode and every workspace where a paused answer could not be decided.
+
+    A paused answer needs a reviewer who holds review on the workspace, is not the requester, and is
+    cleared at least as high as the requester (the same rules human_in_the_loop_node enforces).
+    """
+    policy = load_policy(path)
+    users = policy["users"]
+    defaults = list((policy.get("defaults") or {}).get("permissions", []))
+    report = ReviewReport(
+        mode="open" if "auto_approve" in defaults else "team",
+        defaults=defaults,
+        accounts=len(users),
+    )
+
+    def clearance(name: str) -> str:
+        level = str(users[name].get("clearance", DEFAULT_CLEARANCE)).strip().lower()
+        return level if level in CLEARANCE_LEVELS else DEFAULT_CLEARANCE
+
+    without_reviewer: list[str] = []
+    uncovered: dict[str, set[str]] = {}
+    holdouts: set[str] = set()
+    for ws in workspace_ids:
+        perms = {name: effective_permissions(policy, info, ws) for name, info in users.items()}
+        requesters = sorted(n for n, p in perms.items() if "query" in p)
+        reviewers = sorted(n for n, p in perms.items() if "review" in p)
+        report.reviewers[ws] = reviewers
+        if report.mode == "team":
+            holdouts |= {n for n, p in perms.items() if "auto_approve" in p}
+        if not requesters:
+            continue
+        if not reviewers:
+            without_reviewer.append(ws)
+            continue
+        for requester in requesters:
+            if not any(r != requester and clearance_covers(clearance(r), clearance(requester)) for r in reviewers):
+                uncovered.setdefault(ws, set()).add(requester)
+
+    if report.mode == "open" and report.accounts > 1:
+        report.warnings.append(
+            f"open review mode with {report.accounts} accounts: answers that pass every automated check are "
+            "released without a person reading them. For team use run 'make team-mode ADMIN=<admin>'."
+        )
+    if without_reviewer:
+        report.warnings.append(
+            f"no reviewer on: {', '.join(without_reviewer)}. Answers that fail an automated check, or come from "
+            "accounts without auto_approve, wait there until someone holds review "
+            "('make grant ACCOUNT=<u> WS=<ws> PERMS=query,review ADMIN=<admin>')."
+        )
+    for ws, names in sorted(uncovered.items()):
+        report.warnings.append(
+            f"workspace '{ws}': no reviewer other than the requester is cleared high enough to release answers "
+            f"for {', '.join(sorted(names))}."
+        )
+    report.auto_approve_holdouts = sorted(holdouts)
+    return report
+
+
+def enable_team_mode(workspace_ids: list[str], path: str | None = None, actor: str | None = None) -> ReviewReport:
+    """Stop releasing answers without review by default. Only auto_approve is removed from the defaults.
+
+    Refuses while no account holds review anywhere: every paused answer would wait with nobody able to decide.
+    """
+    before = review_mode_report(workspace_ids, path)
+    if not any(before.reviewers.values()):
+        raise ValueError(
+            "No account holds review on any workspace, so every paused answer would wait with nobody able to "
+            "decide. Appoint a reviewer first: make grant ACCOUNT=<u> WS=all PERMS=query,review ADMIN=<admin>"
+        )
+    if before.mode == "open":
+        set_default_permissions([p for p in before.defaults if p != "auto_approve"], path=path, actor=actor)
+    else:
+        _authorize_change(actor, path)
+    return review_mode_report(workspace_ids, path)
+
+
+def describe_review_mode(report: ReviewReport) -> list[str]:
+    """Human-readable lines for CLIs and the status check."""
+    if report.mode == "open":
+        lines = ["Review mode: open (auto_approve is a default; answers that pass every check release without review)"]
+    else:
+        lines = ["Review mode: team (answers wait for a reviewer unless the account holds auto_approve itself)"]
+    if report.auto_approve_holdouts:
+        lines.append(f"Accounts still on auto_approve through their own grants: {', '.join(report.auto_approve_holdouts)}")
+    return lines
+
+
 def set_grant(
     username: str,
     workspace: str,
@@ -841,8 +946,19 @@ def build_parser() -> argparse.ArgumentParser:
     reset_all = sub.add_parser("reset-users", parents=[signer_parent], help="Delete all user accounts and workspace grants")
     reset_all.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
 
-    sub.add_parser("list", help="Show accounts, grants, and defaults (never password hashes)")
+    sub.add_parser("list", help="Show accounts, grants, defaults, and the review mode (never password hashes)")
+    sub.add_parser(
+        "team-mode",
+        parents=[signer_parent],
+        help="Require review by default: remove auto_approve from the defaults (needs an appointed reviewer)",
+    )
     return parser
+
+
+def _workspace_ids() -> list[str]:
+    from workspace_manager import list_workspaces
+
+    return list_workspaces()
 
 
 def _confirm(prompt: str) -> bool:
@@ -908,6 +1024,12 @@ def main(argv: list[str] | None = None) -> int:
             _grant(args, actor)
         elif args.command == "revoke":
             _revoke(args, actor)
+        elif args.command == "team-mode":
+            report = enable_team_mode(_workspace_ids(), actor=actor)
+            for line in describe_review_mode(report):
+                print(line)
+            for warning in report.warnings:
+                print(f"Warning: {warning}")
         else:
             defaults = ", ".join(get_default_permissions()) or "none"
             print(f"Defaults (every account, every workspace): {defaults}")
@@ -921,6 +1043,11 @@ def main(argv: list[str] | None = None) -> int:
                 if grants:
                     extras.append(grants)
                 print(f"{user['username']}{flag} [{user['clearance']}]: {', '.join(extras) or 'defaults'}")
+            report = review_mode_report(_workspace_ids())
+            for line in describe_review_mode(report):
+                print(line)
+            for warning in report.warnings:
+                print(f"Warning: {warning}")
     except (ValueError, PolicyIntegrityError, PermissionError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
