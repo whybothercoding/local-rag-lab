@@ -1,5 +1,3 @@
-import hashlib
-import pytest
 
 from config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
 
@@ -8,7 +6,6 @@ from app import (
     guardrail_input_node,
     cache_lookup_node,
     router_node,
-    chitchat_node,
     grade_documents_node,
     query_rewrite_node,
     grade_hallucination_node,

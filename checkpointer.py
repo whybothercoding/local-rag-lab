@@ -239,7 +239,6 @@ def prune_checkpoints(retention_days: int, uri: str | None = None, now: float | 
     removed = 0
 
     if is_postgres_uri(target):
-        from psycopg_pool import ConnectionPool
 
         with get_checkpointer(uri=target) as saver:
             pool = saver.conn  # type: ignore[attr-defined]

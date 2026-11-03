@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import zipfile
-from types import SimpleNamespace
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver

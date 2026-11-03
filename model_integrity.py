@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from config import FASTEMBED_MODEL, MODELS_DIR, RERANKER_MODEL
+from config import FASTEMBED_MODEL, MODELS_DIR
 
 
 class ModelIntegrityError(RuntimeError):

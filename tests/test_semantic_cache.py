@@ -1,19 +1,14 @@
 """Tests for persistent, clearance-partitioned semantic and vector-backed cache."""
-import os
 import sqlite3
 from pathlib import Path
 import pytest
 
-from access import add_user, issue_token
-from app import cache_lookup_node, human_in_the_loop_node, workflow
-from conftest import token_for
 from semantic_cache import (
     _L1_CITATIONS,
     _L1_GENERATIONS,
     _cosine_similarity,
     _pack_vector,
     _unpack_vector,
-    cache_key,
     clear_cache,
     clear_workspace_cache,
     lookup_cache,
@@ -57,6 +52,7 @@ def test_cache_persists_across_l1_in_memory_eviction(tmp_path: Path):
         citations=["policy.md (chunk 0)"],
         db_path=db_file,
     )
+    assert ckey, "store_cache returns the key it stored under"
 
     # 1. Hit from L1 memory
     hit_l1 = lookup_cache("default", "What is the rollback SLA?", "public", db_path=db_file)

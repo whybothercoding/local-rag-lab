@@ -11,7 +11,6 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 import tomllib
-import pytest
 
 from config import ROOT
 
@@ -93,7 +92,6 @@ def test_declared_py_modules_exist_and_import():
 
 def test_console_scripts_execute_via_cli():
     import subprocess
-    import sys
 
     pyproject_path = ROOT / "pyproject.toml"
     with open(pyproject_path, "rb") as f:

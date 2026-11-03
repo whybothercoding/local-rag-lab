@@ -61,6 +61,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "ruff>=0.6.0",
     "pytest>=8.3.0",
     "pytest-mock>=3.14.0",
     "pytest-cov>=5.0.0",
@@ -141,6 +142,14 @@ exclude = [
     "backups",
     "eval/out",
 ]
+
+[tool.ruff.lint]
+# Pinned explicitly: newer ruff releases widen the default rule set, which would change the gate silently.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# eval.py must point every store at eval/out/ before the project modules are imported.
+"eval.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

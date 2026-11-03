@@ -6,12 +6,10 @@ Verifies:
 3. Graceful degradation when candidates <= 1 or when reranker is disabled.
 4. Offline verification in fetch_models.py.
 """
-from typing import Any
-import pytest
 
 from config import RERANKER_MODEL, MODELS_DIR
 from model_integrity import verify_model
-from reranker import get_reranker, rerank_documents, score_pairs
+from reranker import rerank_documents, score_pairs
 
 
 def test_reranker_pinned_model_integrity():

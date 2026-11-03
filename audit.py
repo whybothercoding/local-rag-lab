@@ -15,7 +15,6 @@ Three limits are handled explicitly:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import hmac
 import json
 import sqlite3

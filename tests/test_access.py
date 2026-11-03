@@ -342,7 +342,7 @@ def test_delete_nonexistent_user_raises(policy_path):
 
 
 def test_reset_users_removes_all_accounts(policy_path):
-    from access import delete_user, load_policy, reset_users
+    from access import load_policy, reset_users
 
     add_user("user_a", TEST_PASSWORD, path=policy_path)
     add_user("user_b", TEST_PASSWORD, path=policy_path)

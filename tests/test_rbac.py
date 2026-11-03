@@ -17,12 +17,11 @@ from access import (
     allowed_clearances,
     get_user_clearance,
     issue_token,
-    load_policy,
     set_grant,
     set_user_clearance,
 )
 from ingest import _extract_doc_clearance, ingest_workspace
-from sparse_search import get_fts_db_path, index_sparse_chunks, search_sparse_chunks
+from sparse_search import index_sparse_chunks, search_sparse_chunks
 from app import hybrid_retrieval_node
 
 
@@ -42,7 +41,6 @@ def test_clearance_taxonomy_and_hierarchy():
 
 def test_access_user_clearance_management(tmp_path: Path):
     policy_path = str(tmp_path / "access_policy.json")
-    key_path = str(tmp_path / "access.key")
 
     # Add user with default clearance
     add_user("alice", "Password123!@#", clearance="public", path=policy_path)

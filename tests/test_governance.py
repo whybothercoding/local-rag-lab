@@ -290,7 +290,7 @@ def test_admin_sees_the_audit_panel_and_others_do_not():
 
 def test_verify_anchors_detects_malformed_lines_broken_chain_and_missing_fields(audit_path, anchor_path):
     from vault import anchor_mac
-    from audit import _canonical, GENESIS_HASH
+    from audit import _canonical
 
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1}, path=audit_path)
     first = anchor(path=audit_path, anchor_path=anchor_path)
