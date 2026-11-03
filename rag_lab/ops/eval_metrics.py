@@ -55,7 +55,8 @@ def mean(values: list[float | None]) -> float | None:
 def summarize(results: list[dict]) -> dict:
     answerable = [r for r in results if r["expect"] == "answer"]
     security = [r for r in results if r["expect"] in ("denied", "blocked")]
-    cache = [r for r in results if r["expect"] in ("fresh", "cached")]
+    cache_all = [r for r in results if r["expect"] in ("fresh", "cached")]
+    cache = [r for r in cache_all if r["passed"] is not None]
     abstain = [r for r in results if r["expect"] == "abstain"]
     judged = [r for r in answerable if r.get("judge_supported") is not None]
     latencies = [r["latency_ms"] for r in results]
@@ -69,6 +70,7 @@ def summarize(results: list[dict]) -> dict:
         "abstention_accuracy": mean([1.0 if r["passed"] else 0.0 for r in abstain]),
         "security_accuracy": mean([1.0 if r["passed"] else 0.0 for r in security]),
         "cache_accuracy": mean([1.0 if r["passed"] else 0.0 for r in cache]),
+        "cache_conclusive_rate": round(len(cache) / len(cache_all), 4) if cache_all else None,
         "judge_support": mean([1.0 if r["judge_supported"] else 0.0 for r in judged]),
         "degraded_cases": sum(1 for r in results if r.get("degraded")),
         "median_latency_ms": round(median(latencies), 1) if latencies else None,
@@ -79,7 +81,7 @@ def check_thresholds(summary: dict, thresholds: dict[str, float]) -> list[str]:
     failures = []
     for metric, minimum in thresholds.items():
         value = summary.get(metric)
-        if value is None and metric == "cache_accuracy":
+        if value is None and metric in ("cache_accuracy", "cache_conclusive_rate"):
             continue  # a suite without cache cases has nothing to gate there
         if value is None or value < minimum:
             failures.append(f"{metric} = {value} (required >= {minimum})")

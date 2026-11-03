@@ -29,11 +29,11 @@ An answer that fails the groundedness check is regenerated from the same documen
 
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
-* **Dense Retrieval**: Cosine similarity via ChromaDB and fast local embeddings (ONNX `bge-small-en-v1.5`).
+* **Dense Retrieval**: Cosine similarity via ChromaDB and in-process ONNX embeddings. `MODEL_PROFILE` picks the models: `multilingual` (default; `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`, about 0.8 GB), `multilingual-large` (`multilingual-e5-large` + `bge-reranker-v2-m3`, about 4.5 GB, slower, marginally better), or `en` (`bge-small-en-v1.5` + `ms-marco-MiniLM-L-6-v2`, English only). Documents and questions may be in English, German, French, or Greek, in any combination.
   Set `EMBEDDING_PROVIDER=ollama` to embed with `nomic-embed-text` instead. The two models produce vectors of different sizes, so there is no automatic switch between them: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`).
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
-* **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
+* **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (per profile) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
 
 ### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
 To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:

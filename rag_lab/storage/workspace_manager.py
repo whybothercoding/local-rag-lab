@@ -353,6 +353,8 @@ def print_status() -> int:
     try:
         runtime_fingerprint = embedding_fingerprint()
         provider = runtime_fingerprint.split(":", 1)[0]
+        print(f"[OK] Model profile       : {settings.model_profile} (reranker {settings.reranker_model}, "
+              f"relevance gate: {settings.relevance_gate})")
         print(f"[OK] Embedding provider  : {runtime_fingerprint}")
     except EmbeddingUnavailableError as exc:
         print(f"[!!] Embedding provider  : {exc}")

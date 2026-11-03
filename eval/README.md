@@ -43,8 +43,8 @@ make eval-calibrate           # per-case retrieval signals for the calibration s
 | cache_accuracy | = 1.0 | Negated or renumbered questions were not served a cached answer; the control was |
 | judge_support | >= 0.8 (`--llm` only) | The judge found the answer supported by its context |
 
-`multilingual` and `conversation` are measured and reported but not gated yet: they get gates once the multilingual
-foundation (models, injection patterns, language data) and history-aware follow-ups land.
+`multilingual` is gated as well (thresholds in `SUITE_GATES`). `conversation` is measured and reported but not
+gated until follow-up questions use the conversation history.
 
 ### Baseline before the multilingual work (test split)
 
@@ -57,17 +57,41 @@ foundation (models, injection patterns, language data) and history-aware follow-
 | conversation | deterministic | 0.78 | 0.78 | 0.56 | - | - | - | - |
 | conversation | llm | 0.78 | 0.78 | 0.67 | - | - | - | 1.00 |
 
-The multilingual gaps this measures: German, French, and Greek prompt injections are not blocked (the patterns are
+### After the multilingual foundation (default `multilingual` profile, test split)
+
+| Suite | Mode | answer | recall | keywords | abstain | security | cache | judge |
+|---|---|---|---|---|---|---|---|---|
+| en | deterministic | 1.00 | 1.00 | 0.93 | 1.00 | 1.00 | 1.00 | - |
+| en | llm (qwen2.5-coder:7b) | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 (1 inconclusive) | 1.00 |
+| multilingual | deterministic | 0.98 | 0.98 | 0.80 | 1.00 | 1.00 | 1.00 | - |
+| multilingual | llm | 0.98 | 0.98 | 0.93 | 1.00 | 1.00 | 1.00 (2 inconclusive) | 0.93 |
+| conversation | llm | 1.00 | 1.00 | 0.89 | - | - | - | 0.89 |
+
+A cache case is inconclusive when its earlier answer was never cached (a real model's terse answer went to
+review instead), so nothing could have been reused. Deterministic runs require every cache case to be conclusive.
+
+The gaps the baseline measured, now closed: German, French, and Greek prompt injections are not blocked (the patterns are
 English), negated German/French/Greek questions reuse the cached answer to the opposite question (the negation list
 is English), and the English-only embedding and reranker models miss or mis-rank non-English text.
 
-## Relevance gate calibration
+## Threshold calibration (per model profile)
 
-Retrieval abstains unless the best chunk has cosine similarity >= 0.65 or covers >= 40% of the query's content words.
-On the calibration split, answerable questions scored similarity 0.72-0.91 and coverage 0.50-1.00.
-Out-of-scope questions scored similarity 0.42-0.54 and coverage 0.00-0.25.
+Model scores live on different scales, so every profile has its own thresholds (`rag_lab/config.py`), chosen
+with `make calibrate-models PROFILE=...` on the calibration split only. A false accept is worse than a miss,
+so each threshold sits above the highest score of the wrong class.
 
-The margin is narrow and the calibration set is small. Revisit the thresholds whenever the corpus or the embedding model changes.
+| Signal (calibration split) | `multilingual` | `multilingual-large` | `en` |
+|---|---|---|---|
+| Relevance gate | reranker logit >= -4.5 (answerable -1.8..6.6, out-of-scope -11.0..-7.1) | reranker >= -4.5 (-2.2..6.8 vs -11.0..-7.2) | similarity >= 0.65 or coverage >= 0.40 |
+| Groundedness (cross-encoder fallback) | >= -3.0 (correct 10.7..10.8, wrong <= -6.6) | >= -3.0 (10.8 vs <= -7.0) | >= -3.5 |
+| Answer relevance (cross-encoder fallback) | >= -6.0 (correct -2.7..5.1; unrelated <= -9.1, one same-topic distractor -4.6) | >= -6.0 | >= -6.0 |
+| Semantic cache similarity | >= 0.92 (different questions up to 0.90) | >= 0.94 (up to 0.92) | >= 0.92 |
+
+With the multilingual embedder, vector similarity cannot separate in-scope from out-of-scope questions
+(answerable as low as 0.19, unrelated documents up to 0.49), so those profiles gate relevance on the reranker,
+which reads question and passage together. The English profile's reranker cannot judge other languages, so it
+keeps the similarity gate. The keyword index uses the `trigram` tokenizer: keyword-only recall@3 over the 98
+answerable cases was 86 (trigram) vs 80 (unicode61, porter).
 
 ## Known limitations
 

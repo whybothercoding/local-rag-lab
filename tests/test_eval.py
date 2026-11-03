@@ -181,7 +181,25 @@ def test_suite_gates_follow_the_phase_plan():
     from rag_lab.ops.eval import LLM_JUDGE_MIN, suite_gates
 
     assert suite_gates("en", {}, llm_mode=False)["security_accuracy"] == 1.0
-    assert suite_gates("multilingual", {}, llm_mode=False) is None
+    assert suite_gates("multilingual", {}, llm_mode=False)["security_accuracy"] == 1.0
+    assert suite_gates("multilingual", {"answer_rate": 0.1}, llm_mode=False)["answer_rate"] == 0.9, "overrides are en-only"
     assert suite_gates("conversation", {}, llm_mode=True) is None
     assert suite_gates("en", {}, llm_mode=True)["judge_support"] == LLM_JUDGE_MIN
     assert suite_gates("en", {"answer_rate": 0.5}, llm_mode=False)["answer_rate"] == 0.5
+
+
+def test_inconclusive_cache_cases_are_reported_not_counted():
+    rows = [
+        {"expect": "fresh", "passed": True, "abstained": False, "latency_ms": 1, "degraded": []},
+        {"expect": "fresh", "passed": None, "abstained": False, "latency_ms": 1, "degraded": []},
+    ]
+    summary = summarize(rows)
+    assert summary["cache_accuracy"] == 1.0
+    assert summary["cache_conclusive_rate"] == 0.5
+
+
+def test_deterministic_runs_require_every_cache_case_to_be_conclusive():
+    from rag_lab.ops.eval import suite_gates
+
+    assert suite_gates("en", {}, llm_mode=False)["cache_conclusive_rate"] == 1.0
+    assert "cache_conclusive_rate" not in suite_gates("en", {}, llm_mode=True)
