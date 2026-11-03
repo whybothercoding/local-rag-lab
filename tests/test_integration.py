@@ -1,7 +1,8 @@
 from langgraph.types import Command
 from langchain_core.runnables import RunnableConfig
 
-from rag_lab.pipeline.graph import workflow, GraphState
+from rag_lab.pipeline.graph import workflow
+from rag_lab.pipeline.state import GraphState
 from rag_lab.storage.checkpointer import get_checkpointer, fetch_checkpoint_threads
 from conftest import token_for
 

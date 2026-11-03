@@ -164,7 +164,7 @@ def test_admin_panel_shows_the_review_mode():
 def test_open_mode_flags_indexed_classified_documents(policy, tmp_path, monkeypatch):
     from rag_lab.ingestion.ingest import ingest_workspace
 
-    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.graph"):
+    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.retrieval"):
         monkeypatch.setattr(f"{target}.CHROMA_PATH", str(tmp_path / "chroma"))
         monkeypatch.setattr(f"{target}.BM25_DIR", str(tmp_path / "bm25"))
     monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))

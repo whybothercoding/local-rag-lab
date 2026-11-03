@@ -5,7 +5,8 @@ import pytest
 from langchain_ollama import OllamaEmbeddings
 
 import rag_lab.retrieval.embedding_provider as embedding_provider
-from rag_lab.pipeline.graph import BLOCKING_DEGRADED_PREFIXES, _embedding_mismatch, hybrid_retrieval_node
+from rag_lab.pipeline.state import BLOCKING_DEGRADED_PREFIXES
+from rag_lab.pipeline.retrieval import _embedding_mismatch, hybrid_retrieval_node
 from rag_lab.config import EMBED_MODEL, FASTEMBED_MODEL
 from rag_lab.retrieval.embedding_provider import (
     FINGERPRINT_KEY,
@@ -85,7 +86,7 @@ def test_stored_fingerprint_prefers_collection_metadata_then_manifest():
 
 
 def test_ingest_stamps_the_fingerprint_on_the_live_collection(rollback_index):
-    import rag_lab.pipeline.graph as app
+    import rag_lab.pipeline.retrieval as app
     client = chromadb.PersistentClient(path=app.CHROMA_PATH)
     meta = client.get_collection("ws_default").metadata
     assert meta[FINGERPRINT_KEY] == embedding_fingerprint()
@@ -97,12 +98,12 @@ def test_ingest_stamps_the_fingerprint_on_the_live_collection(rollback_index):
 # --- retrieval refuses to compare vectors from two models ----------------------
 
 def test_provider_switch_without_reindex_skips_dense_with_a_labelled_note(rollback_index, monkeypatch):
-    monkeypatch.setattr("rag_lab.pipeline.graph.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
 
     def must_not_embed(*args, **kwargs):
         raise AssertionError("dense retrieval must not embed a query against a mismatched index")
 
-    monkeypatch.setattr("rag_lab.pipeline.graph.get_embedding_model", must_not_embed)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.get_embedding_model", must_not_embed)
     state = hybrid_retrieval_node(_retrieval_state())
 
     notes = [n for n in state["degraded"] if "re-index" in n]
@@ -122,15 +123,15 @@ def test_matching_fingerprint_queries_dense_normally(rollback_index):
 def test_legacy_collection_without_metadata_is_checked_against_the_manifest(rollback_index, monkeypatch):
     legacy_meta = {"hnsw:space": "cosine"}
     assert _embedding_mismatch("default", legacy_meta) is None
-    monkeypatch.setattr("rag_lab.pipeline.graph.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
     note = _embedding_mismatch("default", legacy_meta)
     assert note and note.startswith("dense_retrieval_unavailable")
 
 
 def test_index_of_unknown_origin_is_queried(tmp_path, monkeypatch):
     """No metadata and no manifest: nothing to compare, so retrieval proceeds as before."""
-    monkeypatch.setattr("rag_lab.pipeline.graph.BM25_DIR", str(tmp_path))
-    monkeypatch.setattr("rag_lab.pipeline.graph.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path))
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
     assert _embedding_mismatch("default", {"hnsw:space": "l2"}) is None
     (tmp_path / "default_manifest.json").write_text("not json", encoding="utf-8")
     assert _embedding_mismatch("default", None) is None
@@ -141,7 +142,7 @@ def test_unloadable_embedding_model_is_reported_with_its_fix(rollback_index, mon
         def embed_query(self, text):
             raise EmbeddingUnavailableError("Embedding model X is not available. Run 'make models'")
 
-    monkeypatch.setattr("rag_lab.pipeline.graph.get_embedding_model", lambda: Broken())
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.get_embedding_model", lambda: Broken())
     state = hybrid_retrieval_node(_retrieval_state())
     assert any(n.startswith("dense_retrieval_unavailable") and "make models" in n for n in state["degraded"])
     assert state["documents"]
@@ -153,7 +154,7 @@ def test_reindex_after_provider_switch_clears_the_mismatch(rollback_index, monke
 
     monkeypatch.setattr("rag_lab.ingestion.ingest.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
     assert ingest_workspace("default", str(rollback_index), force=True).ok
-    monkeypatch.setattr("rag_lab.pipeline.graph.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
     state = hybrid_retrieval_node(_retrieval_state())
     assert not any("re-index" in n for n in state["degraded"])
 

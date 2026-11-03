@@ -2,7 +2,8 @@ import os
 import pytest
 
 from rag_lab.security.context_sanitizer import scan_chunk, sanitize_chunks
-from rag_lab.pipeline.graph import sanitize_context_node, generate_node
+from rag_lab.pipeline.retrieval import sanitize_context_node
+from rag_lab.pipeline.generation import generate_node
 from rag_lab.security.audit import list_events
 
 

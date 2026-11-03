@@ -22,7 +22,7 @@ from rag_lab.security.access import (
 )
 from rag_lab.ingestion.ingest import _extract_doc_clearance, ingest_workspace
 from rag_lab.retrieval.sparse_search import index_sparse_chunks, search_sparse_chunks
-from rag_lab.pipeline.graph import hybrid_retrieval_node
+from rag_lab.pipeline.retrieval import hybrid_retrieval_node
 
 
 def test_clearance_taxonomy_and_hierarchy():
@@ -180,8 +180,8 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", chroma_dir)
     monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", bm25_dir)
-    monkeypatch.setattr("rag_lab.pipeline.graph.CHROMA_PATH", chroma_dir)
-    monkeypatch.setattr("rag_lab.pipeline.graph.BM25_DIR", bm25_dir)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", chroma_dir)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", bm25_dir)
     monkeypatch.setattr("rag_lab.config.ACCESS_POLICY_PATH", policy_path)
     monkeypatch.setattr("rag_lab.security.access.ACCESS_POLICY_PATH", policy_path)
 
@@ -225,7 +225,8 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
 
 def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
     """Ensure a secret-clearance cached answer is never served to a public-clearance user."""
-    from rag_lab.pipeline.graph import SEMANTIC_CACHE, cache_key, cache_lookup_node
+    from rag_lab.pipeline.entry import SEMANTIC_CACHE, cache_lookup_node
+    from rag_lab.retrieval.semantic_cache import cache_key
 
     policy_path = str(tmp_path / "access_policy.json")
     monkeypatch.setattr("rag_lab.config.ACCESS_POLICY_PATH", policy_path)
@@ -285,8 +286,8 @@ def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path
     fake_collection.query.side_effect = query_side_effect
     fake_client = mocker.MagicMock()
     fake_client.get_collection.return_value = fake_collection
-    mocker.patch("rag_lab.pipeline.graph.chromadb.PersistentClient", return_value=fake_client)
-    mocker.patch("rag_lab.pipeline.graph.search_sparse_chunks", return_value=[])
+    mocker.patch("rag_lab.pipeline.retrieval.chromadb.PersistentClient", return_value=fake_client)
+    mocker.patch("rag_lab.pipeline.retrieval.search_sparse_chunks", return_value=[])
 
     out = hybrid_retrieval_node({
         "workspace_id": "legacy_ws",

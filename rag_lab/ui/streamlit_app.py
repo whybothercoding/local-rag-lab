@@ -31,7 +31,8 @@ from rag_lab.security.access import (
     sign_in,
     verify_token,
 )
-from rag_lab.pipeline.graph import workflow, GraphState
+from rag_lab.pipeline.graph import workflow
+from rag_lab.pipeline.state import GraphState
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
 import rag_lab.storage.checkpointer as checkpointer_module

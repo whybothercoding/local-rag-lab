@@ -123,9 +123,9 @@ def test_allowed_workspaces_includes_query_and_review_grants(policy_path):
 
 
 def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):
-    from rag_lab.pipeline.graph import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
-    retrieval = mocker.patch("rag_lab.pipeline.graph.hybrid_retrieval_node")
+    retrieval = mocker.patch("rag_lab.pipeline.retrieval.hybrid_retrieval_node")
     result = guardrail_input_node({
         "question": "What is the Q4 roadmap?",
         "workspace_id": "default",
@@ -143,7 +143,7 @@ def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):
 
 
 def test_guardrail_allows_principal_with_query_grant():
-    from rag_lab.pipeline.graph import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({
         "question": "What is the Q4 roadmap?",
@@ -157,14 +157,14 @@ def test_guardrail_allows_principal_with_query_grant():
 
 
 def test_guardrail_denies_anonymous_caller():
-    from rag_lab.pipeline.graph import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({"question": "hello", "workspace_id": "default", "telemetry": {}})
     assert result["is_safe"] is False
 
 
 def test_guardrail_ignores_a_bare_name_without_a_token():
-    from rag_lab.pipeline.graph import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({
         "question": "hello",
@@ -176,9 +176,9 @@ def test_guardrail_ignores_a_bare_name_without_a_token():
 
 
 def test_reviewer_without_grant_cannot_release_an_answer(mocker):
-    from rag_lab.pipeline.graph import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("rag_lab.pipeline.graph.interrupt", return_value={"decision": "approved", "approver_token": token_for("carol")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("carol")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "dave",
@@ -195,9 +195,9 @@ def test_reviewer_without_grant_cannot_release_an_answer(mocker):
 
 
 def test_requester_cannot_approve_their_own_query(mocker):
-    from rag_lab.pipeline.graph import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("rag_lab.pipeline.graph.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "bob",
@@ -213,9 +213,9 @@ def test_requester_cannot_approve_their_own_query(mocker):
 
 
 def test_reviewer_can_approve_another_users_query(mocker):
-    from rag_lab.pipeline.graph import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("rag_lab.pipeline.graph.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "carol",
@@ -710,12 +710,13 @@ def test_concurrent_policy_updates_do_not_drop_writes(policy_path):
 
 def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
     from rag_lab.security.access import set_grant, set_user_clearance
-    from rag_lab.pipeline.graph import ABSTAIN_MESSAGE, human_in_the_loop_node
+    from rag_lab.pipeline.state import ABSTAIN_MESSAGE
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
     # 1. Auto-approve user STILL pauses at human review when answer failed grading or has security warning
     set_grant("carol", "default", ["query", "auto_approve"])
     try:
-        mocker.patch("rag_lab.pipeline.graph.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+        mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
         res_ungrounded = human_in_the_loop_node({
             "workspace_id": "default",
             "principal": "carol",
@@ -758,7 +759,7 @@ def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
     set_user_clearance("alice", "secret")
     set_user_clearance("bob", "public")
     try:
-        mocker.patch("rag_lab.pipeline.graph.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+        mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
         res_clr = human_in_the_loop_node({
             "workspace_id": "default",
             "principal": "alice",

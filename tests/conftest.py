@@ -56,7 +56,7 @@ def rollback_index(tmp_path, monkeypatch):
     (source / "company_policy.md").write_text("Rollback SLA is strictly under 5 minutes.", encoding="utf-8")
 
     store = tmp_path / "store"
-    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.graph"):
+    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.retrieval"):
         monkeypatch.setattr(f"{target}.CHROMA_PATH", str(store / "chroma"))
         monkeypatch.setattr(f"{target}.BM25_DIR", str(store / "bm25"))
     monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(store / "uploads"))

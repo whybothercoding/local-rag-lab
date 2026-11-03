@@ -6,15 +6,12 @@ import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from rag_lab.pipeline.graph import (
-    ABSTAIN_MESSAGE,
-    cache_key,
-    cache_lookup_node,
-    generate_node,
-    hybrid_retrieval_node,
-    SEMANTIC_CACHE,
-    workflow,
-)
+from rag_lab.pipeline.state import ABSTAIN_MESSAGE
+from rag_lab.pipeline.graph import workflow
+from rag_lab.retrieval.semantic_cache import cache_key
+from rag_lab.pipeline.entry import cache_lookup_node, SEMANTIC_CACHE
+from rag_lab.pipeline.generation import generate_node
+from rag_lab.pipeline.retrieval import hybrid_retrieval_node
 from rag_lab.security.audit import list_rejections, record
 from conftest import token_for
 from rag_lab.ingestion.ingest import ingest_workspace
@@ -106,15 +103,15 @@ def test_dense_outage_is_recorded_and_sparse_results_still_return(rollback_index
     def broken_client(*args, **kwargs):
         raise RuntimeError("vector store offline")
 
-    monkeypatch.setattr("rag_lab.pipeline.graph.chromadb.PersistentClient", broken_client)
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.chromadb.PersistentClient", broken_client)
     state = hybrid_retrieval_node(_retrieval_state(ROLLBACK_QUESTION))
     assert "dense_retrieval_unavailable: RuntimeError" in state["degraded"]
     assert state["documents"], "keyword retrieval should still answer from the index"
 
 
 def test_missing_index_is_reported_as_not_indexed(tmp_path, monkeypatch):
-    monkeypatch.setattr("rag_lab.pipeline.graph.CHROMA_PATH", str(tmp_path / "empty-chroma"))
-    monkeypatch.setattr("rag_lab.pipeline.graph.BM25_DIR", str(tmp_path / "empty-bm25"))
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", str(tmp_path / "empty-chroma"))
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path / "empty-bm25"))
     state = hybrid_retrieval_node(_retrieval_state(ROLLBACK_QUESTION, workspace="ghost"))
     assert any(note.startswith("not_indexed") for note in state["degraded"])
     assert state["documents"] == []
@@ -125,7 +122,7 @@ def test_model_failure_gives_a_labelled_extractive_answer(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError("model did not respond")
 
-    monkeypatch.setattr("rag_lab.pipeline.graph.get_chat_llm", lambda: BrokenModel())
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.get_chat_llm", lambda: BrokenModel())
     state = generate_node({
         "documents": ["Rollback SLA is strictly under 5 minutes."],
         "sanitized_question": "What is the rollback SLA?",
@@ -138,8 +135,8 @@ def test_model_failure_gives_a_labelled_extractive_answer(monkeypatch):
 
 
 def test_seeded_documents_cannot_bypass_retrieval(tmp_path, monkeypatch):
-    monkeypatch.setattr("rag_lab.pipeline.graph.CHROMA_PATH", str(tmp_path / "empty-chroma"))
-    monkeypatch.setattr("rag_lab.pipeline.graph.BM25_DIR", str(tmp_path / "empty-bm25"))
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", str(tmp_path / "empty-chroma"))
+    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path / "empty-bm25"))
     state = hybrid_retrieval_node({
         "sanitized_question": ROLLBACK_QUESTION,
         "workspace_id": "ghost",
