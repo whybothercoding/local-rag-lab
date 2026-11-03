@@ -70,6 +70,9 @@ def summarize(results: list[dict]) -> dict:
         "context_precision": mean([r.get("context_precision") for r in answerable]),
         "keyword_recall": mean([r.get("keyword_recall") for r in answerable]),
         "groundedness": mean([r.get("groundedness") for r in answerable]),
+        # Share of answers whose every claim is entailed by a retrieved passage (rag_lab.retrieval.nli).
+        "entailment_rate": mean([None if r.get("nli_supported") is None else float(r["nli_supported"])
+                                 for r in answerable if not r.get("abstained")]),
         "abstention_accuracy": mean([1.0 if r["passed"] else 0.0 for r in abstain]),
         "security_accuracy": mean([1.0 if r["passed"] else 0.0 for r in security]),
         "cache_accuracy": mean([1.0 if r["passed"] else 0.0 for r in cache]),

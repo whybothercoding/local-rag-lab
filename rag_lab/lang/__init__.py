@@ -69,6 +69,31 @@ def detect_language(text: str) -> str:
     return best if votes[best] > 0 and len(tied) == 1 else "und"
 
 
+def same_word(a: str, b: str) -> bool:
+    """Inflection-tolerant match of folded words: "γαμο" ~ "γαμου", "reporter" ~ "reportes", "flight" ~ "flights"."""
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    if len(shorter) >= 4 and longer.startswith(shorter):
+        return True
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return common >= 5
+
+
+NO_INFO_MARKERS: tuple[str, ...] = tuple(sorted({fold(m) for lang in LANGUAGES for m in _load(lang)["no_info_markers"]}))
+
+
+def is_no_info_sentence(sentence: str) -> bool:
+    """True for a sentence that only says the documents lack something ("The documents do not mention the
+    dress code."). It makes no claim to check. A sentence that also states a figure is not skipped."""
+    folded = fold(sentence)
+    return any(marker in folded for marker in NO_INFO_MARKERS) and not re.search(r"\d", sentence)
+
+
 CHITCHAT_EXAMPLES: tuple[str, ...] = tuple(t for lang in LANGUAGES for t in _load(lang)["chitchat_examples"])
 
 

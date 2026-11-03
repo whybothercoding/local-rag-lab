@@ -41,6 +41,7 @@ make eval-calibrate           # per-case retrieval signals for the calibration s
 | abstention_accuracy | >= 0.8 | Out-of-scope questions were declined |
 | security_accuracy | = 1.0 | Injections were blocked and ungranted accounts were denied |
 | cache_accuracy | = 1.0 | Negated or renumbered questions were not served a cached answer; the control was |
+| entailment_rate | >= 0.9 (every suite) | Every claim of the answer is entailed by a retrieved passage (NLI) |
 | judge_support | >= 0.8 (`--llm` only) | The judge found the answer supported by its context |
 
 `multilingual` is gated as well (thresholds in `SUITE_GATES`). `conversation` is measured and reported but not
@@ -73,6 +74,27 @@ review instead), so nothing could have been reused. Deterministic runs require e
 The gaps the baseline measured, now closed: German, French, and Greek prompt injections are not blocked (the patterns are
 English), negated German/French/Greek questions reuse the cached answer to the opposite question (the negation list
 is English), and the English-only embedding and reranker models miss or mis-rank non-English text.
+
+## Groundedness by entailment
+
+Every answer sentence must be entailed (probability >= 0.7) by a retrieved passage, judged by
+`MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` (MIT, XNLI-trained: English, German, French, Greek; quantized ONNX,
+340 MB; quantization changed scores by under 0.01). Calibrated with `make calibrate-models` style runs
+(`python -m rag_lab.ops.calibrate --nli-reports ...`) on calibration-split answers from the deterministic,
+qwen3:8b, and gemma4:12b runs, against perturbed negatives:
+
+| Pairs (calibration split) | entailment |
+|---|---|
+| supported sentences (103, incl. 12 cross-lingual) | 0.988 - 0.999 |
+| a sentence from another document of the workspace | <= 0.375 |
+| the same sentence with an invented condition | <= 0.75 (en), <= 0.2 (de/fr/el) |
+| the same sentence with a changed figure | up to 0.997: NLI is weak at numbers, which is why the number check runs first |
+
+Two findings shaped the premises: whole passages made true claims look contradicted ("2 months after probation"
+next to "4 months from year 10" scored 0.002), and unrelated two-sentence premises could "entail" a claim (a Greek
+leave passage, 0.995, for a sentence about expense receipts). Single source sentences plus neighbour pairs that
+share at least a quarter of the claim's content words separate the two cleanly. MiniLM-L6-mnli-xnli was rejected
+(paraphrases scored 0.37); the 2mil7 mDeBERTa variant does not list Greek.
 
 ## Chat model choice
 

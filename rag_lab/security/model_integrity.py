@@ -89,6 +89,17 @@ PINNED_MODELS: dict[str, dict] = {
             "onnx/model.onnx_data": "f009aa6c6cf21986fd7e0021fa66b20ccce27abc6900a57c7109c8496811bcbe",
         },
     },
+    "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli": {
+        "repo": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+        "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+        "files": {
+            "config.json": "4e4430c95100d613df80fa01276f231931e1b535557cf62fbb3cc50323e50cca",
+            "special_tokens_map.json": "9463f61e1b109a8eb4688b829260d7c6b1e6dff04c98ff7269bb89e2b92369b9",
+            "tokenizer.json": "3aca3ce69a0a35aeb144a52c4f1d41c4246b8785f8f398315cc8fb6b24057810",
+            "tokenizer_config.json": "df9fd3a4482cc4a866788244824573fab8e74dadd1609d4f0e5997f9e96921dc",
+            "onnx/model_quantized.onnx": "27c39e884c14b03cf46cfc5485971b6db70ff330220d93dfe729c63fde43af0e",
+        },
+    },
 }
 
 

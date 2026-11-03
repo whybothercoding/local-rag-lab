@@ -360,6 +360,8 @@ def print_status() -> int:
         print(f"[!!] Embedding provider  : {exc}")
         ok = False
     required = ([settings.fastembed_model] if provider == "fastembed" else []) + ([settings.reranker_model] if settings.enable_reranker else [])
+    if settings.groundedness_method == "nli":
+        required.append(settings.nli_model)
     for model_name in required:
         try:
             verify_model(model_name, settings.models_dir)

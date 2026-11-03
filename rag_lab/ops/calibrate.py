@@ -124,14 +124,89 @@ def calibrate(report_path: Path | None) -> list[dict]:
     return results
 
 
+_CLAUSE = {
+    "en": ", but only with written approval from the CEO.",
+    "de": ", aber nur mit schriftlicher Genehmigung des CEO.",
+    "fr": ", mais uniquement avec l'accord écrit du PDG.",
+    "el": ", αλλά μόνο με γραπτή έγκριση του CEO.",
+}
+
+
+def _perturbations(sentence: str, workspace: str, documents: list[str]) -> list[tuple[str, str]]:
+    """Unsupported variants of a supported sentence: a changed figure, an invented condition, and a true
+    sentence from another document of the same workspace."""
+    from rag_lab.lang import detect_language
+
+    variants: list[tuple[str, str]] = []
+    if re.search(r"\d", sentence):
+        variants.append(("number", re.sub(r"\d+", lambda m: str(int(m.group(0)) + 7), sentence)))
+    lang = detect_language(sentence)
+    variants.append(("condition", sentence.rstrip(".!;") + _CLAUSE.get(lang, _CLAUSE["en"])))
+    retrieved = " ".join(" ".join(d.split()) for d in documents)
+    for path in sorted((CORPUS / workspace).glob("*.md")):
+        for other in _sentences(path.read_text(encoding="utf-8")):
+            if " ".join(other.split()) not in retrieved and len(other) > 25:
+                variants.append(("other_document", other))
+                break
+        if variants[-1][0] == "other_document":
+            break
+    return variants
+
+
+def calibrate_nli(reports: list[Path]) -> dict:
+    """Entailment of supported answer sentences vs perturbed ones, calibration split only.
+
+    Supported: sentences of answers that found every expected fact and, in a model run, that an
+    independent judge approved. Cross-lingual pairs (answer language != document language) are reported
+    on their own, since that is where XNLI-trained models are weakest.
+    """
+    from rag_lab.lang import detect_language, is_no_info_sentence
+    from rag_lab.pipeline.text import split_sentences
+    from rag_lab.retrieval.nli import sentence_support
+
+    positives: list[tuple[float, bool]] = []
+    negatives: dict[str, list[float]] = {}
+    for path in reports:
+        for row in json.loads(path.read_text(encoding="utf-8"))["results"]:
+            if (row["split"] != "calibration" or row["expect"] != "answer" or not row.get("passed")
+                    or row.get("judge_supported") is False or not row.get("documents")):
+                continue
+            answer = re.sub(r"^Based on available documentation:\s*", "", row["answer"])
+            doc_lang = detect_language(" ".join(row["documents"]))
+            for sentence in split_sentences(answer):
+                if is_no_info_sentence(sentence):
+                    continue
+                cross = detect_language(sentence) not in (doc_lang, "und")
+                positives.append((sentence_support(sentence, row["documents"]), cross))
+                for kind, variant in _perturbations(sentence, row["workspace"], row["documents"]):
+                    negatives.setdefault(kind, []).append(sentence_support(variant, row["documents"]))
+    # Changed figures are the number check's job (it runs first and is deterministic); NLI models are weak
+    # at figures, so those pairs are reported but do not set the entailment threshold.
+    all_negatives = [v for kind, values in negatives.items() if kind != "number" for v in values]
+    summary = _summary("groundedness_min_entailment", [p for p, _ in positives], all_negatives, margin=0.05)
+    summary["suggested_midpoint"] = round((min(p for p, _ in positives) + max(all_negatives)) / 2, 2)
+    cross_scores = [p for p, c in positives if c]
+    summary["cross_lingual_positives"] = (
+        [round(min(cross_scores), 3), round(max(cross_scores), 3), len(cross_scores)] if cross_scores else None)
+    summary["negatives_by_kind"] = {k: [round(max(v), 3), len(v)] for k, v in negatives.items()}
+    summary["positives"] = summary["positives"] + [len(positives)]
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Suggest model-dependent thresholds from the calibration split.")
     parser.add_argument("--report", type=Path, default=ROOT / "eval" / "out" / "report.json",
                         help="eval report from the same profile, for the retrieval similarity gate")
+    parser.add_argument("--nli-reports", type=Path, nargs="*", default=[],
+                        help="eval reports (deterministic and/or --llm, ideally judged) for the NLI threshold")
     args = parser.parse_args(argv)
     from rag_lab.config import settings
 
     print(f"Profile {settings.model_profile}: {settings.fastembed_model} + {settings.reranker_model}")
+    if args.nli_reports:
+        row = calibrate_nli(args.nli_reports)
+        print(json.dumps(row, indent=1, ensure_ascii=False))
+        return 0
     for row in calibrate(args.report):
         flag = "" if row["separated"] else "  (distributions overlap)"
         print(f"{row['threshold']:<40} current={row['current']:<7} suggested={row['suggested']:<7} "

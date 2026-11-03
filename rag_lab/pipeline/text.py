@@ -67,3 +67,18 @@ def _coverage(query_terms: set[str], chunk: str) -> float:
     if not query_terms:
         return 0.0
     return len(query_terms & set(words(chunk))) / len(query_terms)
+
+
+# Sentence ends: . ! ? followed by whitespace, and ; only after a Greek letter (the Greek question mark; in
+# German and French ";" joins clauses). Not after a lone one- or two-digit number ("2. Klasse",
+# "1. Januar"); times and decimals ("02:00", "4.5") never meet whitespace.
+_SENTENCE_END = re.compile(r"(?:(?<=[.!?])(?<!\b\d\.)(?<!\b\d\d\.)|(?<=[\u0370-\u03ff\u1f00-\u1fff];))\s+")
+_BULLET = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Sentences of an answer, one per bullet or line, for checking each claim on its own."""
+    sentences: list[str] = []
+    for line in _BULLET.sub("", text).splitlines():
+        sentences += [s.strip() for s in _SENTENCE_END.split(line) if s.strip()]
+    return sentences

@@ -19,22 +19,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from rag_lab.config import settings
-from rag_lab.lang import STOPWORDS, words
-
-def _same_word(a: str, b: str) -> bool:
-    """Inflection-tolerant match: "γαμο" ~ "γαμου", "reporter" ~ "reportes", "flight" ~ "flights"."""
-    if a == b:
-        return True
-    shorter, longer = sorted((a, b), key=len)
-    if len(shorter) >= 4 and longer.startswith(shorter):
-        return True
-    common = 0
-    for x, y in zip(a, b):
-        if x != y:
-            break
-        common += 1
-    return common >= 5
-
+from rag_lab.lang import STOPWORDS, same_word as _same_word, words
 
 # Words the extractive synthesizer ignores when matching a question to context sentences.
 _EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"}

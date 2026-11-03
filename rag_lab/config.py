@@ -139,6 +139,13 @@ class Settings:
     embedding_query_prefix: str
     embedding_passage_prefix: str
     enable_reranker: bool
+    # Groundedness: every answer sentence must be entailed by a retrieved passage (rag_lab.retrieval.nli).
+    # "nli" (default) or "lexical" (word overlap + cross-encoder, the fallback when the NLI model is missing).
+    groundedness_method: str
+    nli_model: str
+    # Calibration split: supported sentences >= 0.988, unsupported (other passage, invented condition) <= 0.375.
+    groundedness_min_entailment: float
+    nli_pair_min_overlap: float
     models_dir: str
 
     # --- retrieval and grading -------------------------------------------------------------------
@@ -200,6 +207,10 @@ class Settings:
             embedding_query_prefix=_env("EMBEDDING_QUERY_PREFIX", profile["embedding_query_prefix"]),
             embedding_passage_prefix=_env("EMBEDDING_PASSAGE_PREFIX", profile["embedding_passage_prefix"]),
             enable_reranker=_flag("ENABLE_RERANKER", "true"),
+            groundedness_method=_env("GROUNDEDNESS_METHOD", "nli"),
+            nli_model=_env("NLI_MODEL", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"),
+            groundedness_min_entailment=float(_env("GROUNDEDNESS_MIN_ENTAILMENT", "0.7")),
+            nli_pair_min_overlap=float(_env("NLI_PAIR_MIN_OVERLAP", "0.25")),
             models_dir=_env("MODELS_DIR", str(ROOT / "models")),
             semantic_cache_similarity_threshold=float(_env("SEMANTIC_CACHE_SIMILARITY_THRESHOLD", profile["semantic_cache_similarity_threshold"])),
             relevance_min_similarity=float(_env("RELEVANCE_MIN_SIMILARITY", profile["relevance_min_similarity"])),
