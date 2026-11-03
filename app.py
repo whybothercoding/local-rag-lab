@@ -854,8 +854,16 @@ def _review_reasons(state: StateInput) -> list[str]:
     reasons: list[str] = []
     hallucination = state.get("hallucination_status", "") or "grounded"
     relevance = state.get("relevance_status", "") or "relevant"
+    telemetry = state.get("telemetry", {}) or {}
     if hallucination != "grounded":
         reasons.append(f"groundedness check did not pass ({hallucination})")
+        # Say why, so the reviewer knows what to look for without reading telemetry.
+        if telemetry.get("unsupported_numbers"):
+            reasons.append(
+                "answer states figures not found in the sources: " + ", ".join(telemetry["unsupported_numbers"])
+            )
+        if telemetry.get("generation_retry_skipped"):
+            reasons.append(f"not regenerated: {telemetry['generation_retry_skipped']}")
     if relevance != "relevant":
         reasons.append(f"relevance check did not pass ({relevance})")
     if not abstained:

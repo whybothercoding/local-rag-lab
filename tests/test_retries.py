@@ -253,6 +253,13 @@ def test_deterministic_fallback_goes_straight_to_review(rollback_index, monkeypa
     assert values.get("generation_retry_count", 0) == 0
     assert "deterministic generator" in values["telemetry"]["generation_retry_skipped"]
 
+    # The reviewer is told why, in the payload the review screens display.
+    state = engine.get_state({"configurable": {"thread_id": "deterministic-escalates"}})
+    reasons = state.tasks[0].interrupts[0].value["review_reasons"]
+    assert "groundedness check did not pass (circuit_break)" in reasons
+    assert "answer states figures not found in the sources: 99" in reasons
+    assert any(r.startswith("not regenerated: deterministic generator") for r in reasons)
+
 
 def test_a_new_question_in_the_same_thread_starts_with_fresh_budgets(rollback_index, monkeypatch):
     """The UI keeps one thread per conversation; spent budgets and stale feedback must not carry over."""
