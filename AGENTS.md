@@ -9,7 +9,7 @@ Instructions and engineering standards for AI assistants and coding agents worki
 Local Enterprise RAG Lab is a fully local, air-gapped Compound AI retrieval and compliance engine.
 
 * **No External Network**: Inference and pipelines run 100% offline (`HF_HUB_OFFLINE=1`). Network access is permitted only during initial model download (`make models`).
-* **Core Stack**: Python 3.11–3.14, LangGraph, Ollama (`qwen2.5-coder:7b`), ONNX FastEmbed + cross-encoder reranker chosen by `MODEL_PROFILE` (default `multilingual`: `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`; also `multilingual-large`, `en`), languages EN/DE/FR/EL (`rag_lab/lang/`), ChromaDB, SQLite FTS5 / BM25, SQLite / PostgreSQL (`psycopg-pool`), Streamlit, and an optional Rust PyO3 accelerator (`crates/rag_accel`).
+* **Core Stack**: Python 3.11–3.14, LangGraph, Ollama (`qwen3:8b`, thinking off), ONNX FastEmbed + cross-encoder reranker chosen by `MODEL_PROFILE` (default `multilingual`: `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`; also `multilingual-large`, `en`), languages EN/DE/FR/EL (`rag_lab/lang/`), ChromaDB, SQLite FTS5 / BM25, SQLite / PostgreSQL (`psycopg-pool`), Streamlit, and an optional Rust PyO3 accelerator (`crates/rag_accel`).
 * **Fail-Closed Security**: Policy v2 RBAC authorization with out-of-the-box `query` + `auto_approve` defaults, admin-only user/workspace management (`--as <admin>`), hierarchical document clearance (`public`, `internal`, `confidential`, `secret`), revocable signed session tokens (`principal_token` bound to `uid` + `token_version`), tamper-evident HMAC hash-chained audit logging, and thread-bound AES-256-GCM state and cache encryption at rest (`ENC2` / `SEAL1`).
 
 ---

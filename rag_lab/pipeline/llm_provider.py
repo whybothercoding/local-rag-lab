@@ -1,7 +1,7 @@
 """Pluggable LLM factory supporting Ollama, local OpenAI-compatible engines, and in-process synthesizer.
 
 Ensures the Local Enterprise Hub operates seamlessly:
-- Uses local Ollama (`qwen2.5-coder:7b`) when the daemon is active.
+- Uses local Ollama (default `qwen3:8b`, settings.chat_model) when the daemon is active.
 - Connects to local OpenAI-compatible endpoints (vLLM, LM Studio, llama.cpp server) when configured.
 - Gracefully falls back to an in-process grounded context synthesizer when no external daemon is running.
 """
@@ -141,7 +141,7 @@ class OpenAICompatibleChat(BaseChatModel):
     """
 
     base_url: str
-    model_name: str = "qwen2.5-coder:7b"
+    model_name: str = "qwen3:8b"
     api_key: str = "local"
     # Read when the client is created, so a settings override applies.
     timeout_sec: float = Field(default_factory=lambda: settings.ollama_timeout_sec)
@@ -215,6 +215,9 @@ def _ollama_chat() -> BaseChatModel:
         model=settings.chat_model,
         base_url=settings.ollama_base_url,
         temperature=0.0,
+        # Reasoning models answer directly: a thinking pass multiplies latency for short policy answers, and
+        # its text must never reach the graders. Models without a thinking mode ignore the flag.
+        reasoning=False,
         client_kwargs={"timeout": settings.ollama_timeout_sec},
     )
 

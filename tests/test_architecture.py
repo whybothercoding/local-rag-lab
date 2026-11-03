@@ -59,3 +59,18 @@ def test_every_make_target_is_phony_and_listed_in_help():
     assert defined - phony == set(), f"targets missing from .PHONY: {sorted(defined - phony)}"
     unlisted = defined - helped - {"help", "ingest"}
     assert not unlisted, f"targets missing from make help: {sorted(unlisted)}"
+
+
+
+def test_python_snippets_in_the_makefile_still_run():
+    """`make ollama-pull` once read config constants that a refactor removed; every snippet must evaluate."""
+    import re
+    import subprocess
+    import sys
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    snippets = re.findall(r"python -c '([^']+)'", makefile)
+    assert snippets
+    for code in snippets:
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT)
+        assert out.returncode == 0 and out.stdout.strip(), (code, out.stderr)

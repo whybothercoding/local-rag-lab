@@ -74,6 +74,23 @@ The gaps the baseline measured, now closed: German, French, and Greek prompt inj
 English), negated German/French/Greek questions reuse the cached answer to the opposite question (the negation list
 is English), and the English-only embedding and reranker models miss or mis-rank non-English text.
 
+## Chat model choice
+
+Compared with `make eval-llm` (`OLLAMA_MODEL=...`) on an Apple M4 with 16 GB, thinking off. All licences are
+Apache 2.0 (checked on the model cards). Every candidate passed every gate; the calibration split tied, so the
+test split, memory, and an independent judge (`--judge-only`, a model from the other family) decided.
+
+| Model | keywords (test) | groundedness | median latency | memory in use | judge en / multi / conversation |
+|---|---|---|---|---|---|
+| qwen2.5-coder:7b (previous) | 0.94 | 0.73 | 1.37 s | 4.8 GB | 0.88 / 0.98 / 0.67 |
+| **qwen3:8b (default)** | **0.97** | 0.69 | 1.57 s | **5.1 GB** | **0.94 / 0.95 / 0.78** |
+| gemma4:12b | 0.99 | 0.87 | 1.47 s | 16 GB | 0.94 / 0.95 / 0.89 |
+| gemma4:e4b | 0.90 | 0.89 | 0.54 s | 13 GB | - |
+
+`qwen3:8b` is the default because it fits a 16 GB machine with room for everything else. On a machine with 32 GB or
+more, `OLLAMA_MODEL=gemma4:12b` answers follow-ups better. Apertus (Swiss, Apache 2.0, 1,800+ languages) has no
+official Ollama build yet, so it was not compared.
+
 ## Threshold calibration (per model profile)
 
 Model scores live on different scales, so every profile has its own thresholds (`rag_lab/config.py`), chosen

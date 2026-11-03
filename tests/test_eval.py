@@ -203,3 +203,43 @@ def test_deterministic_runs_require_every_cache_case_to_be_conclusive():
 
     assert suite_gates("en", {}, llm_mode=False)["cache_conclusive_rate"] == 1.0
     assert "cache_conclusive_rate" not in suite_gates("en", {}, llm_mode=True)
+
+
+def test_judge_only_needs_an_independent_judge_model(tmp_path, monkeypatch, capsys):
+    from rag_lab.ops.eval import judge_report
+
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+    assert judge_report(tmp_path / "report.json") == 2
+    assert "another family" in capsys.readouterr().out
+
+
+def test_judge_only_adds_verdicts_and_rescores(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from rag_lab.ops.eval import judge_report
+
+    class Judge:
+        def __init__(self, **kwargs):
+            pass
+
+        def invoke(self, prompt):
+            return AIMessage(content="yes" if "45 CHF" in prompt else "no")
+
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "other-family:7b")
+    monkeypatch.setattr("langchain_ollama.ChatOllama", Judge)
+    row = {"expect": "answer", "split": "test", "suite": "en", "lang": "en", "passed": True, "abstained": False,
+           "latency_ms": 1, "degraded": [], "judge_supported": None, "documents": ["Pauschal 45 CHF."]}
+    report = {"suites": {"en": {}}, "results": [{**row, "answer": "45 CHF per month."},
+                                                 {**row, "answer": "100 CHF per month.", "documents": ["Other."]}]}
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    assert judge_report(path) == 0
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["judge_model"] == "other-family:7b"
+    assert saved["suites"]["en"]["test"]["judge_support"] == 0.5
+
+
+def test_ollama_models_answer_without_a_thinking_pass(monkeypatch):
+    from rag_lab.pipeline import llm_provider
+
+    assert llm_provider._ollama_chat().reasoning is False

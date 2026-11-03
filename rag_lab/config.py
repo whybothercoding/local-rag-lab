@@ -24,7 +24,8 @@ load_dotenv(ROOT / ".env")
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"
 POSTGRES_DB_URI = "postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints"
-DEFAULT_CHAT_MODEL = "qwen2.5-coder:7b"
+# Chosen by `make eval-llm` (eval/README.md): multilingual, Apache 2.0, about 5 GB in memory.
+DEFAULT_CHAT_MODEL = "qwen3:8b"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
