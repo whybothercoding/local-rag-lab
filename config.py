@@ -70,5 +70,12 @@ GROUNDEDNESS_MIN_RATIO = float(os.getenv("GROUNDEDNESS_MIN_RATIO", "0.25"))
 GROUNDEDNESS_CROSS_ENCODER_THRESHOLD = float(os.getenv("GROUNDEDNESS_CROSS_ENCODER_THRESHOLD", "-3.5"))
 RELEVANCE_CROSS_ENCODER_THRESHOLD = float(os.getenv("RELEVANCE_CROSS_ENCODER_THRESHOLD", "-6.0"))
 
+# Self-RAG retry budgets, counted separately so one loop cannot spend the other's attempts.
+# Retrieval retries rewrite the query and search again (no relevant documents, or an off-topic answer).
+# Generation retries regenerate from the same documents with the grader's reason added to the prompt.
+# Larger models that benefit from more attempts can raise them; each generation retry costs one model call.
+MAX_RETRIEVAL_RETRIES = int(os.getenv("MAX_RETRIEVAL_RETRIES", "2"))
+MAX_GENERATION_RETRIES = int(os.getenv("MAX_GENERATION_RETRIES", "1"))
+
 # Keep source files bounded so one huge upload cannot exhaust memory.
 MAX_SOURCE_BYTES = int(os.getenv("MAX_SOURCE_BYTES", str(25 * 1024 * 1024)))

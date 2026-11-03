@@ -595,6 +595,8 @@ with get_checkpointer() as checkpointer:
             "hallucination_status": "",
             "relevance_status": "",
             "retry_count": 0,
+            "generation_retry_count": 0,
+            "grader_feedback": "",
             "history": [],
             "telemetry": {}
         }

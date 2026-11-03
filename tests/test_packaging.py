@@ -120,3 +120,14 @@ def test_tool_configurations_in_pyproject():
     assert tool["ruff"]["line-length"] == 100
     assert "mypy" in tool
     assert tool["mypy"]["python_version"] == "3.11"
+
+
+def test_declared_langgraph_floor_has_room_for_the_retry_loops():
+    """LangGraph < 1.1 stopped graphs after 25 steps; the worst retry path needs more (see test_retries)."""
+    import re
+
+    for manifest in ("pyproject.toml", "requirements.txt"):
+        text = (Path(__file__).resolve().parent.parent / manifest).read_text(encoding="utf-8")
+        floor = re.search(r'^\s*"?langgraph>=(\d+)\.(\d+)', text, re.MULTILINE)
+        assert floor, manifest
+        assert (int(floor.group(1)), int(floor.group(2))) >= (1, 1), manifest

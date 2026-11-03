@@ -20,6 +20,8 @@ from config import (
     GROUNDEDNESS_MIN_RATIO,
     GROUNDEDNESS_CROSS_ENCODER_THRESHOLD,
     RELEVANCE_CROSS_ENCODER_THRESHOLD,
+    MAX_RETRIEVAL_RETRIES,
+    MAX_GENERATION_RETRIES,
 )
 from access import (
     allowed_clearances,
@@ -66,7 +68,11 @@ class GraphState(TypedDict, total=False):
     grade_status: str
     hallucination_status: str
     relevance_status: str
+    # Retrieval retries (query rewrites). The name predates the split and is kept so saved threads still load.
     retry_count: int
+    generation_retry_count: int
+    # Why the last answer failed a grader, added to the next generation prompt. Fixed text plus extracted figures only.
+    grader_feedback: str
     history: List[str]
     telemetry: Dict[str, Any]
     degraded: List[str]
@@ -292,6 +298,12 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
         "original_question": sanitized,
         "sanitized_question": sanitized,
         "telemetry": telemetry,
+        # A conversation reuses its thread: every question starts with full retry budgets and no carried-over notes.
+        "retry_count": 0,
+        "generation_retry_count": 0,
+        "grader_feedback": "",
+        "degraded": [],
+        "dropped_chunks": [],
     }
 
 
@@ -561,7 +573,7 @@ def grade_documents_node(state: StateInput) -> dict[str, Any]:
     retries = state.get("retry_count", 0)
 
     if not docs:
-        if retries >= 2:
+        if retries >= MAX_RETRIEVAL_RETRIES:
             return {"grade_status": "circuit_break"}
         return {"grade_status": "rewrite", "retry_count": retries + 1}
 
@@ -597,13 +609,26 @@ def query_rewrite_node(state: StateInput) -> dict[str, Any]:
         rewritten = _llm_keyword_query(base) or " ".join(words)
     else:
         rewritten = " ".join(words + _stem_variants(words))
-    return {"sanitized_question": rewritten or base}
+    # New documents are coming, so the previous answer's grader note no longer applies.
+    return {"sanitized_question": rewritten or base, "grader_feedback": ""}
+
+
+def _generation_prompt(context: str, question: str, feedback: str) -> str:
+    """The answer prompt. Grader feedback goes after the instruction, so the extractive synthesizer, which
+    parses the Context and Question sections, reads the same question either way."""
+    prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer concisely based strictly on the context:"
+    if feedback:
+        prompt += f"\n\nYour previous answer was rejected because {feedback} Write a corrected answer."
+    return prompt
 
 
 def generate_node(state: StateInput) -> dict[str, Any]:
     t0 = time.perf_counter()
     docs = state.get("documents", [])
-    q = state.get("sanitized_question", "")
+    # A model answers the user's own question. The extractive synthesizer matches sentences by shared words,
+    # so it is given the search query, which after a rewrite is the keyword form that found these documents.
+    original_q = state.get("original_question") or state.get("sanitized_question", "")
+    search_q = state.get("sanitized_question") or original_q
     telemetry = dict(state.get("telemetry", {}))
     # Keep retrieval degradations; drop fallback notes from an earlier attempt so they are not repeated.
     degraded = [d for d in state.get("degraded", []) if not d.startswith("generation_fallback")]
@@ -614,20 +639,30 @@ def generate_node(state: StateInput) -> dict[str, Any]:
         return {"generation": ABSTAIN_MESSAGE, "telemetry": telemetry, "degraded": degraded}
 
     context = "\n\n---\n\n".join(docs)
-    prompt = f"Context:\n{context}\n\nQuestion: {q}\n\nAnswer concisely based strictly on the context:"
+    feedback = str(state.get("grader_feedback") or "")
     telemetry["abstained"] = False
+    telemetry["generation_feedback_applied"] = bool(feedback)
+    prompt = _generation_prompt(context, search_q, feedback)
     try:
         llm = get_chat_llm()
         if llm_is_fallback(llm):
             degraded.append("generation_fallback: the model server is unavailable; the answer is extractive, not model-written")
             telemetry["generation_fallback"] = True
+        # The extractive synthesizer returns the same text for the same documents, so retrying it is pointless.
+        deterministic = isinstance(llm, DeterministicContextLLM)
+        telemetry["generator_deterministic"] = deterministic
+        if not deterministic:
+            prompt = _generation_prompt(context, original_q, feedback)
         response = llm.invoke(prompt)
         gen_content = str(response.content).strip()
     except Exception as exc:
         # The model failed. Answer extractively from the same context and flag it for the reviewer.
-        gen_content = str(DeterministicContextLLM().invoke(prompt).content).strip()
+        gen_content = str(
+            DeterministicContextLLM().invoke(_generation_prompt(context, search_q, feedback)).content
+        ).strip()
         degraded.append(f"generation_fallback: {type(exc).__name__}; the answer is extractive, not model-written")
         telemetry["generation_fallback"] = True
+        telemetry["generator_deterministic"] = True
 
     # Real-time outbound DLP filter
     gen_content = redact_pii(gen_content)
@@ -640,14 +675,35 @@ def generate_node(state: StateInput) -> dict[str, Any]:
     }
 
 
+_FEEDBACK_UNSUPPORTED = (
+    "it was not supported by the context. State only what the context says, or say that the context "
+    "does not contain the answer."
+)
+_FEEDBACK_EMPTY = "it was empty. Answer from the context, or say that the context does not contain the answer."
+
+
+def _generation_failure(state: StateInput, telemetry: dict[str, Any], feedback: str) -> tuple[str, dict[str, Any]]:
+    """Decide what a failed groundedness check does next: regenerate with feedback, or stop and escalate.
+
+    A deterministic generator would return the same text, so it escalates at once instead of looping.
+    """
+    retries = int(state.get("generation_retry_count", 0))
+    if telemetry.get("generator_deterministic"):
+        telemetry["generation_retry_skipped"] = "deterministic generator; a retry would repeat the same answer"
+        return "circuit_break", {}
+    if retries >= MAX_GENERATION_RETRIES:
+        return "circuit_break", {}
+    return "retry", {"generation_retry_count": retries + 1, "grader_feedback": feedback}
+
+
 def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     gen = state.get("generation", "")
     docs = state.get("documents", [])
-    retries = state.get("retry_count", 0)
     telemetry = dict(state.get("telemetry", {}))
+    telemetry.pop("generation_retry_skipped", None)
 
     status = "grounded"
-    update: dict[str, Any] = {}
+    update: dict[str, Any] = {"grader_feedback": ""}
     ratio: float | None = None
     semantic_score: float | None = None
     grader_method = "lexical_pass"
@@ -658,11 +714,7 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     elif not gen or not str(gen).strip():
         # Blank generation cannot be grounded
         grader_method = "empty_generation"
-        if retries >= 2:
-            status = "circuit_break"
-        else:
-            status = "retry"
-            update["retry_count"] = retries + 1
+        status, update = _generation_failure(state, telemetry, _FEEDBACK_EMPTY)
     elif docs and (
         unsupported := _unsupported_numbers(
             gen, docs, state.get("original_question") or state.get("sanitized_question", "")
@@ -671,11 +723,11 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
         # A figure the sources do not contain is never grounded, however much other wording overlaps.
         grader_method = "numeric_mismatch"
         telemetry["unsupported_numbers"] = sorted(unsupported)
-        if retries >= 2:
-            status = "circuit_break"
-        else:
-            status = "retry"
-            update["retry_count"] = retries + 1
+        feedback = (
+            f"it stated figures that are not in the context ({', '.join(sorted(unsupported))}). "
+            "Use only figures that appear in the context."
+        )
+        status, update = _generation_failure(state, telemetry, feedback)
     elif docs:
         doc_words = set(_WORD.findall(" ".join(docs).lower()))
         gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
@@ -691,18 +743,10 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
                         grader_method = "semantic_cross_encoder"
                     else:
                         grader_method = "semantic_rejected"
-                        if retries >= 2:
-                            status = "circuit_break"
-                        else:
-                            status = "retry"
-                            update["retry_count"] = retries + 1
+                        status, update = _generation_failure(state, telemetry, _FEEDBACK_UNSUPPORTED)
                 else:
                     grader_method = "lexical_rejected"
-                    if retries >= 2:
-                        status = "circuit_break"
-                    else:
-                        status = "retry"
-                        update["retry_count"] = retries + 1
+                    status, update = _generation_failure(state, telemetry, _FEEDBACK_UNSUPPORTED)
 
     telemetry["groundedness_ratio"] = None if ratio is None else round(ratio, 4)
     telemetry["groundedness_grader"] = grader_method
@@ -718,7 +762,8 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
             "grader": grader_method,
             "groundedness_ratio": telemetry["groundedness_ratio"],
             "semantic_score": semantic_score,
-            "retry_count": retries,
+            "generation_retry_count": int(state.get("generation_retry_count", 0)),
+            "retry_skipped": telemetry.get("generation_retry_skipped"),
         },
     )
     return {"hallucination_status": status, "telemetry": telemetry, **update}
@@ -734,7 +779,7 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     if not gen or not str(gen).strip():
         # Blank generation cannot be a relevant answer
         telemetry["relevance_grader"] = "empty_generation"
-        if state.get("retry_count", 0) >= 2:
+        if state.get("retry_count", 0) >= MAX_RETRIEVAL_RETRIES:
             return {"relevance_status": "circuit_break", "telemetry": telemetry}
         return {"relevance_status": "irrelevant", "retry_count": state.get("retry_count", 0) + 1, "telemetry": telemetry}
 
@@ -761,14 +806,14 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
                 grader_method = "semantic_cross_encoder"
             else:
                 grader_method = "semantic_rejected"
-                if retries >= 2:
+                if retries >= MAX_RETRIEVAL_RETRIES:
                     status = "circuit_break"
                 else:
                     status = "irrelevant"
                     update["retry_count"] = retries + 1
         else:
             grader_method = "lexical_rejected"
-            if retries >= 2:
+            if retries >= MAX_RETRIEVAL_RETRIES:
                 status = "circuit_break"
             else:
                 status = "irrelevant"

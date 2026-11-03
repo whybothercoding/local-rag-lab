@@ -140,6 +140,8 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "hallucination_status": "",
         "relevance_status": "",
         "retry_count": 0,
+        "generation_retry_count": 0,
+        "grader_feedback": "",
         "history": [],
         "telemetry": {},
         "degraded": [],

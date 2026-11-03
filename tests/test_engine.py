@@ -1,6 +1,8 @@
 import hashlib
 import pytest
 
+from config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+
 from conftest import token_for
 from app import (
     guardrail_input_node,
@@ -78,7 +80,7 @@ def test_grade_documents_approved():
 
 
 def test_grade_documents_trips_circuit_breaker_on_max_retries():
-    state = {"documents": [], "retry_count": 2}
+    state = {"documents": [], "retry_count": MAX_RETRIEVAL_RETRIES}
     result = grade_documents_node(state)
     assert result["grade_status"] == "circuit_break"
 
@@ -98,7 +100,10 @@ def test_grade_hallucination_detects_fabrications():
     }
     result = grade_hallucination_node(state)
     assert result["hallucination_status"] == "retry"
-    assert result["retry_count"] == 1
+    # Regenerating spends the generation budget, never the retrieval (rewrite) budget.
+    assert result["generation_retry_count"] == 1
+    assert "retry_count" not in result
+    assert "not supported by the context" in result["grader_feedback"]
 
 
 def test_grade_answer_relevance_detects_off_topic_answer():
@@ -226,7 +231,7 @@ def test_grade_hallucination_trips_circuit_breaker_on_max_retries():
     state = {
         "documents": ["The capital of France is Paris."],
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
-        "retry_count": 2,
+        "generation_retry_count": MAX_GENERATION_RETRIES,
     }
     result = grade_hallucination_node(state)
     assert result["hallucination_status"] == "circuit_break"
@@ -351,7 +356,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     hal_cb = grade_hallucination_node({
         "documents": ["Some valid document content."],
         "generation": "",
-        "retry_count": 2,
+        "generation_retry_count": MAX_GENERATION_RETRIES,
     })
     assert hal_cb["hallucination_status"] == "circuit_break"
 
@@ -367,7 +372,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     rel_cb = grade_answer_relevance_node({
         "original_question": "What is the policy?",
         "generation": "",
-        "retry_count": 2,
+        "retry_count": MAX_RETRIEVAL_RETRIES,
     })
     assert rel_cb["relevance_status"] == "circuit_break"
 

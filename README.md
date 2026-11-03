@@ -23,7 +23,9 @@ Implements dynamic self-assessment loops to verify output quality before answers
 * **Answer Relevance Grading (`grade_relevance`)**: Assesses whether the final answer directly addresses the original user prompt.
 
 ### 4. Corrective RAG (CRAG) & Adaptive Query Rewriting
-When retrieved documents fail relevance grading or an answer is found irrelevant, the pipeline autonomously reformulates the user query (`rewrite`) and retries retrieval. An integrated **circuit breaker** caps retries at 2 to prevent infinite cycles.
+When retrieved documents fail relevance grading or an answer is found irrelevant, the pipeline autonomously reformulates the user query (`rewrite`) and retries retrieval.
+
+An answer that fails the groundedness check is regenerated from the same documents with the grader's reason added to the prompt (for example, the figures it stated that the context does not contain), because at temperature 0 an identical prompt would only repeat the same answer. The extractive fallback is never retried: it escalates straight to review. Two separate **circuit breakers** bound the loops: `MAX_RETRIEVAL_RETRIES` (default 2) for query rewrites and `MAX_GENERATION_RETRIES` (default 1) for regenerations, so one loop cannot spend the other's budget. Deployments running larger models can raise them in `.env`.
 
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
