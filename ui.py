@@ -438,7 +438,7 @@ if admin:
             target_ws = st.selectbox("Workspace", ws_options, key="grant_ws_select")
 
             effective_ws = active_ws if target_ws == "all" else target_ws
-            curr_grants = effective_permissions(selected_user, effective_ws)
+            curr_grants = effective_permissions(policy_data, policy_data["users"][selected_user], effective_ws)
             q_checked = "query" in curr_grants
             r_checked = "review" in curr_grants
             auto_checked = "auto_approve" in curr_grants
