@@ -121,3 +121,38 @@ def test_detect_language_on_short_questions(text, lang):
     from rag_lab.lang import detect_language
 
     assert detect_language(text) == lang
+
+
+# --- Swiss and Greek personal data --------------------------------------------------------
+
+@pytest.mark.parametrize(("text", "placeholder"), [
+    ("AHV-Nr. 756.1234.5678.97 bitte angeben", "[REDACTED_AHV]"),
+    ("AVS 7561234567897", "[REDACTED_AHV]"),
+    ("ΑΜΚΑ 15038512347", "[REDACTED_AMKA]"),
+    ("Rufen Sie 044 123 45 67 an", "[REDACTED_PHONE]"),
+    ("Natel 079.123.45.67", "[REDACTED_PHONE]"),
+    ("Τηλέφωνο 210 1234567", "[REDACTED_PHONE]"),
+    ("Κινητό 694 123 4567", "[REDACTED_PHONE]"),
+    ("+41 44 123 45 67", "[REDACTED_PHONE]"),
+    ("+30 694 123 4567", "[REDACTED_PHONE]"),
+])
+def test_swiss_and_greek_personal_data_is_redacted(text, placeholder):
+    from rag_lab.security.redaction import redact_pii
+
+    assert placeholder in redact_pii(text), redact_pii(text)
+
+
+@pytest.mark.parametrize("text", [
+    "AHV 756.1234.5678.98",                # wrong check digit
+    "Rechnung 15038512348",                # 11 digits, Luhn fails
+    "Referenz 45138512347",                # 11 digits, day 45 is not a date
+    "Das Lohnband liegt zwischen 128000 und 152000 CHF.",
+    "Bis zum 31.03.2026 einreichen.",
+    "Die Frist beträgt 7 Tage, nach 3 Monaten 2 Monate.",
+    "Οι αποδείξεις υποβάλλονται εντός 30 ημερών, επίδομα 40 ευρώ.",
+    "Bestellnummer 0441234567",            # bare digits are never a phone number
+])
+def test_ordinary_figures_survive_redaction(text):
+    from rag_lab.security.redaction import redact_pii
+
+    assert redact_pii(text) == text
