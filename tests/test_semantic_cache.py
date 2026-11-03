@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 import pytest
 
-from semantic_cache import (
+from rag_lab.retrieval.semantic_cache import (
     _L1_CITATIONS,
     _L1_GENERATIONS,
     _cosine_similarity,
@@ -204,7 +204,7 @@ def test_hierarchical_clearance_exact_match(tmp_path: Path):
 
 
 def test_prune_stale_cache_and_retention(tmp_path: Path, monkeypatch):
-    import semantic_cache
+    import rag_lab.retrieval.semantic_cache as semantic_cache
     from datetime import datetime, UTC, timedelta
 
     db_file = str(tmp_path / "cache.db")
@@ -227,7 +227,7 @@ def test_prune_stale_cache_and_retention(tmp_path: Path, monkeypatch):
 
 
 def test_cache_stats_and_malformed_vector_handling(tmp_path: Path):
-    from semantic_cache import _unpack_vector, cache_stats
+    from rag_lab.retrieval.semantic_cache import _unpack_vector, cache_stats
 
     assert _unpack_vector(b"") == []
     assert _unpack_vector(b"123") == []  # Not a multiple of 4 bytes

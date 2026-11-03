@@ -11,8 +11,8 @@ from typing import Any, Sequence
 
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-from config import ENABLE_RERANKER, MODELS_DIR, RERANKER_MODEL
-from model_integrity import verify_model
+from rag_lab.config import ENABLE_RERANKER, MODELS_DIR, RERANKER_MODEL
+from rag_lab.security.model_integrity import verify_model
 
 logger = logging.getLogger("reranker")
 

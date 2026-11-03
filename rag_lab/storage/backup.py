@@ -25,9 +25,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from audit import head_hash, verify_anchors, verify_chain
-from checkpointer import get_sqlite_path, is_postgres_uri
-from config import ACCESS_POLICY_PATH, AUDIT_DB_PATH, ANCHOR_PATH, BACKUP_DIR, CACHE_DB_PATH, DB_URI
+from rag_lab.security.audit import head_hash, verify_anchors, verify_chain
+from rag_lab.storage.checkpointer import get_sqlite_path, is_postgres_uri
+from rag_lab.config import ACCESS_POLICY_PATH, AUDIT_DB_PATH, ANCHOR_PATH, BACKUP_DIR, CACHE_DB_PATH, DB_URI
 
 MANIFEST = "manifest.json"
 

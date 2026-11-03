@@ -39,7 +39,7 @@ TEST_PASSWORD = "correct-horse-battery"
 
 @pytest.fixture(autouse=True)
 def _clean_cache_each_test():
-    from semantic_cache import clear_cache
+    from rag_lab.retrieval.semantic_cache import clear_cache
 
     clear_cache()
     yield
@@ -49,17 +49,17 @@ def _clean_cache_each_test():
 @pytest.fixture
 def rollback_index(tmp_path, monkeypatch):
     """A real, indexed workspace named 'default'. The pipeline retrieves from it; nothing is injected."""
-    from ingest import ingest_workspace
+    from rag_lab.ingestion.ingest import ingest_workspace
 
     source = tmp_path / "kb" / "default"
     source.mkdir(parents=True)
     (source / "company_policy.md").write_text("Rollback SLA is strictly under 5 minutes.", encoding="utf-8")
 
     store = tmp_path / "store"
-    for target in ("workspace_manager", "app"):
+    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.graph"):
         monkeypatch.setattr(f"{target}.CHROMA_PATH", str(store / "chroma"))
         monkeypatch.setattr(f"{target}.BM25_DIR", str(store / "bm25"))
-    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(store / "uploads"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(store / "uploads"))
 
     assert ingest_workspace("default", str(source)).ok
     return source
@@ -85,7 +85,7 @@ def postgres_uri() -> str:
     """
     from urllib.parse import urlsplit
 
-    from config import POSTGRES_DB_URI
+    from rag_lab.config import POSTGRES_DB_URI
 
     def unavailable(reason: str):
         if os.getenv("REQUIRE_POSTGRES") == "1":
@@ -123,13 +123,13 @@ def _dedicated_test_database(uri: str) -> str:
 
 def token_for(name: str) -> str:
     """A session token for a test account, as the UI or CLI would issue after a successful sign-in."""
-    from access import issue_token
+    from rag_lab.security.access import issue_token
 
     return issue_token(name)
 
 
 def _seed_access_policy() -> None:
-    from access import add_user, set_grant, set_user_permissions_everywhere
+    from rag_lab.security.access import add_user, set_grant, set_user_permissions_everywhere
 
     add_user("alice", TEST_PASSWORD, admin=True)
     set_user_permissions_everywhere("alice", [])

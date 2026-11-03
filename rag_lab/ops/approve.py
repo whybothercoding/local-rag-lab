@@ -6,7 +6,7 @@ import logging
 from langgraph.types import Command
 
 # Import workflow and checkpointer factory
-from access import (
+from rag_lab.security.access import (
     authorize,
     clearance_covers,
     get_user_clearance,
@@ -14,8 +14,8 @@ from access import (
     sign_in,
     verify_token,
 )
-from app import workflow
-from checkpointer import get_checkpointer, fetch_checkpoint_threads, shared_pool
+from rag_lab.pipeline.graph import workflow
+from rag_lab.storage.checkpointer import get_checkpointer, fetch_checkpoint_threads, shared_pool
 
 logger = logging.getLogger("HITL-Operator-CLI")
 

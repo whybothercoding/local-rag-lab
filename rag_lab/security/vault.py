@@ -22,7 +22,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from config import DATA_KEY_PATH
+from rag_lab.config import DATA_KEY_PATH
 
 __all__ = [
     "InvalidTag",

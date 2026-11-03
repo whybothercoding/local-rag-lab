@@ -12,7 +12,7 @@ import subprocess
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from app import workflow
+from rag_lab.pipeline.graph import workflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
 logger = logging.getLogger("GraphExporter")

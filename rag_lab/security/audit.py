@@ -24,8 +24,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from config import ANCHOR_PATH, AUDIT_DB_PATH, RETENTION_DAYS
-from vault import anchor_mac, chain_mac, open_text, seal_text, subject_tag
+from rag_lab.config import ANCHOR_PATH, AUDIT_DB_PATH, RETENTION_DAYS
+from rag_lab.security.vault import anchor_mac, chain_mac, open_text, seal_text, subject_tag
 
 GENESIS_HASH = "0" * 64
 _schema_lock = threading.Lock()

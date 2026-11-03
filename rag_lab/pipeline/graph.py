@@ -11,7 +11,7 @@ from chromadb.errors import NotFoundError
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
-from config import (
+from rag_lab.config import (
     CHROMA_PATH,
     BM25_DIR,
     DB_URI,  # noqa: F401
@@ -23,26 +23,26 @@ from config import (
     MAX_RETRIEVAL_RETRIES,
     MAX_GENERATION_RETRIES,
 )
-from access import (
+from rag_lab.security.access import (
     allowed_clearances,
     authorize,
     clearance_covers,
     get_user_clearance,
     verify_token,
 )
-from audit import record as audit_record
-from embedding_provider import (
+from rag_lab.security.audit import record as audit_record
+from rag_lab.retrieval.embedding_provider import (
     EmbeddingUnavailableError,
     embedding_fingerprint,
     get_embedding_model,
     stored_fingerprint,
 )
-from llm_provider import DeterministicContextLLM, get_chat_llm, llm_is_fallback
-from redaction import redact_pii
-from context_sanitizer import sanitize_chunks, scan_chunk, scan_user_input
-from reranker import rerank_with_status, score_pairs
-from sparse_search import has_sparse_index, search_sparse_chunks
-from semantic_cache import (
+from rag_lab.pipeline.llm_provider import DeterministicContextLLM, get_chat_llm, llm_is_fallback
+from rag_lab.security.redaction import redact_pii
+from rag_lab.security.context_sanitizer import sanitize_chunks, scan_chunk, scan_user_input
+from rag_lab.retrieval.reranker import rerank_with_status, score_pairs
+from rag_lab.retrieval.sparse_search import has_sparse_index, search_sparse_chunks
+from rag_lab.retrieval.semantic_cache import (
     PersistentCitationsCache,
     PersistentSemanticCache,
     cache_key,  # noqa: F401  (re-exported: the canonical key lives in semantic_cache)

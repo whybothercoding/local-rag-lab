@@ -1,9 +1,9 @@
 import os
 import pytest
 
-from context_sanitizer import scan_chunk, sanitize_chunks
-from app import sanitize_context_node, generate_node
-from audit import list_events
+from rag_lab.security.context_sanitizer import scan_chunk, sanitize_chunks
+from rag_lab.pipeline.graph import sanitize_context_node, generate_node
+from rag_lab.security.audit import list_events
 
 
 @pytest.fixture(autouse=True, params=["native", "python"])
@@ -13,8 +13,7 @@ def scanner_backend(request, monkeypatch):
     The fallback is what installs without `make rust-build` get, so it must stay covered even where
     the accelerator is installed. REQUIRE_RUST_ACCEL=1 (CI) turns a missing accelerator into a failure.
     """
-    import context_sanitizer
-
+    import rag_lab.security.context_sanitizer as context_sanitizer
     if request.param == "native" and not context_sanitizer.RUST_ACCEL:
         if os.getenv("REQUIRE_RUST_ACCEL") == "1":
             pytest.fail("REQUIRE_RUST_ACCEL=1 but rag_accel is not installed")

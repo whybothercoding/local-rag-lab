@@ -3,7 +3,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from app import workflow
+from rag_lab.pipeline.graph import workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 

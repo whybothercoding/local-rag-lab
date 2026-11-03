@@ -3,8 +3,8 @@ import socket
 
 import pytest
 
-from config import FASTEMBED_MODEL, MODELS_DIR
-from model_integrity import verify_model
+from rag_lab.config import FASTEMBED_MODEL, MODELS_DIR
+from rag_lab.security.model_integrity import verify_model
 
 
 def test_offline_guard_blocks_outbound_connections(monkeypatch):

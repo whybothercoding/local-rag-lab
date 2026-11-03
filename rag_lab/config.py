@@ -5,17 +5,13 @@ fresh `make setup` machine. A `.env` file in the project root overrides
 them when present. Existing environment variables win over the file.
 """
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+# Importing the package sets the offline defaults (HF_HUB_OFFLINE, ANONYMIZED_TELEMETRY) and ROOT.
+from rag_lab import ROOT
 
-# Runtime never contacts a model hub or telemetry endpoint. Only fetch_models.py may download,
-# and it re-enables network access itself before huggingface_hub is imported.
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+load_dotenv(ROOT / ".env")
 
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"

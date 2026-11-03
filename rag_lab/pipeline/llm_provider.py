@@ -16,7 +16,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from config import (
+from rag_lab.config import (
     CHAT_MODEL,
     LLM_PROVIDER,
     LOCAL_LLM_URL,

@@ -16,8 +16,8 @@ os.environ["HF_HUB_OFFLINE"] = "0"
 
 from huggingface_hub import snapshot_download
 
-from config import FASTEMBED_MODEL, MODELS_DIR, RERANKER_MODEL
-from model_integrity import PINNED_MODELS, ModelIntegrityError, verify_model
+from rag_lab.config import FASTEMBED_MODEL, MODELS_DIR, RERANKER_MODEL
+from rag_lab.security.model_integrity import PINNED_MODELS, ModelIntegrityError, verify_model
 
 
 def fetch_model(model_name: str = FASTEMBED_MODEL, cache_dir: str = MODELS_DIR):

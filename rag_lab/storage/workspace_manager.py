@@ -10,16 +10,16 @@ from typing import List, Dict, Any, Tuple
 import chromadb
 from psycopg_pool import ConnectionPool
 
-from config import (
+from rag_lab.config import (
     BM25_DIR as _BM25_DIR,
     CHROMA_PATH as _CHROMA_PATH,
     DB_URI as _DB_URI,
     UPLOADS_DIR as _UPLOADS_DIR,
     KNOWLEDGE_BASE_DIR as _KNOWLEDGE_BASE_DIR,
 )
-from checkpointer import is_postgres_uri, get_sqlite_path
-from parsers import SUPPORTED_EXTENSIONS
-from sparse_search import delete_sparse_index, has_sparse_index
+from rag_lab.storage.checkpointer import is_postgres_uri, get_sqlite_path
+from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
+from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index
 
 # Re-exported so tests and ingest can redirect storage without editing config.
 CHROMA_PATH = _CHROMA_PATH
@@ -146,7 +146,7 @@ def sync_all_workspaces(
 
     Idempotent: Uses content-addressable SHA-256 manifests to skip unchanged files.
     """
-    from ingest import ingest_workspace
+    from rag_lab.ingestion.ingest import ingest_workspace
     discovered = discover_knowledge_base_workspaces(base_dir)
     results = {}
     for ws_id, dir_path in discovered:
@@ -155,7 +155,7 @@ def sync_all_workspaces(
 
 
 def _audit_workspace(event: str, ws_id: str, actor: str) -> None:
-    from audit import record
+    from rag_lab.security.audit import record
 
     record(event, workspace_id=ws_id, session_id="", data={"actor": actor})
 
@@ -166,7 +166,7 @@ def create_workspace(raw_name: str, actor: str | None = None) -> str:
     Returns the sanitized workspace ID, or empty string on invalid name. With `actor`, that account
     must be an administrator; the change is recorded in the audit log.
     """
-    from access import require_admin
+    from rag_lab.security.access import require_admin
 
     who = require_admin(actor) if actor is not None else "system"
     ensure_base_dirs()
@@ -199,7 +199,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
 
     With `actor`, that account must be an administrator. The deletion is recorded in the audit log.
     """
-    from access import remove_workspace_grants, require_admin
+    from rag_lab.security.access import remove_workspace_grants, require_admin
 
     who = require_admin(actor) if actor is not None else "system"
     ws_id = sanitize_workspace_id(raw_name)
@@ -222,7 +222,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
 
     # 3. Delete semantic cache entries for this workspace
     try:
-        from semantic_cache import clear_workspace_cache
+        from rag_lab.retrieval.semantic_cache import clear_workspace_cache
         clear_workspace_cache(ws_id)
     except Exception as exc:
         logger.debug("Could not clear cache for %s: %s", ws_id, exc)
@@ -345,12 +345,12 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
 def print_status() -> int:
     """Print an end-to-end operational readiness and health summary."""
-    from access import PolicyIntegrityError, describe_review_mode, list_users, review_mode_report
-    from approve import list_pending_threads
-    from app import workflow
-    from audit import verify_anchors, verify_chain
-    from checkpointer import get_checkpointer
-    from config import (
+    from rag_lab.security.access import PolicyIntegrityError, describe_review_mode, list_users, review_mode_report
+    from rag_lab.ops.approve import list_pending_threads
+    from rag_lab.pipeline.graph import workflow
+    from rag_lab.security.audit import verify_anchors, verify_chain
+    from rag_lab.storage.checkpointer import get_checkpointer
+    from rag_lab.config import (
         EMBED_MODEL,
         ENABLE_RERANKER,
         FASTEMBED_MODEL,
@@ -360,10 +360,10 @@ def print_status() -> int:
         OLLAMA_MODEL,
         RERANKER_MODEL,
     )
-    from context_sanitizer import RUST_ACCEL
-    from embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
-    from llm_provider import ollama_models
-    from model_integrity import ModelIntegrityError, verify_model
+    from rag_lab.security.context_sanitizer import RUST_ACCEL
+    from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
+    from rag_lab.pipeline.llm_provider import ollama_models
+    from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
 
     ok = True
     print("=== Local Enterprise RAG Lab: System Status ===")
@@ -456,7 +456,7 @@ def print_status() -> int:
         ok = False
 
     # 6. Audit chain & anchors
-    from config import AUDIT_DB_PATH
+    from rag_lab.config import AUDIT_DB_PATH
     if not Path(AUDIT_DB_PATH).exists():
         print("[OK] Audit log integrity : 0 record(s) verified (not initialized yet)")
     else:
@@ -473,7 +473,7 @@ def print_status() -> int:
 
     # 7. Semantic cache
     try:
-        from semantic_cache import cache_stats
+        from rag_lab.retrieval.semantic_cache import cache_stats
         cs = cache_stats()
         print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s)")
     except Exception as exc:
@@ -486,7 +486,7 @@ def print_status() -> int:
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
-    from access import PolicyIntegrityError, authenticate_admin, has_admin
+    from rag_lab.security.access import PolicyIntegrityError, authenticate_admin, has_admin
 
     signer_parent = argparse.ArgumentParser(add_help=False)
     signer_parent.add_argument(

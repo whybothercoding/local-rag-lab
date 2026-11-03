@@ -4,8 +4,8 @@ import sqlite3
 from pathlib import Path
 import pytest
 
-from embedding_provider import LocalFastEmbeddings, get_embedding_model
-from sparse_search import (
+from rag_lab.retrieval.embedding_provider import LocalFastEmbeddings, get_embedding_model
+from rag_lab.retrieval.sparse_search import (
     SparseIndexError,
     index_sparse_chunks,
     search_sparse_chunks,

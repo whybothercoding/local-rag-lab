@@ -65,7 +65,7 @@ help:
 	@echo "  make factory-reset [CONFIRM=yes]               Wipe all data, keys, users, indexes, and logs"
 
 status:
-	./venv/bin/python workspace_manager.py status
+	./venv/bin/python -m rag_lab.storage.workspace_manager status
 
 # 1. Bootstrap: create the venv and install pure-Python dependencies.
 setup:
@@ -88,11 +88,11 @@ rust-build:
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
 models:
-	./venv/bin/python fetch_models.py
+	./venv/bin/python -m rag_lab.ops.fetch_models
 
 # 3. Check the cached model against its pins without any network access
 verify-models:
-	./venv/bin/python fetch_models.py --verify-only
+	./venv/bin/python -m rag_lab.ops.fetch_models --verify-only
 
 # 4. Optional PostgreSQL checkpointer (set DB_URI=postgresql://... to use it)
 up:
@@ -106,8 +106,8 @@ down:
 
 # 5. Optional: pull the Ollama chat and embedding models (names resolved by config.py, so .env applies)
 ollama-pull:
-	ollama pull "$$(./venv/bin/python -c 'import config; print(config.CHAT_MODEL)')"
-	ollama pull "$$(./venv/bin/python -c 'import config; print(config.EMBED_MODEL)')"
+	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.CHAT_MODEL)')"
+	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.EMBED_MODEL)')"
 
 # 6. Run the test suite
 test:
@@ -126,147 +126,147 @@ coverage:
 
 # 8. Workspace management & document ingestion
 workspaces:
-	./venv/bin/python workspace_manager.py list
+	./venv/bin/python -m rag_lab.storage.workspace_manager list
 
 create-workspace:
 	@test -n "$(WS)" || (echo "Usage: make create-workspace WS=<workspace> [ADMIN=<admin>]" && exit 1)
-	./venv/bin/python workspace_manager.py $(if $(ADMIN),--as $(ADMIN),) create $(WS)
+	./venv/bin/python -m rag_lab.storage.workspace_manager $(if $(ADMIN),--as $(ADMIN),) create $(WS)
 
 delete-workspace:
 	@test -n "$(WS)" || (echo "Usage: make delete-workspace WS=<workspace> [ADMIN=<admin>] [YES=1]" && exit 1)
-	./venv/bin/python workspace_manager.py $(if $(ADMIN),--as $(ADMIN),) delete $(WS) $(if $(or $(YES),$(CONFIRM)),-y,)
+	./venv/bin/python -m rag_lab.storage.workspace_manager $(if $(ADMIN),--as $(ADMIN),) delete $(WS) $(if $(or $(YES),$(CONFIRM)),-y,)
 
 # Discover every folder under knowledge_base/ and index it, or index a single WS.
 # Idempotent: unchanged workspaces are skipped unless FORCE=1.
 sync:
 	@test -n "$(ADMIN)" || (echo "Indexing is an administrative action. Run: make sync ADMIN=<admin account> [WS=<ws>] [DIR=<path>] [FORCE=1]" && exit 1)
-	./venv/bin/python ingest.py $(if $(WS),--workspace $(WS) $(if $(DIR),--dir $(DIR),),--all) $(if $(FORCE),--force,) --as $(ADMIN)
+	./venv/bin/python -m rag_lab.ingestion.ingest $(if $(WS),--workspace $(WS) $(if $(DIR),--dir $(DIR),),--all) $(if $(FORCE),--force,) --as $(ADMIN)
 
 ingest: sync
 
 # 9. Sync, then launch the UI. A failed sync is reported but does not block the UI.
 ui:
-	@if [ -n "$(ADMIN)" ]; then ./venv/bin/python ingest.py --all --as $(ADMIN) || echo "Indexing failed; launching the UI anyway."; else echo "Skipping workspace sync. To index knowledge_base/ on launch: make ui ADMIN=<admin account>"; fi
+	@if [ -n "$(ADMIN)" ]; then ./venv/bin/python -m rag_lab.ingestion.ingest --all --as $(ADMIN) || echo "Indexing failed; launching the UI anyway."; else echo "Skipping workspace sync. To index knowledge_base/ on launch: make ui ADMIN=<admin account>"; fi
 	./venv/bin/streamlit run ui.py
 
 # 10. Verify the audit hash chain (exits non-zero if any record was altered or removed)
 audit-verify:
-	./venv/bin/python audit.py verify
+	./venv/bin/python -m rag_lab.security.audit verify
 
 # 11. Show recent audit events (defaults to N=20, optional WS=<workspace>)
 audit-tail:
-	./venv/bin/python audit.py tail -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
+	./venv/bin/python -m rag_lab.security.audit tail -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
 
 # 15. Anchor the audit head hash. Run on a schedule and copy data/audit_anchors.jsonl off the host.
 audit-anchor:
-	./venv/bin/python audit.py anchor
+	./venv/bin/python -m rag_lab.security.audit anchor
 
 # Export decrypted audit trail as JSON lines (to stdout or OUT=<file>)
 audit-export:
-	./venv/bin/python audit.py export $(if $(OUT),-o $(OUT),)
+	./venv/bin/python -m rag_lab.security.audit export $(if $(OUT),-o $(OUT),)
 
 # 16. Apply the retention policy (183 days by default) to audit records and idle checkpoint threads
 retention:
-	./venv/bin/python retention.py $(if $(DAYS),--days $(DAYS),)
+	./venv/bin/python -m rag_lab.storage.retention $(if $(DAYS),--days $(DAYS),)
 
 # 17. Consistent, checksummed backup of the audit log, checkpoints, anchors, and policy (keys excluded)
 backup:
-	./venv/bin/python backup.py create
+	./venv/bin/python -m rag_lab.storage.backup create
 
 backups:
-	./venv/bin/python backup.py list
+	./venv/bin/python -m rag_lab.storage.backup list
 
 # 18. Verify a backup: make backup-verify DIR=backups/backup-<timestamp>
 backup-verify:
 	@test -n "$(DIR)" || (echo "Set DIR=<backup directory>" && exit 1)
-	./venv/bin/python backup.py verify $(DIR)
+	./venv/bin/python -m rag_lab.storage.backup verify $(DIR)
 
 # 12. Account & Role-Based Access Control (RBAC) Management
 users:
-	./venv/bin/python access.py list
+	./venv/bin/python -m rag_lab.security.access list
 
 add-user:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
 	@if [ "$(ADMIN)" = "1" ] || [ "$(ADMIN)" = "true" ] || [ "$(ADMIN)" = "yes" ]; then \
-		./venv/bin/python access.py $(if $(AS),--as $(AS),) add-user $(or $(ACCOUNT),$(USERNAME)) --admin $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+		./venv/bin/python -m rag_lab.security.access $(if $(AS),--as $(AS),) add-user $(or $(ACCOUNT),$(USERNAME)) --admin $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
 	else \
-		./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(MAKE_ADMIN),$(IS_ADMIN)),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+		./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(MAKE_ADMIN),$(IS_ADMIN)),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
 	fi
 
 grant:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
 
 revoke:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all> ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) revoke $(or $(ACCOUNT),$(USERNAME)) $(WS)
 
 set-clearance:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(CLEARANCE)" || (echo "Usage: make set-clearance ACCOUNT=<username> CLEARANCE=public|internal|confidential|secret ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-clearance $(or $(ACCOUNT),$(USERNAME)) $(CLEARANCE)
 
 set-admin:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-admin ACCOUNT=<username> ADMIN=<admin> [REVOKE=1]" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-admin $(or $(ACCOUNT),$(USERNAME)) $(if $(REVOKE),--revoke,)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-admin $(or $(ACCOUNT),$(USERNAME)) $(if $(REVOKE),--revoke,)
 
 set-default:
 	@test -n "$(PERMS)" || (echo "Usage: make set-default PERMS=query,auto_approve ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-default --perms $(PERMS)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-default --perms $(PERMS)
 
 team-mode:
 	@test -n "$(ADMIN)" || (echo "Usage: make team-mode ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py --as $(ADMIN) team-mode
+	./venv/bin/python -m rag_lab.security.access --as $(ADMIN) team-mode
 
 set-password:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-password ACCOUNT=<username> ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) set-password $(or $(ACCOUNT),$(USERNAME))
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-password $(or $(ACCOUNT),$(USERNAME))
 
 revoke-sessions:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make revoke-sessions ACCOUNT=<username> ADMIN=<admin>" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) revoke-sessions $(or $(ACCOUNT),$(USERNAME))
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) revoke-sessions $(or $(ACCOUNT),$(USERNAME))
 
 delete-user:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make delete-user ACCOUNT=<username> ADMIN=<admin> [YES=1]" && exit 1)
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(YES),$(CONFIRM)),-y,)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) delete-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(YES),$(CONFIRM)),-y,)
 
 # 12. Human-in-the-Loop compliance review CLI targets
 # List all threads awaiting human review
 reviews:
-	./venv/bin/python approve.py --list
+	./venv/bin/python -m rag_lab.ops.approve --list
 
 # Interactive review of a paused thread (auto-selects first pending thread if THREAD not set)
 review:
-	./venv/bin/python approve.py $(if $(THREAD),--thread $(THREAD),) $(if $(ACCOUNT),--approver $(ACCOUNT),)
+	./venv/bin/python -m rag_lab.ops.approve $(if $(THREAD),--thread $(THREAD),) $(if $(ACCOUNT),--approver $(ACCOUNT),)
 
 # Direct approval of a candidate answer
 approve:
 	@test -n "$(THREAD)" || (echo "Usage: make approve THREAD=<thread_id> [ACCOUNT=<reviewer>] [REASON=\"reason\"]" && exit 1)
-	./venv/bin/python approve.py --thread $(THREAD) --action approved $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
+	./venv/bin/python -m rag_lab.ops.approve --thread $(THREAD) --action approved $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
 
 # Direct rejection of a candidate answer
 reject:
 	@test -n "$(THREAD)" || (echo "Usage: make reject THREAD=<thread_id> [ACCOUNT=<reviewer>] [REASON=\"reason\"]" && exit 1)
-	./venv/bin/python approve.py --thread $(THREAD) --action rejected $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
+	./venv/bin/python -m rag_lab.ops.approve --thread $(THREAD) --action rejected $(if $(ACCOUNT),--approver $(ACCOUNT),) $(if $(REASON),--reason "$(REASON)",)
 
 # 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
 eval:
-	./venv/bin/python eval.py
+	./venv/bin/python -m rag_lab.ops.eval
 
 # Same gates, plus an advisory answer-support check by the local Ollama model
 eval-judge:
-	./venv/bin/python eval.py --judge
+	./venv/bin/python -m rag_lab.ops.eval --judge
 
 # Print retrieval similarity and coverage signals for the calibration split
 eval-calibrate:
-	./venv/bin/python eval.py --calibrate
+	./venv/bin/python -m rag_lab.ops.eval --calibrate
 
 # Export LangGraph topology to docs/architecture.mmd (and .png if mmdc is installed)
 graph:
-	./venv/bin/python export_graph.py
+	./venv/bin/python -m rag_lab.ops.export_graph
 
 # List answers reviewers rejected, with their reasons (defaults to N=20, optional WS=<workspace>)
 audit-feedback:
-	./venv/bin/python audit.py feedback -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
+	./venv/bin/python -m rag_lab.security.audit feedback -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
 
 # 14. Clean caches and test artifacts
 clean:
@@ -276,7 +276,7 @@ clean:
 
 # 19. Delete all users and reset the access policy
 reset-users:
-	./venv/bin/python access.py $(if $(ADMIN),--as $(ADMIN),) reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
 
 # 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
 factory-reset:

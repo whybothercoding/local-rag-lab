@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-import backup
-from audit import anchor, export_events, head_hash, list_events, prune, record, verify_anchors, verify_chain
-from checkpointer import get_checkpointer, prune_checkpoints
-from config import RETENTION_DAYS
+import rag_lab.storage.backup as backup
+from rag_lab.security.audit import anchor, export_events, head_hash, list_events, prune, record, verify_anchors, verify_chain
+from rag_lab.storage.checkpointer import get_checkpointer, prune_checkpoints
+from rag_lab.config import RETENTION_DAYS
 from conftest import token_for
-from vault import EncryptedSerde
+from rag_lab.security.vault import EncryptedSerde
 
 SECRET = "zebra-quartz-clause-7731"
 
@@ -44,7 +44,7 @@ def test_audit_payloads_are_sealed_on_disk_but_readable_with_the_key(audit_path)
 
 
 def test_checkpoint_state_is_sealed_on_disk(tmp_path):
-    from app import workflow
+    from rag_lab.pipeline.graph import workflow
 
     uri = f"sqlite:///{tmp_path / 'checkpoints.db'}"
     config = {"configurable": {"thread_id": "sealed-checkpoint"}}
@@ -74,7 +74,7 @@ def test_sealed_checkpoint_round_trips():
 
 def test_thread_bound_checkpoint_cannot_be_replayed_across_threads():
     from cryptography.exceptions import InvalidTag
-    from vault import bind_thread
+    from rag_lab.security.vault import bind_thread
 
     serde = EncryptedSerde(allow_plaintext=False)
     with bind_thread("thread-alpha"):
@@ -93,7 +93,7 @@ def test_thread_bound_checkpoint_cannot_be_replayed_across_threads():
 
 
 def test_invalid_vault_key_length_is_refused(tmp_path):
-    from vault import InvalidKeyError, load_or_create_key
+    from rag_lab.security.vault import InvalidKeyError, load_or_create_key
 
     bad_key = tmp_path / "short.key"
     bad_key.write_bytes(b"too-short")
@@ -202,7 +202,7 @@ def test_prune_keeps_recent_records(audit_path):
 
 
 def test_idle_checkpoint_threads_are_pruned_but_threads_awaiting_review_are_kept(tmp_path, rollback_index):
-    from app import workflow
+    from rag_lab.pipeline.graph import workflow
     from conftest import token_for as token
 
     uri = f"sqlite:///{tmp_path / 'checkpoints.db'}"
@@ -245,8 +245,7 @@ def test_backup_verifies_excludes_keys_and_detects_tampering(tmp_path):
 
 
 def test_backup_list_and_audit_export_cli(tmp_path, monkeypatch, capsys):
-    import audit
-
+    import rag_lab.security.audit as audit
     bk_root = tmp_path / "backups"
     monkeypatch.setattr(backup, "BACKUP_DIR", str(bk_root))
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1})
@@ -289,8 +288,8 @@ def test_admin_sees_the_audit_panel_and_others_do_not():
 
 
 def test_verify_anchors_detects_malformed_lines_broken_chain_and_missing_fields(audit_path, anchor_path):
-    from vault import anchor_mac
-    from audit import _canonical
+    from rag_lab.security.vault import anchor_mac
+    from rag_lab.security.audit import _canonical
 
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1}, path=audit_path)
     first = anchor(path=audit_path, anchor_path=anchor_path)
@@ -319,8 +318,7 @@ def test_verify_anchors_detects_malformed_lines_broken_chain_and_missing_fields(
 
 
 def test_audit_cli_subcommands(capsys):
-    import audit
-
+    import rag_lab.security.audit as audit
     # 1. anchor on empty log or populated log, head, tail, verify, feedback
     record(
         "hitl_decision",
@@ -399,8 +397,7 @@ def test_backup_verify_edge_cases_and_cli(tmp_path, monkeypatch, capsys):
 
 
 def test_retention_cli(capsys):
-    import retention
-
+    import rag_lab.storage.retention as retention
     assert retention.main(["--days", "0"]) == 1
     assert "at least one day" in capsys.readouterr().err
 
@@ -465,8 +462,8 @@ def test_ui_sign_out_session_expiry_and_review_flows(rollback_index):
     approve_btns[0].click().run()
 
     # Verify carol's thread completed in checkpoint store
-    from checkpointer import get_checkpointer
-    from app import workflow as wf
+    from rag_lab.storage.checkpointer import get_checkpointer
+    from rag_lab.pipeline.graph import workflow as wf
 
     with get_checkpointer() as saver:
         compiled = wf.compile(checkpointer=saver)

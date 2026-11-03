@@ -23,20 +23,20 @@ import chromadb
 import yaml
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-import workspace_manager
-from access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
-from audit import record as audit_record
-from config import MAX_SOURCE_BYTES
-from context_sanitizer import scan_chunk
-from embedding_provider import (
+import rag_lab.storage.workspace_manager as workspace_manager
+from rag_lab.security.access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
+from rag_lab.security.audit import record as audit_record
+from rag_lab.config import MAX_SOURCE_BYTES
+from rag_lab.security.context_sanitizer import scan_chunk
+from rag_lab.retrieval.embedding_provider import (
     FINGERPRINT_KEY,
     EmbeddingUnavailableError,
     embedding_fingerprint,
     get_embedding_model,
 )
-from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
-from sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
-from workspace_manager import ensure_base_dirs, sanitize_workspace_id
+from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
+from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
+from rag_lab.storage.workspace_manager import ensure_base_dirs, sanitize_workspace_id
 
 logger = logging.getLogger("ingest")
 
@@ -148,7 +148,7 @@ def _clear_index(ws_id: str) -> None:
     manifest = _get_manifest_path(ws_id)
     if manifest.exists():
         manifest.unlink()
-    from semantic_cache import clear_workspace_cache
+    from rag_lab.retrieval.semantic_cache import clear_workspace_cache
 
     clear_workspace_cache(ws_id)
 
@@ -458,7 +458,7 @@ def ingest_workspace(
 
     # 4. Prune stale cache entries from previous index versions for this workspace
     try:
-        from semantic_cache import prune_stale_cache
+        from rag_lab.retrieval.semantic_cache import prune_stale_cache
         prune_stale_cache(ws_id)
     except Exception as exc:
         logger.debug("Could not prune stale cache for %s: %s", ws_id, exc)
@@ -523,7 +523,7 @@ def main(argv: list[str] | None = None) -> None:
     actor = authenticate_admin(args.admin)
 
     if args.all or not args.workspace:
-        from workspace_manager import sync_all_workspaces
+        from rag_lab.storage.workspace_manager import sync_all_workspaces
         print("Discovering and syncing all workspaces in knowledge_base/...")
         outcomes = sync_all_workspaces(force=args.force, actor=actor)
         if not outcomes:

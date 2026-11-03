@@ -64,7 +64,7 @@ jobs:
           key: embedding-model-${{ hashFiles('model_integrity.py') }}
 
       - name: Fetch and verify pinned model weights
-        run: python fetch_models.py
+        run: python -m rag_lab.ops.fetch_models
 
       - name: Run test suite (PostgreSQL integration included)
         env:

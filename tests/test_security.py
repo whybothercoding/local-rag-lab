@@ -8,8 +8,8 @@ import zipfile
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-import access
-from access import (
+import rag_lab.security.access as access
+from rag_lab.security.access import (
     PolicyIntegrityError,
     add_user,
     authorize,
@@ -23,10 +23,10 @@ from access import (
     sign_in,
     verify_token,
 )
-from app import workflow
+from rag_lab.pipeline.graph import workflow
 from conftest import TEST_PASSWORD, token_for
-from parsers import ParseError, extract_text_from_file
-from workspace_manager import safe_upload_name, staged_path
+from rag_lab.ingestion.parsers import ParseError, extract_text_from_file
+from rag_lab.storage.workspace_manager import safe_upload_name, staged_path
 
 
 # --- G1: upload names -------------------------------------------------------
@@ -43,7 +43,7 @@ def test_unsafe_or_unsupported_upload_names_are_refused(raw):
 
 
 def test_staged_upload_stays_inside_the_workspace_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
     target = staged_path("ops", "../../report.md")
     assert target.parent == (tmp_path / "uploads" / "ops").resolve()
     assert target.name == "report.md"
@@ -156,7 +156,7 @@ def test_lockout_expires_with_the_window(isolated_sign_in, monkeypatch):
 
 
 def test_failed_attempts_are_audited_without_the_password(isolated_sign_in):
-    from audit import list_events
+    from rag_lab.security.audit import list_events
 
     policy, audit = isolated_sign_in
     add_user("erin", TEST_PASSWORD, path=policy)
@@ -209,25 +209,25 @@ def test_idle_timeout_is_thirty_minutes():
 # --- G11: indexing is an administrative action ------------------------------
 
 def test_indexing_refuses_a_non_administrator(mocker):
-    from ingest import authenticate_admin
+    from rag_lab.ingestion.ingest import authenticate_admin
 
-    mocker.patch("ingest.getpass.getpass", return_value=TEST_PASSWORD)
+    mocker.patch("rag_lab.ingestion.ingest.getpass.getpass", return_value=TEST_PASSWORD)
     with pytest.raises(SystemExit, match="not an administrator"):
         authenticate_admin("carol")
 
 
 def test_indexing_refuses_a_wrong_password(mocker):
-    from ingest import authenticate_admin
+    from rag_lab.ingestion.ingest import authenticate_admin
 
-    mocker.patch("ingest.getpass.getpass", return_value="wrong-password-value")
+    mocker.patch("rag_lab.ingestion.ingest.getpass.getpass", return_value="wrong-password-value")
     with pytest.raises(SystemExit, match="Indexing refused"):
         authenticate_admin("alice")
 
 
 def test_indexing_accepts_an_administrator(mocker):
-    from ingest import authenticate_admin
+    from rag_lab.ingestion.ingest import authenticate_admin
 
-    mocker.patch("ingest.getpass.getpass", return_value=TEST_PASSWORD)
+    mocker.patch("rag_lab.ingestion.ingest.getpass.getpass", return_value=TEST_PASSWORD)
     assert authenticate_admin("alice") == "alice"
 
 
@@ -249,8 +249,7 @@ def test_corrupt_office_file_is_refused_cleanly(tmp_path):
 
 
 def test_parser_runs_under_a_time_limit(tmp_path, monkeypatch):
-    import parsers
-
+    import rag_lab.ingestion.parsers as parsers
     note = tmp_path / "note.md"
     note.write_text("hello", encoding="utf-8")
     monkeypatch.setattr(parsers, "PARSE_TIMEOUT_SEC", 0.001)

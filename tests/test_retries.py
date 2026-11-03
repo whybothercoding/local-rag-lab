@@ -2,7 +2,7 @@
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from app import (
+from rag_lab.pipeline.graph import (
     _generation_prompt,
     generate_node,
     grade_answer_relevance_node,
@@ -10,9 +10,9 @@ from app import (
     query_rewrite_node,
     workflow,
 )
-from config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+from rag_lab.config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
 from conftest import token_for
-from llm_provider import DeterministicContextLLM
+from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 
 DOCS = ["Rollback SLA is strictly under 5 minutes for production."]
 QUESTION = "What is the rollback SLA?"
@@ -31,8 +31,8 @@ class ScriptedModel:
 
 
 def _use_model(monkeypatch, model):
-    monkeypatch.setattr("app.get_chat_llm", lambda: model)
-    monkeypatch.setattr("app.llm_is_fallback", lambda llm: False)
+    monkeypatch.setattr("rag_lab.pipeline.graph.get_chat_llm", lambda: model)
+    monkeypatch.setattr("rag_lab.pipeline.graph.llm_is_fallback", lambda llm: False)
 
 
 def _real_model_telemetry() -> dict:
@@ -104,7 +104,7 @@ def test_extractive_synthesizer_matches_on_the_search_query(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError("model hung")
 
-    monkeypatch.setattr("app.get_chat_llm", lambda: Broken())
+    monkeypatch.setattr("rag_lab.pipeline.graph.get_chat_llm", lambda: Broken())
     generate_node({"documents": DOCS, "original_question": QUESTION, "sanitized_question": "rollback sla minutes"})
     assert len(seen) == 2
     assert all("Question: rollback sla minutes" in prompt for prompt in seen)
@@ -124,7 +124,7 @@ def test_exhausted_rewrites_do_not_consume_generation_retries():
 
 
 def test_exhausted_generation_retries_do_not_consume_rewrites(monkeypatch):
-    monkeypatch.setattr("app.score_pairs", lambda *a, **k: [-20.0])
+    monkeypatch.setattr("rag_lab.pipeline.graph.score_pairs", lambda *a, **k: [-20.0])
     result = grade_answer_relevance_node({
         "original_question": QUESTION,
         "generation": "Expense reports are due monthly.",
@@ -175,7 +175,7 @@ def test_generate_marks_deterministic_and_fallback_generators(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError("model hung")
 
-    monkeypatch.setattr("app.get_chat_llm", lambda: Broken())
+    monkeypatch.setattr("rag_lab.pipeline.graph.get_chat_llm", lambda: Broken())
     failed = generate_node({"documents": DOCS, "original_question": QUESTION})
     assert failed["telemetry"]["generator_deterministic"] is True
     assert failed["telemetry"]["generation_fallback"] is True
@@ -216,7 +216,7 @@ def test_graph_recovers_from_a_fabricated_figure_using_feedback(rollback_index, 
 
 def test_worst_case_path_terminates_within_both_budgets(rollback_index, monkeypatch):
     """Every grader fails every time. The run must still end at review, having spent exactly both budgets."""
-    monkeypatch.setattr("app.score_pairs", lambda *a, **k: [-20.0])
+    monkeypatch.setattr("rag_lab.pipeline.graph.score_pairs", lambda *a, **k: [-20.0])
 
     def answer(prompt, n):
         # Fabricated figure on first try (groundedness fails), then grounded but off-topic (relevance fails).
@@ -244,7 +244,7 @@ def test_worst_case_path_terminates_within_both_budgets(rollback_index, monkeypa
 
 def test_deterministic_fallback_goes_straight_to_review(rollback_index, monkeypatch):
     """With the extractive synthesizer a failed groundedness check escalates instead of looping."""
-    monkeypatch.setattr("app._unsupported_numbers", lambda *a, **k: {"99"})
+    monkeypatch.setattr("rag_lab.pipeline.graph._unsupported_numbers", lambda *a, **k: {"99"})
     engine = workflow.compile(checkpointer=MemorySaver())
     values, pending, _ = _run(engine, "deterministic-escalates")
 
@@ -263,7 +263,7 @@ def test_deterministic_fallback_goes_straight_to_review(rollback_index, monkeypa
 
 def test_a_new_question_in_the_same_thread_starts_with_fresh_budgets(rollback_index, monkeypatch):
     """The UI keeps one thread per conversation; spent budgets and stale feedback must not carry over."""
-    from app import guardrail_input_node
+    from rag_lab.pipeline.graph import guardrail_input_node
 
     reset = guardrail_input_node({
         "question": QUESTION,

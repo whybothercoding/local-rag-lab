@@ -14,9 +14,9 @@ import logging
 from typing import Any
 from langchain_core.embeddings import Embeddings
 
-from model_integrity import ModelIntegrityError, verify_model
+from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
 
-from config import (
+from rag_lab.config import (
     EMBED_MODEL,
     EMBEDDING_PROVIDER,
     FASTEMBED_MODEL,

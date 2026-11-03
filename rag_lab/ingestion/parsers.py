@@ -318,14 +318,15 @@ def extract_text_from_file(file_path: Path) -> str:
     file_path = Path(file_path)
     if file_path.suffix.lower() not in PARSERS:
         return ""
-    worker = Path(__file__).resolve().parent / "parser_worker.py"
+    # The worker runs as a module, so the child imports the package from the directory holding it.
+    package_parent = str(Path(__file__).resolve().parents[2])
     try:
         completed = subprocess.run(
-            [sys.executable, str(worker), str(file_path)],
+            [sys.executable, "-m", "rag_lab.ingestion.parser_worker", str(file_path)],
             capture_output=True,
             text=True,
             timeout=PARSE_TIMEOUT_SEC,
-            env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
+            env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": package_parent},
         )
     except subprocess.TimeoutExpired as exc:
         raise ParseError(f"parsing took longer than {PARSE_TIMEOUT_SEC} seconds") from exc

@@ -34,10 +34,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator, Optional
 
-import workspace_manager
-from access import allowed_clearances as get_allowed_clearances
-from config import CACHE_DB_PATH, RETENTION_DAYS, SEMANTIC_CACHE_SIMILARITY_THRESHOLD
-from vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
+import rag_lab.storage.workspace_manager as workspace_manager
+from rag_lab.security.access import allowed_clearances as get_allowed_clearances
+from rag_lab.config import CACHE_DB_PATH, RETENTION_DAYS, SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+from rag_lab.security.vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
 
 logger = logging.getLogger("semantic_cache")
 
@@ -270,7 +270,7 @@ def store_cache(
     vector: bytes | None = None
     if compute_vector and query.strip():
         try:
-            from embedding_provider import get_embedding_model
+            from rag_lab.retrieval.embedding_provider import get_embedding_model
 
             vec = get_embedding_model().embed_query(query.strip())
             if vec:
@@ -384,7 +384,7 @@ def lookup_cache(
         return {"hit": False}
 
     try:
-        from embedding_provider import get_embedding_model
+        from rag_lab.retrieval.embedding_provider import get_embedding_model
 
         q_vec = get_embedding_model().embed_query(cleaned_query)
         if not q_vec:

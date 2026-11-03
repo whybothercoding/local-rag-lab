@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from ingest import ingest_workspace
-from workspace_manager import (
+from rag_lab.ingestion.ingest import ingest_workspace
+from rag_lab.storage.workspace_manager import (
     discover_knowledge_base_workspaces,
     list_workspaces,
     sync_all_workspaces,
@@ -14,10 +14,10 @@ from workspace_manager import (
 def storage(tmp_path: Path, monkeypatch) -> Path:
     kb = tmp_path / "knowledge_base"
     kb.mkdir()
-    monkeypatch.setattr("workspace_manager.KNOWLEDGE_BASE_DIR", str(kb))
-    monkeypatch.setattr("workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
-    monkeypatch.setattr("workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.KNOWLEDGE_BASE_DIR", str(kb))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
     return kb
 
 
@@ -75,7 +75,7 @@ def test_manifest_invalidates_when_embedding_model_changes(storage, monkeypatch)
 
     assert ingest_workspace("ops", str(ws_dir)).ok
 
-    monkeypatch.setattr("ingest.embedding_fingerprint", lambda: "fastembed:another-model")
+    monkeypatch.setattr("rag_lab.ingestion.ingest.embedding_fingerprint", lambda: "fastembed:another-model")
     result = ingest_workspace("ops", str(ws_dir))
     assert result.ok
     assert result.unchanged is False
@@ -98,7 +98,7 @@ def test_sync_indexes_each_workspace_then_skips_unchanged(storage):
 
 def test_ingest_merges_knowledge_base_and_uploads(storage, tmp_path):
     """Uploading a file via UI (into uploads/<ws>) must merge with knowledge_base/<ws> rather than wiping it."""
-    from workspace_manager import get_workspace_stats
+    from rag_lab.storage.workspace_manager import get_workspace_stats
 
     kb_acc = storage / "accounting"
     kb_acc.mkdir()
@@ -118,8 +118,7 @@ def test_ingest_merges_knowledge_base_and_uploads(storage, tmp_path):
 
 
 def test_ingest_skips_oversized_empty_and_invalid_clearance_files(storage, monkeypatch):
-    import ingest
-
+    import rag_lab.ingestion.ingest as ingest
     monkeypatch.setattr(ingest, "MAX_SOURCE_BYTES", 100)
     ws_dir = storage / "ops"
     ws_dir.mkdir()
@@ -138,8 +137,7 @@ def test_ingest_skips_oversized_empty_and_invalid_clearance_files(storage, monke
 
 def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tmp_path):
     import chromadb
-    import workspace_manager
-
+    import rag_lab.storage.workspace_manager as workspace_manager
     kb_acc = storage / "accounting"
     kb_acc.mkdir()
     (kb_acc / "z_policy.txt").write_text("Corporate tax policy requires quarterly filings.")
@@ -160,8 +158,7 @@ def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tm
 
 def test_ingest_reclassifies_when_clearance_changes_and_supports_folder_clearance(storage):
     import chromadb
-    import workspace_manager
-
+    import rag_lab.storage.workspace_manager as workspace_manager
     ws_dir = storage / "ops"
     ws_dir.mkdir()
     doc = ws_dir / "runbook.md"

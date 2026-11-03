@@ -42,11 +42,11 @@ try:  # advisory file locking for the policy file (POSIX)
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
-from audit import count_events_since
-from audit import record as audit_record
-from config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
-from vault import load_or_create_key
-from workspace_manager import sanitize_workspace_id
+from rag_lab.security.audit import count_events_since
+from rag_lab.security.audit import record as audit_record
+from rag_lab.config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
+from rag_lab.security.vault import load_or_create_key
+from rag_lab.storage.workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review", "auto_approve")
 # What every account holds on every workspace until an administrator says otherwise.
@@ -691,8 +691,8 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
 
 
 def _workspaces_with_classified_documents(workspace_ids: list[str]) -> list[str]:
-    import workspace_manager
-    from sparse_search import indexed_clearances
+    import rag_lab.storage.workspace_manager as workspace_manager
+    from rag_lab.retrieval.sparse_search import indexed_clearances
 
     classified = {"confidential", "secret"}
     return [ws for ws in workspace_ids if indexed_clearances(ws, base_dir=workspace_manager.BM25_DIR) & classified]
@@ -777,7 +777,7 @@ def set_user_permissions_everywhere(
     existing_workspaces: list[str] = []
     if perms:
         try:
-            from workspace_manager import list_workspaces
+            from rag_lab.storage.workspace_manager import list_workspaces
             existing_workspaces = list_workspaces()
         except Exception:
             existing_workspaces = []
@@ -970,7 +970,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _workspace_ids() -> list[str]:
-    from workspace_manager import list_workspaces
+    from rag_lab.storage.workspace_manager import list_workspaces
 
     return list_workspaces()
 

@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from parsers import _extract_in_process, _limit_child_resources
+from rag_lab.ingestion.parsers import _extract_in_process, _limit_child_resources
 
 
 def main() -> int:

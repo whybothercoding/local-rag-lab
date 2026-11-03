@@ -1,8 +1,8 @@
 """Review mode: open vs team release, reviewer coverage by workspace and clearance, and the team-mode switch."""
 import pytest
 
-import access
-from access import (
+import rag_lab.security.access as access
+from rag_lab.security.access import (
     add_user,
     enable_team_mode,
     get_default_permissions,
@@ -140,9 +140,9 @@ def test_team_mode_and_list_cli(policy, monkeypatch, capsys):
 
 
 def test_status_shows_the_review_mode(rollback_index, capsys, monkeypatch):
-    from workspace_manager import print_status
+    from rag_lab.storage.workspace_manager import print_status
 
-    monkeypatch.setattr("llm_provider.ollama_models", lambda *a, **k: None)
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.ollama_models", lambda *a, **k: None)
     print_status()
     out = capsys.readouterr().out
     assert "[OK] Review mode:" in out
@@ -162,12 +162,12 @@ def test_admin_panel_shows_the_review_mode():
 
 
 def test_open_mode_flags_indexed_classified_documents(policy, tmp_path, monkeypatch):
-    from ingest import ingest_workspace
+    from rag_lab.ingestion.ingest import ingest_workspace
 
-    for target in ("workspace_manager", "app"):
+    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.graph"):
         monkeypatch.setattr(f"{target}.CHROMA_PATH", str(tmp_path / "chroma"))
         monkeypatch.setattr(f"{target}.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
     for ws, level in (("finance", "secret"), ("ops", "public")):
         source = tmp_path / "kb" / ws
         source.mkdir(parents=True)
@@ -189,7 +189,7 @@ def test_open_mode_flags_indexed_classified_documents(policy, tmp_path, monkeypa
 
 
 def test_indexed_clearances_reads_the_keyword_index(tmp_path):
-    from sparse_search import index_sparse_chunks, indexed_clearances
+    from rag_lab.retrieval.sparse_search import index_sparse_chunks, indexed_clearances
 
     assert indexed_clearances("none", base_dir=str(tmp_path)) == set()
     index_sparse_chunks("ws", ["a", "b"], ["x.md", "y.md"], ["one", "two"], clearances=["public", "SECRET"],

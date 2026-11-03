@@ -1,8 +1,8 @@
 from pathlib import Path
 import pytest
 
-from llm_provider import DeterministicContextLLM, get_chat_llm
-from ingest import ingest_workspace
+from rag_lab.pipeline.llm_provider import DeterministicContextLLM, get_chat_llm
+from rag_lab.ingestion.ingest import ingest_workspace
 
 
 def test_deterministic_context_llm_extraction():
@@ -38,9 +38,9 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
     doc.write_text("Company expense policy states all receipts must be submitted within 30 days.")
 
     # Redirect storage dirs to tmp_path
-    monkeypatch.setattr("workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
-    monkeypatch.setattr("workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
 
     # First ingestion
     res1 = ingest_workspace("test_idempotent", str(source_dir))
@@ -60,8 +60,8 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
 
 
 def test_embedding_fingerprint_and_no_silent_ollama_fallback(mocker):
-    import embedding_provider
-    from embedding_provider import EmbeddingUnavailableError, embedding_fingerprint, get_embedding_model
+    import rag_lab.retrieval.embedding_provider as embedding_provider
+    from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint, get_embedding_model
     from langchain_ollama import OllamaEmbeddings
 
     assert embedding_fingerprint("ollama").startswith("ollama:")
@@ -77,8 +77,8 @@ def test_embedding_fingerprint_and_no_silent_ollama_fallback(mocker):
 
 
 def test_get_chat_llm_auto_fallback_and_openai_provider(mocker):
-    import llm_provider
-    from llm_provider import OpenAICompatibleChat
+    import rag_lab.pipeline.llm_provider as llm_provider
+    from rag_lab.pipeline.llm_provider import OpenAICompatibleChat
 
     mocker.patch.object(llm_provider, "is_ollama_alive", return_value=False)
     auto_llm = get_chat_llm(provider="auto")

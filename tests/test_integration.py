@@ -1,8 +1,8 @@
 from langgraph.types import Command
 from langchain_core.runnables import RunnableConfig
 
-from app import workflow, GraphState
-from checkpointer import get_checkpointer, fetch_checkpoint_threads
+from rag_lab.pipeline.graph import workflow, GraphState
+from rag_lab.storage.checkpointer import get_checkpointer, fetch_checkpoint_threads
 from conftest import token_for
 
 # The requester (carol) and the reviewer (bob) are different accounts, as separation of duties requires.
@@ -65,7 +65,7 @@ def test_full_pipeline_to_postgres_and_approve_cli(postgres_uri, rollback_index)
     """The production PostgreSQL path: encrypted, thread-bound saver from open_checkpointer, shared pool reuse."""
     import uuid
 
-    from checkpointer import close_checkpointer, open_checkpointer, shared_pool
+    from rag_lab.storage.checkpointer import close_checkpointer, open_checkpointer, shared_pool
 
     thread = f"test-integration-{uuid.uuid4().hex}"
     config: RunnableConfig = {"configurable": {"thread_id": thread}}

@@ -18,7 +18,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from config import BM25_DIR
+from rag_lab.config import BM25_DIR
 
 logger = logging.getLogger("sparse_search")
 

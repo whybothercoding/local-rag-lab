@@ -18,8 +18,8 @@ from collections.abc import Generator
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from config import CHECKPOINT_POOL_SIZE, DB_URI, ROOT
-from vault import EncryptedSerde, bind_thread
+from rag_lab.config import CHECKPOINT_POOL_SIZE, DB_URI, ROOT
+from rag_lab.security.vault import EncryptedSerde, bind_thread
 
 logger = logging.getLogger("checkpointer")
 

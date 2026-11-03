@@ -19,9 +19,9 @@ import os
 import shutil
 import sys
 import time
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from rag_lab import ROOT  # the package root only: no project module may load before the redirect below
+
 EVAL_DIR = ROOT / "eval"
 OUT_DIR = EVAL_DIR / "out"
 CORPUS_DIR = EVAL_DIR / "corpus"
@@ -43,9 +43,9 @@ os.environ.setdefault("LLM_PROVIDER", "deterministic")
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from access import issue_token, save_policy
-from app import workflow
-from eval_metrics import (
+from rag_lab.security.access import issue_token, save_policy
+from rag_lab.pipeline.graph import workflow
+from rag_lab.ops.eval_metrics import (
     check_thresholds,
     cited_sources,
     context_precision,
@@ -53,9 +53,9 @@ from eval_metrics import (
     keyword_recall,
     summarize,
 )
-from ingest import ingest_workspace
-from llm_provider import get_chat_llm, is_ollama_alive
-from semantic_cache import clear_cache
+from rag_lab.ingestion.ingest import ingest_workspace
+from rag_lab.pipeline.llm_provider import get_chat_llm, is_ollama_alive
+from rag_lab.retrieval.semantic_cache import clear_cache
 
 # Pass/fail gates, measured on the held-out test split only. Thresholds were chosen from the
 # calibration split. Judge support is reported but not gated.

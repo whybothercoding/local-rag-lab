@@ -7,10 +7,10 @@ Run it on a schedule, for example from cron: make retention
 import argparse
 import sys
 
-from audit import prune
-from checkpointer import prune_checkpoints
-from config import RETENTION_DAYS
-from semantic_cache import prune_cache
+from rag_lab.security.audit import prune
+from rag_lab.storage.checkpointer import prune_checkpoints
+from rag_lab.config import RETENTION_DAYS
+from rag_lab.retrieval.semantic_cache import prune_cache
 
 
 def main(argv: list[str] | None = None) -> int:

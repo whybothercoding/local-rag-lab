@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from langgraph.types import Command
 
-from app import workflow
-from checkpointer import (
+from rag_lab.pipeline.graph import workflow
+from rag_lab.storage.checkpointer import (
     close_checkpointer,
     fetch_checkpoint_threads,
     get_checkpointer,
@@ -54,8 +54,7 @@ def test_get_checkpointer_still_closes_on_exit(tmp_path):
 
 
 def test_failed_setup_does_not_leak_the_connection(tmp_path, monkeypatch):
-    import checkpointer
-
+    import rag_lab.storage.checkpointer as checkpointer
     closed = []
 
     real_connect = sqlite3.connect
@@ -151,8 +150,7 @@ def test_ui_opens_the_checkpointer_once_across_reruns(monkeypatch):
     import streamlit as st
     from streamlit.testing.v1 import AppTest
 
-    import checkpointer
-
+    import rag_lab.storage.checkpointer as checkpointer
     calls = []
     real_open = checkpointer.open_checkpointer
 
@@ -177,7 +175,7 @@ def test_ui_opens_the_checkpointer_once_across_reruns(monkeypatch):
 def test_postgres_retention_prunes_idle_threads_and_keeps_those_awaiting_review(postgres_uri, rollback_index):
     import uuid
 
-    from checkpointer import prune_checkpoints
+    from rag_lab.storage.checkpointer import prune_checkpoints
 
     run = uuid.uuid4().hex
     idle = {"configurable": {"thread_id": f"idle-{run}"}}
@@ -208,8 +206,7 @@ def test_clearing_the_ui_cache_closes_the_shared_connection(monkeypatch):
     import streamlit as st
     from streamlit.testing.v1 import AppTest
 
-    import checkpointer
-
+    import rag_lab.storage.checkpointer as checkpointer
     opened = []
     real_open = checkpointer.open_checkpointer
     monkeypatch.setattr(checkpointer, "open_checkpointer", lambda *a, **k: opened.append(real_open(*a, **k)) or opened[-1])
@@ -227,7 +224,7 @@ def test_clearing_the_ui_cache_closes_the_shared_connection(monkeypatch):
 
 
 def test_a_checkpoint_without_pending_writes_is_not_waiting_for_review():
-    from checkpointer import _is_waiting_for_review
+    from rag_lab.storage.checkpointer import _is_waiting_for_review
 
     class Snapshot:
         pending_writes = None
