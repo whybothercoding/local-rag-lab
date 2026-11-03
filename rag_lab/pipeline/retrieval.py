@@ -232,6 +232,12 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     if not relevant:
         # Nothing reaches generation, so nothing was released from these chunks either.
         reranked_docs, dropped_chunks = [], []
+    elif best_rerank is not None and settings.relevance_gate == "reranker":
+        # Cut weak passages: they dilute the context and give stated figures false support.
+        floor = max(settings.relevance_min_rerank_score, best_rerank - settings.rerank_keep_margin)
+        kept = [d for i, d in enumerate(reranked_docs) if i == 0 or d.get("rerank_score", best_rerank) >= floor]
+        telemetry["passages_cut"] = len(reranked_docs) - len(kept)
+        reranked_docs = kept
 
     chunks_found = [item["content"] for item in reranked_docs]
     citations = [item["citation"] for item in reranked_docs]

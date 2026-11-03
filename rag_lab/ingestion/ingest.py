@@ -70,6 +70,43 @@ class IngestResult:
         return self.error is None and (self.chunks > 0 or self.unchanged or self.cleared)
 
 
+# Bump when chunk text changes for the same input, so unchanged files are still re-indexed.
+CHUNKER_VERSION = "headings-v1"
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+
+
+def chunk_document(text: str, splitter) -> list[str]:
+    """Split by markdown headings, then by size; every chunk starts with the headings it sits under.
+
+    A chunk cut from the middle of a long section otherwise loses what it is about ("Leave requests
+    longer than two weeks..." without "# Leave Policy"), which hurts both retrieval and the answer.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    path: list[tuple[int, str]] = []
+    body: list[str] = []
+
+    def flush() -> None:
+        if any(line.strip() for line in body):
+            sections.append(("\n".join(f"{'#' * level} {title}" for level, title in path), list(body)))
+        body.clear()
+
+    for line in text.splitlines():
+        match = _HEADING.match(line)
+        if match:
+            flush()
+            level = len(match.group(1))
+            path[:] = [(lvl, title) for lvl, title in path if lvl < level] + [(level, match.group(2))]
+        else:
+            body.append(line)
+    flush()
+
+    chunks: list[str] = []
+    for heading, lines in sections:
+        for piece in splitter.split_text("\n".join(lines).strip()):
+            chunks.append(f"{heading}\n{piece}" if heading else piece)
+    return chunks
+
+
 def _get_manifest_path(ws_id: str) -> Path:
     return Path(settings.bm25_dir) / f"{ws_id}_manifest.json"
 
@@ -360,6 +397,7 @@ def ingest_workspace(
             and manifest.get("chunk_overlap") == chunk_overlap
             and manifest.get("embedding") == fingerprint
             and manifest.get("sparse_tokenizer", "porter") == settings.sparse_tokenizer
+            and manifest.get("chunker") == CHUNKER_VERSION
         ):
             try:
                 client = chromadb.PersistentClient(path=settings.chroma_path)
@@ -382,7 +420,7 @@ def ingest_workspace(
     for doc_idx, doc in enumerate(raw_docs):
         doc_hash_short = doc["doc_hash"][:12]
         doc_clearance = doc.get("clearance", DEFAULT_CLEARANCE)
-        for chunk_idx, chunk_text in enumerate(splitter.split_text(doc["content"])):
+        for chunk_idx, chunk_text in enumerate(chunk_document(doc["content"], splitter)):
             chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
             cid = f"{ws_id}_{doc_idx}_{chunk_idx}_{chunk_hash}"
             safe, reason = scan_chunk(chunk_text)
@@ -451,6 +489,7 @@ def ingest_workspace(
             "chunk_overlap": chunk_overlap,
             "embedding": fingerprint,
             "sparse_tokenizer": settings.sparse_tokenizer,
+            "chunker": CHUNKER_VERSION,
             "total_chunks": len(chunks),
             "total_docs": len(raw_docs),
         })
