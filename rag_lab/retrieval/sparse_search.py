@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_lab.config import settings
+from rag_lab.lang import STEM_SUFFIXES, fold
 
 logger = logging.getLogger("sparse_search")
 
@@ -32,6 +33,23 @@ def get_fts_db_path(workspace_id: str, base_dir: str | None = None) -> str:
     target_dir = Path(base_dir or settings.bm25_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     return str(target_dir / f"{workspace_id}.db")
+
+
+# FTS5 tokenizers by setting name. All fold case and diacritics, so "Kündigung" matches "kundigung".
+# porter adds English stemming (and mangles other languages); trigram matches substrings, which helps
+# German compounds but needs query words of at least three characters.
+TOKENIZERS = {
+    "unicode61": "unicode61 remove_diacritics 2",
+    "porter": "porter unicode61 remove_diacritics 2",
+    "trigram": "trigram remove_diacritics 1",
+}
+
+
+def tokenizer_clause(name: str | None = None) -> str:
+    name = settings.sparse_tokenizer if name is None else name
+    if name not in TOKENIZERS:
+        raise SparseIndexError(f"Unknown SPARSE_TOKENIZER {name!r}. Use one of: {', '.join(TOKENIZERS)}.")
+    return TOKENIZERS[name]
 
 
 def index_sparse_chunks(
@@ -52,24 +70,18 @@ def index_sparse_chunks(
 
     try:
         with closing(sqlite3.connect(db_path)) as conn:
-            # Recreate table with clearance column if old schema exists
-            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fts_chunks';")
-            if cursor.fetchone():
-                info = conn.execute("PRAGMA table_info(fts_chunks);").fetchall()
-                cols = [r[1] for r in info]
-                if "clearance" not in cols:
-                    conn.execute("DROP TABLE fts_chunks;")
-
+            # Rebuilt from scratch every time: the index is replaced in full anyway, and an existing
+            # table would keep its old schema and tokenizer.
+            conn.execute("DROP TABLE IF EXISTS fts_chunks;")
             conn.execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5("
+                "CREATE VIRTUAL TABLE fts_chunks USING fts5("
                 "id UNINDEXED, "
                 "source UNINDEXED, "
                 "clearance UNINDEXED, "
                 "content, "
-                "tokenize='porter unicode61'"
+                f"tokenize='{tokenizer_clause()}'"
                 ");"
             )
-            conn.execute("DELETE FROM fts_chunks;")
             rows = [
                 (cid, src, clr, content)
                 for cid, src, clr, content in zip(chunk_ids, sources, clearances, chunks)
@@ -103,7 +115,23 @@ def search_sparse_chunks(
     if not os.path.exists(db_path):
         return []
 
-    tokens = re.findall(r"\w+", query.lower())
+    # Query terms keep their characters (FTS folds accents itself, but not the Greek final sigma).
+    tokens = re.findall(r"[^\W_]+", query.lower())
+    # Each word is also tried without its inflection ending, so "τηλεργασίας" finds "τηλεργασία" and
+    # "Tagen" finds "Tag": trigram matches a whole query term as a substring, never the other way round.
+    # Endings are detected on the folded word and cut from the original, which has the same length.
+    stems: list[str] = []
+    for token in tokens:
+        folded = fold(token)
+        if len(folded) != len(token):
+            continue
+        for suffix in STEM_SUFFIXES:
+            if folded.endswith(suffix) and len(token) - len(suffix) >= 4:
+                stems.append(token[: -len(suffix)])
+                break
+    tokens = list(dict.fromkeys(tokens + stems))
+    if settings.sparse_tokenizer == "trigram":
+        tokens = [t for t in tokens if len(t) >= 3]  # trigram cannot match shorter terms
     if not tokens:
         return []
     match_query = " OR ".join(f'"{t}"' for t in tokens)

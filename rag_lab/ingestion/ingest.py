@@ -359,6 +359,7 @@ def ingest_workspace(
             and manifest.get("chunk_size") == chunk_size
             and manifest.get("chunk_overlap") == chunk_overlap
             and manifest.get("embedding") == fingerprint
+            and manifest.get("sparse_tokenizer", "porter") == settings.sparse_tokenizer
         ):
             try:
                 client = chromadb.PersistentClient(path=settings.chroma_path)
@@ -449,6 +450,7 @@ def ingest_workspace(
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "embedding": fingerprint,
+            "sparse_tokenizer": settings.sparse_tokenizer,
             "total_chunks": len(chunks),
             "total_docs": len(raw_docs),
         })

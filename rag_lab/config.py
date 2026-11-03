@@ -60,6 +60,8 @@ class Settings:
     retention_days: int
     # Keep source files bounded so one huge upload cannot exhaust memory.
     max_source_bytes: int
+    # Keyword-index tokenizer (sparse_search.TOKENIZERS). Changing it re-indexes on the next sync.
+    sparse_tokenizer: str
 
     # --- models ----------------------------------------------------------------------------------
     llm_provider: str
@@ -109,6 +111,7 @@ class Settings:
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),
+            sparse_tokenizer=_env("SPARSE_TOKENIZER", "trigram"),
             llm_provider=_env("LLM_PROVIDER", "auto"),
             ollama_base_url=_env("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
             local_llm_url=_env("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL),
