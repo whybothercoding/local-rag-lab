@@ -7,14 +7,14 @@ Verifies:
 4. Offline verification in fetch_models.py.
 """
 
-from rag_lab.config import RERANKER_MODEL, MODELS_DIR
+from rag_lab.config import settings
 from rag_lab.security.model_integrity import verify_model
 from rag_lab.retrieval.reranker import rerank_documents, score_pairs
 
 
 def test_reranker_pinned_model_integrity():
     """Verify that the reranker model weights match pinned SHA-256 hashes offline."""
-    path = verify_model(RERANKER_MODEL, MODELS_DIR)
+    path = verify_model(settings.reranker_model, settings.models_dir)
     assert path.is_dir()
     assert (path / "onnx" / "model.onnx").is_file()
 
@@ -108,9 +108,9 @@ def test_reranker_whitespace_query_returns_candidates():
 
 
 def test_score_pairs_disabled_and_error(monkeypatch):
-    monkeypatch.setattr("rag_lab.retrieval.reranker.ENABLE_RERANKER", False)
+    monkeypatch.setattr(settings, "enable_reranker", False)
     assert score_pairs("query", ["doc"]) == []
 
-    monkeypatch.setattr("rag_lab.retrieval.reranker.ENABLE_RERANKER", True)
+    monkeypatch.setattr(settings, "enable_reranker", True)
     monkeypatch.setattr("rag_lab.retrieval.reranker.get_reranker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("error")))
     assert score_pairs("query", ["doc"]) == []

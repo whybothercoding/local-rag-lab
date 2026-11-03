@@ -16,13 +16,7 @@ from langchain_core.embeddings import Embeddings
 
 from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
 
-from rag_lab.config import (
-    EMBED_MODEL,
-    EMBEDDING_PROVIDER,
-    FASTEMBED_MODEL,
-    MODELS_DIR,
-    OLLAMA_BASE_URL,
-)
+from rag_lab.config import settings
 
 logger = logging.getLogger("embedding_provider")
 
@@ -38,7 +32,7 @@ class EmbeddingUnavailableError(RuntimeError):
 
 
 def _active_provider(provider: str | None) -> str:
-    active = (provider or EMBEDDING_PROVIDER).lower().strip()
+    active = (provider or settings.embedding_provider).lower().strip()
     if active not in PROVIDERS:
         raise EmbeddingUnavailableError(
             f"Unknown EMBEDDING_PROVIDER '{active}'. Use one of: {', '.join(PROVIDERS)}."
@@ -51,11 +45,12 @@ class LocalFastEmbeddings(Embeddings):
 
     def __init__(
         self,
-        model_name: str = FASTEMBED_MODEL,
+        model_name: str | None = None,
         cache_dir: str | None = None,
     ) -> None:
+        model_name = settings.fastembed_model if model_name is None else model_name
         self.model_name = model_name
-        self.cache_dir = cache_dir or MODELS_DIR
+        self.cache_dir = cache_dir or settings.models_dir
 
     @property
     def model(self):
@@ -102,8 +97,8 @@ def embedding_fingerprint(provider: str | None = None) -> str:
     retrieval can refuse to compare vectors from two different models.
     """
     if _active_provider(provider) == "ollama":
-        return f"ollama:{EMBED_MODEL}"
-    return f"fastembed:{FASTEMBED_MODEL}"
+        return f"ollama:{settings.embed_model}"
+    return f"fastembed:{settings.fastembed_model}"
 
 
 def stored_fingerprint(collection_metadata: Any, manifest: dict | None = None) -> str | None:
@@ -128,5 +123,5 @@ def get_embedding_model(provider: str | None = None) -> Embeddings:
     """
     if _active_provider(provider) == "ollama":
         from langchain_ollama import OllamaEmbeddings
-        return OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+        return OllamaEmbeddings(model=settings.embed_model, base_url=settings.ollama_base_url)
     return LocalFastEmbeddings()

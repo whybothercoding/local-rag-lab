@@ -16,6 +16,7 @@ from rag_lab.security.access import (
 )
 from rag_lab.security.audit import list_events
 from conftest import TEST_PASSWORD, token_for
+from rag_lab.config import settings
 
 
 @pytest.fixture
@@ -352,7 +353,7 @@ def test_reset_users_removes_all_accounts(policy_path):
 
 def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
     import rag_lab.security.access as access
-    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
     monkeypatch.setattr("rag_lab.security.access.getpass.getpass", lambda _="": TEST_PASSWORD)
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path)
@@ -385,7 +386,7 @@ def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, caps
     import rag_lab.security.access as access
     from rag_lab.security.access import authorize, load_policy
 
-    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
     monkeypatch.setattr("rag_lab.security.access.getpass.getpass", lambda _="": TEST_PASSWORD)
     monkeypatch.setattr("rag_lab.storage.workspace_manager.list_workspaces", lambda: ["accounting", "strategy", "legal"])
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)

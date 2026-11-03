@@ -34,9 +34,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator, Optional
 
-import rag_lab.storage.workspace_manager as workspace_manager
 from rag_lab.security.access import allowed_clearances as get_allowed_clearances
-from rag_lab.config import CACHE_DB_PATH, RETENTION_DAYS, SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+from rag_lab.config import settings
 from rag_lab.security.vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
 
 logger = logging.getLogger("semantic_cache")
@@ -63,7 +62,7 @@ def _sha256(text: str) -> str:
 
 def _index_version(ws_id: str) -> str:
     """Fingerprint of a workspace's indexed content. Changes whenever the workspace is re-indexed."""
-    manifest = Path(workspace_manager.BM25_DIR) / f"{ws_id}_manifest.json"
+    manifest = Path(settings.bm25_dir) / f"{ws_id}_manifest.json"
     if not manifest.is_file():
         return "none"
     try:
@@ -157,7 +156,7 @@ def _open_row(row: tuple) -> dict[str, Any] | None:
 @contextmanager
 def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, None]:
     """Context manager guaranteeing connection termination and WAL-mode configuration."""
-    target = db_path or os.getenv("CACHE_DB_PATH", CACHE_DB_PATH)
+    target = db_path or os.getenv("CACHE_DB_PATH", settings.cache_db_path)
     Path(target).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=10.0)
     try:
@@ -197,7 +196,7 @@ def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, 
 
 def _retention_cutoff() -> str:
     """Entries older than this are expired on read, not only when `make retention` runs."""
-    return (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+    return (datetime.now(UTC) - timedelta(days=settings.retention_days)).isoformat(timespec="seconds")
 
 
 # --- L1 (LRU) ----------------------------------------------------------------
@@ -335,7 +334,7 @@ def lookup_cache(
     if not authorized:
         return {"hit": False}
 
-    sim_threshold = threshold if threshold is not None else SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+    sim_threshold = threshold if threshold is not None else settings.semantic_cache_similarity_threshold
     cutoff = _retention_cutoff()
     curr_version = _index_version(workspace_id)
 
@@ -431,8 +430,9 @@ def prune_stale_cache(workspace_id: str, db_path: str | None = None) -> int:
     )
 
 
-def prune_cache(retention_days: int = RETENTION_DAYS, db_path: str | None = None, now: datetime | None = None) -> int:
+def prune_cache(retention_days: int | None = None, db_path: str | None = None, now: datetime | None = None) -> int:
     """Prune cache entries older than the retention threshold."""
+    retention_days = settings.retention_days if retention_days is None else retention_days
     cutoff = ((now or datetime.now(UTC)) - timedelta(days=retention_days)).isoformat(timespec="seconds")
     return _delete_where(
         "SELECT key FROM semantic_cache WHERE created_at < ?;",
@@ -463,7 +463,7 @@ def clear_cache(db_path: str | None = None) -> None:
 
 def cache_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve cache entry counts, workspace distribution, and on-disk size."""
-    target = db_path or os.getenv("CACHE_DB_PATH", CACHE_DB_PATH)
+    target = db_path or os.getenv("CACHE_DB_PATH", settings.cache_db_path)
     path = Path(target)
     if not path.is_file():
         return {"total_entries": 0, "workspaces": {}, "bytes": 0}

@@ -22,7 +22,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from rag_lab.config import DATA_KEY_PATH
+from rag_lab.config import settings
 
 __all__ = [
     "InvalidTag",
@@ -77,7 +77,7 @@ def load_or_create_key(path: str | None = None) -> bytes:
     reader sees either no key or a complete one, never an empty or partial file. A key of any other
     length is refused: an empty HMAC key would make every signature forgeable.
     """
-    target = Path(path or DATA_KEY_PATH)
+    target = Path(path or settings.data_key_path)
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")

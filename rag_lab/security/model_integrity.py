@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from rag_lab.config import FASTEMBED_MODEL, MODELS_DIR
+from rag_lab.config import settings
 
 
 class ModelIntegrityError(RuntimeError):
@@ -59,8 +59,10 @@ def snapshot_path(repo: str, revision: str, cache_dir: str) -> Path:
     return Path(cache_dir) / f"models--{repo.replace('/', '--')}" / "snapshots" / revision
 
 
-def verify_model(model_name: str = FASTEMBED_MODEL, cache_dir: str = MODELS_DIR) -> Path:
+def verify_model(model_name: str | None = None, cache_dir: str | None = None) -> Path:
     """Return the verified snapshot directory, or raise ModelIntegrityError."""
+    model_name = settings.fastembed_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
     spec = PINNED_MODELS.get(model_name)
     if spec is None:
         raise ModelIntegrityError(f"Model '{model_name}' has no pinned SHA-256 entries; refusing to load it.")

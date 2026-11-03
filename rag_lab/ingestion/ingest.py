@@ -26,7 +26,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import rag_lab.storage.workspace_manager as workspace_manager
 from rag_lab.security.access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
 from rag_lab.security.audit import record as audit_record
-from rag_lab.config import MAX_SOURCE_BYTES
+from rag_lab.config import settings
 from rag_lab.security.context_sanitizer import scan_chunk
 from rag_lab.retrieval.embedding_provider import (
     FINGERPRINT_KEY,
@@ -71,7 +71,7 @@ class IngestResult:
 
 
 def _get_manifest_path(ws_id: str) -> Path:
-    return Path(workspace_manager.BM25_DIR) / f"{ws_id}_manifest.json"
+    return Path(settings.bm25_dir) / f"{ws_id}_manifest.json"
 
 
 def _load_manifest(ws_id: str) -> dict | None:
@@ -141,10 +141,10 @@ def _publish_collection(client, name: str, ids, documents, metadatas, embeddings
 
 def _clear_index(ws_id: str) -> None:
     """Remove every index artifact of a workspace: vectors, keywords, manifest, and cached answers."""
-    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    client = chromadb.PersistentClient(path=settings.chroma_path)
     for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
         _delete_quiet(client, name)
-    delete_sparse_index(ws_id, base_dir=workspace_manager.BM25_DIR)
+    delete_sparse_index(ws_id, base_dir=settings.bm25_dir)
     manifest = _get_manifest_path(ws_id)
     if manifest.exists():
         manifest.unlink()
@@ -154,7 +154,7 @@ def _clear_index(ws_id: str) -> None:
 
 
 def _is_indexed(ws_id: str) -> bool:
-    return _get_manifest_path(ws_id).exists() or has_sparse_index(ws_id, base_dir=workspace_manager.BM25_DIR)
+    return _get_manifest_path(ws_id).exists() or has_sparse_index(ws_id, base_dir=settings.bm25_dir)
 
 
 def _folder_default(file_path: Path, root: Path, cache: dict[Path, str | None]) -> str | None:
@@ -235,8 +235,8 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
         if ext not in SUPPORTED_EXTENSIONS:
             skipped.append(f"{relative}: {unsupported_reason(ext)}")
             continue
-        if file_path.stat().st_size > MAX_SOURCE_BYTES:
-            skipped.append(f"{relative}: larger than {MAX_SOURCE_BYTES} bytes")
+        if file_path.stat().st_size > settings.max_source_bytes:
+            skipped.append(f"{relative}: larger than {settings.max_source_bytes} bytes")
             continue
         try:
             raw_content = extract_text_from_file(file_path)
@@ -298,8 +298,8 @@ def ingest_workspace(
     # each other. When both hold the same relative path, the knowledge_base copy always wins, whichever
     # entry point started the sync, and the shadowed copy is reported.
     resolved_src = source_path.resolve()
-    kb_root = Path(workspace_manager.KNOWLEDGE_BASE_DIR).resolve()
-    up_root = Path(workspace_manager.UPLOADS_DIR).resolve()
+    kb_root = Path(settings.knowledge_base_dir).resolve()
+    up_root = Path(settings.uploads_dir).resolve()
     complementary_dirs: list[Path] = []
     source_is_uploads = resolved_src.parent == up_root
     if source_is_uploads:
@@ -307,7 +307,7 @@ def ingest_workspace(
             if disc_id == ws_id:
                 complementary_dirs.append(Path(kb_dir))
     elif resolved_src.parent == kb_root:
-        up_ws = Path(workspace_manager.UPLOADS_DIR) / ws_id
+        up_ws = Path(settings.uploads_dir) / ws_id
         if up_ws.is_dir():
             complementary_dirs.append(up_ws)
 
@@ -360,9 +360,9 @@ def ingest_workspace(
             and manifest.get("embedding") == fingerprint
         ):
             try:
-                client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+                client = chromadb.PersistentClient(path=settings.chroma_path)
                 existing_cols = [getattr(c, "name", str(c)) for c in client.list_collections()]
-                fts_exists = os.path.exists(os.path.join(workspace_manager.BM25_DIR, f"{ws_id}.db"))
+                fts_exists = os.path.exists(os.path.join(settings.bm25_dir, f"{ws_id}.db"))
                 if f"ws_{ws_id}" in existing_cols and fts_exists:
                     result.documents = len(raw_docs)
                     result.chunks = manifest.get("total_chunks", 0)
@@ -419,8 +419,8 @@ def ingest_workspace(
         result.error = "Embedding service returned a different number of vectors than chunks."
         return result
 
-    chroma_path = workspace_manager.CHROMA_PATH
-    bm25_dir = workspace_manager.BM25_DIR
+    chroma_path = settings.chroma_path
+    bm25_dir = settings.bm25_dir
     collection_name = f"ws_{ws_id}"
     try:
         client = chromadb.PersistentClient(path=chroma_path)
@@ -535,8 +535,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.dir:
         ws_id = sanitize_workspace_id(args.workspace)
-        kb_candidate = Path(workspace_manager.KNOWLEDGE_BASE_DIR) / ws_id
-        up_candidate = Path(workspace_manager.UPLOADS_DIR) / ws_id
+        kb_candidate = Path(settings.knowledge_base_dir) / ws_id
+        up_candidate = Path(settings.uploads_dir) / ws_id
         for disc_id, disc_path in workspace_manager.discover_knowledge_base_workspaces():
             if disc_id == ws_id:
                 kb_candidate = Path(disc_path)

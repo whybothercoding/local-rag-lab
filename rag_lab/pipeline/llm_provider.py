@@ -16,13 +16,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from rag_lab.config import (
-    CHAT_MODEL,
-    LLM_PROVIDER,
-    LOCAL_LLM_URL,
-    OLLAMA_BASE_URL,
-    OLLAMA_TIMEOUT_SEC,
-)
+from pydantic import Field
+
+from rag_lab.config import settings
 
 logger = logging.getLogger("llm_provider")
 
@@ -128,7 +124,8 @@ class OpenAICompatibleChat(BaseChatModel):
     base_url: str
     model_name: str = "qwen2.5-coder:7b"
     api_key: str = "local"
-    timeout_sec: float = OLLAMA_TIMEOUT_SEC
+    # Read when the client is created, so a settings override applies.
+    timeout_sec: float = Field(default_factory=lambda: settings.ollama_timeout_sec)
     transport: Any = None
 
     @property
@@ -158,8 +155,9 @@ class OpenAICompatibleChat(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=str(content)))])
 
 
-def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -> bool:
+def is_ollama_alive(base_url: str | None = None, timeout_sec: float = 0.5) -> bool:
     """Fast check whether local Ollama server is responding."""
+    base_url = settings.ollama_base_url if base_url is None else base_url
     try:
         url = f"{base_url.rstrip('/')}/api/tags"
         resp = httpx.get(url, timeout=timeout_sec)
@@ -168,12 +166,13 @@ def is_ollama_alive(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -
         return False
 
 
-def ollama_models(base_url: str = OLLAMA_BASE_URL, timeout_sec: float = 0.5) -> set[str] | None:
+def ollama_models(base_url: str | None = None, timeout_sec: float = 0.5) -> set[str] | None:
     """Names of the models pulled into the local Ollama server, or None when it is unreachable.
 
     Names are returned both as listed ("nomic-embed-text:latest") and without a ":latest" tag, so a
     configured name matches either way.
     """
+    base_url = settings.ollama_base_url if base_url is None else base_url
     try:
         resp = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=timeout_sec)
         if resp.status_code != 200:
@@ -194,10 +193,10 @@ def _ollama_chat() -> BaseChatModel:
     from langchain_ollama import ChatOllama
 
     return ChatOllama(
-        model=CHAT_MODEL,
-        base_url=OLLAMA_BASE_URL,
+        model=settings.chat_model,
+        base_url=settings.ollama_base_url,
         temperature=0.0,
-        client_kwargs={"timeout": OLLAMA_TIMEOUT_SEC},
+        client_kwargs={"timeout": settings.ollama_timeout_sec},
     )
 
 
@@ -207,16 +206,16 @@ def llm_is_fallback(llm: BaseChatModel, provider: str | None = None) -> bool:
     Choosing LLM_PROVIDER=deterministic is a deliberate setting. Landing on it because the model
     server is unreachable is a degradation that the reviewer and the user must be told about.
     """
-    active = (provider or LLM_PROVIDER).lower().strip()
+    active = (provider or settings.llm_provider).lower().strip()
     return isinstance(llm, DeterministicContextLLM) and active != "deterministic"
 
 
 def get_chat_llm(provider: str | None = None) -> BaseChatModel:
     """Factory returning the appropriate chat model based on environment and runtime availability."""
-    active = (provider or LLM_PROVIDER).lower().strip()
+    active = (provider or settings.llm_provider).lower().strip()
 
     if active == "openai":
-        return OpenAICompatibleChat(base_url=LOCAL_LLM_URL, model_name=CHAT_MODEL)
+        return OpenAICompatibleChat(base_url=settings.local_llm_url, model_name=settings.chat_model)
 
     if active == "deterministic":
         return DeterministicContextLLM()
@@ -225,7 +224,7 @@ def get_chat_llm(provider: str | None = None) -> BaseChatModel:
         return _ollama_chat()
 
     # "auto" mode: probe Ollama; if running, use it; otherwise fallback to DeterministicContextLLM
-    if is_ollama_alive(OLLAMA_BASE_URL):
+    if is_ollama_alive(settings.ollama_base_url):
         try:
             return _ollama_chat()
         except Exception as exc:

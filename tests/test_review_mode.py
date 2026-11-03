@@ -12,6 +12,7 @@ from rag_lab.security.access import (
     set_user_permissions_everywhere,
 )
 from conftest import TEST_PASSWORD
+from rag_lab.config import settings
 
 WORKSPACES = ["finance", "ops"]
 
@@ -121,7 +122,7 @@ def test_team_mode_requires_an_administrator(policy):
 
 
 def test_team_mode_and_list_cli(policy, monkeypatch, capsys):
-    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy)
+    monkeypatch.setattr(settings, "access_policy_path", policy)
     monkeypatch.setattr(access, "_workspace_ids", lambda: WORKSPACES)
     monkeypatch.setattr(access, "authenticate_admin", lambda name: name)
     add_user("ann", TEST_PASSWORD, path=policy)
@@ -164,10 +165,10 @@ def test_admin_panel_shows_the_review_mode():
 def test_open_mode_flags_indexed_classified_documents(policy, tmp_path, monkeypatch):
     from rag_lab.ingestion.ingest import ingest_workspace
 
-    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.retrieval"):
-        monkeypatch.setattr(f"{target}.CHROMA_PATH", str(tmp_path / "chroma"))
-        monkeypatch.setattr(f"{target}.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
+
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
     for ws, level in (("finance", "secret"), ("ops", "public")):
         source = tmp_path / "kb" / ws
         source.mkdir(parents=True)

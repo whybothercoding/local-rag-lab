@@ -3,6 +3,7 @@ import pytest
 
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM, get_chat_llm
 from rag_lab.ingestion.ingest import ingest_workspace
+from rag_lab.config import settings
 
 
 def test_deterministic_context_llm_extraction():
@@ -38,9 +39,9 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
     doc.write_text("Company expense policy states all receipts must be submitted within 30 days.")
 
     # Redirect storage dirs to tmp_path
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
 
     # First ingestion
     res1 = ingest_workspace("test_idempotent", str(source_dir))

@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from rag_lab.config import ANCHOR_PATH, AUDIT_DB_PATH, RETENTION_DAYS
+from rag_lab.config import settings
 from rag_lab.security.vault import anchor_mac, chain_mac, open_text, seal_text, subject_tag
 
 GENESIS_HASH = "0" * 64
@@ -108,7 +108,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def _open(path: str | None = None) -> sqlite3.Connection:
-    target = Path(path or AUDIT_DB_PATH)
+    target = Path(path or settings.audit_db_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=10, isolation_level=None)
     conn.execute("PRAGMA busy_timeout=10000;")
@@ -260,7 +260,7 @@ def count_events_since(event_type: str, subject: str, since: datetime, path: str
 # --- Anchors ----------------------------------------------------------------
 
 def _read_anchors(anchor_path: str | None) -> list[dict[str, Any]]:
-    target = Path(anchor_path or ANCHOR_PATH)
+    target = Path(anchor_path or settings.anchor_path)
     if not target.exists():
         return []
     with open(target, encoding="utf-8") as handle:
@@ -288,7 +288,7 @@ def anchor(path: str | None = None, anchor_path: str | None = None) -> dict[str,
         "prev": anchors[-1]["mac"] if anchors else GENESIS_HASH,
     }
     entry["mac"] = anchor_mac(_canonical(entry))
-    target = Path(anchor_path or ANCHOR_PATH)
+    target = Path(anchor_path or settings.anchor_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -302,7 +302,7 @@ def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> t
     accepted without a record to compare against.
     """
     problems: list[str] = []
-    target = Path(anchor_path or ANCHOR_PATH)
+    target = Path(anchor_path or settings.anchor_path)
     anchors: list[dict[str, Any]] = []
     if target.exists():
         with open(target, encoding="utf-8") as handle:
@@ -354,11 +354,12 @@ def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> t
 
 # --- Retention --------------------------------------------------------------
 
-def prune(retention_days: int = RETENTION_DAYS, path: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+def prune(retention_days: int | None = None, path: str | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Delete records older than the retention period. The deletion is recorded in the chain.
 
     The chain base moves to the hash of the last deleted record, so the remaining log still verifies.
     """
+    retention_days = settings.retention_days if retention_days is None else retention_days
     cutoff = ((now or datetime.now(UTC)) - timedelta(days=retention_days)).isoformat(timespec="microseconds")
     conn = _open(path)
     try:

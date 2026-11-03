@@ -3,11 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from rag_lab.config import GROUNDEDNESS_CROSS_ENCODER_THRESHOLD
-from rag_lab.config import GROUNDEDNESS_MIN_RATIO
-from rag_lab.config import MAX_GENERATION_RETRIES
-from rag_lab.config import MAX_RETRIEVAL_RETRIES
-from rag_lab.config import RELEVANCE_CROSS_ENCODER_THRESHOLD
+from rag_lab.config import settings
 from rag_lab.retrieval.reranker import score_pairs
 from rag_lab.security.audit import record as audit_record
 
@@ -33,7 +29,7 @@ def _generation_failure(state: StateInput, telemetry: dict[str, Any], feedback: 
     if telemetry.get("generator_deterministic"):
         telemetry["generation_retry_skipped"] = "deterministic generator; a retry would repeat the same answer"
         return "circuit_break", {}
-    if retries >= MAX_GENERATION_RETRIES:
+    if retries >= settings.max_generation_retries:
         return "circuit_break", {}
     return "retry", {"generation_retry_count": retries + 1, "grader_feedback": feedback}
 
@@ -75,13 +71,13 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
         gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
         if gen_words:
             ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
-            if ratio < GROUNDEDNESS_MIN_RATIO:
+            if ratio < settings.groundedness_min_ratio:
                 # Fast lexical screening missed (<25% overlap). Fall back to pinned
                 # in-process ONNX cross-encoder to detect semantically grounded paraphrases.
                 scores = score_pairs(gen, docs[:5])
                 if scores:
                     semantic_score = round(max(scores), 4)
-                    if semantic_score >= GROUNDEDNESS_CROSS_ENCODER_THRESHOLD:
+                    if semantic_score >= settings.groundedness_cross_encoder_threshold:
                         grader_method = "semantic_cross_encoder"
                     else:
                         grader_method = "semantic_rejected"
@@ -121,7 +117,7 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     if not gen or not str(gen).strip():
         # Blank generation cannot be a relevant answer
         telemetry["relevance_grader"] = "empty_generation"
-        if state.get("retry_count", 0) >= MAX_RETRIEVAL_RETRIES:
+        if state.get("retry_count", 0) >= settings.max_retrieval_retries:
             return {"relevance_status": "circuit_break", "telemetry": telemetry}
         return {"relevance_status": "irrelevant", "retry_count": state.get("retry_count", 0) + 1, "telemetry": telemetry}
 
@@ -144,18 +140,18 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
         scores = score_pairs(q, [gen])
         if scores:
             semantic_score = round(scores[0], 4)
-            if semantic_score >= RELEVANCE_CROSS_ENCODER_THRESHOLD:
+            if semantic_score >= settings.relevance_cross_encoder_threshold:
                 grader_method = "semantic_cross_encoder"
             else:
                 grader_method = "semantic_rejected"
-                if retries >= MAX_RETRIEVAL_RETRIES:
+                if retries >= settings.max_retrieval_retries:
                     status = "circuit_break"
                 else:
                     status = "irrelevant"
                     update["retry_count"] = retries + 1
         else:
             grader_method = "lexical_rejected"
-            if retries >= MAX_RETRIEVAL_RETRIES:
+            if retries >= settings.max_retrieval_retries:
                 status = "circuit_break"
             else:
                 status = "irrelevant"

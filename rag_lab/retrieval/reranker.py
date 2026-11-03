@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-from rag_lab.config import ENABLE_RERANKER, MODELS_DIR, RERANKER_MODEL
+from rag_lab.config import settings
 from rag_lab.security.model_integrity import verify_model
 
 logger = logging.getLogger("reranker")
@@ -23,13 +23,15 @@ _RERANKERS: dict[tuple[str, str], TextCrossEncoder] = {}
 
 
 def get_reranker(
-    model_name: str = RERANKER_MODEL,
-    cache_dir: str = MODELS_DIR,
+    model_name: str | None = None,
+    cache_dir: str | None = None,
 ) -> TextCrossEncoder:
     """Return a verified TextCrossEncoder loaded completely offline, from exactly the files that were verified.
 
     Concurrent first calls load the model once: the check is repeated under the lock.
     """
+    model_name = settings.reranker_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
     key = (model_name, cache_dir)
     cached = _RERANKERS.get(key)
     if cached is not None:
@@ -57,17 +59,19 @@ def rerank_with_status(
     query: str,
     candidates: Sequence[dict[str, Any]],
     top_n: int = 3,
-    model_name: str = RERANKER_MODEL,
-    cache_dir: str = MODELS_DIR,
+    model_name: str | None = None,
+    cache_dir: str | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Like rerank_documents, but also reports why the cross-encoder was skipped after a failure.
 
     The status is None when reranking ran, or was switched off on purpose. It is a short message
     when the cross-encoder failed and the initial ranking was used instead.
     """
+    model_name = settings.reranker_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
     if not candidates:
         return [], None
-    if not ENABLE_RERANKER or len(candidates) <= 1 or not query or not str(query).strip():
+    if not settings.enable_reranker or len(candidates) <= 1 or not query or not str(query).strip():
         return list(candidates[:top_n]), None
 
     try:
@@ -93,21 +97,23 @@ def rerank_documents(
     query: str,
     candidates: Sequence[dict[str, Any]],
     top_n: int = 3,
-    model_name: str = RERANKER_MODEL,
-    cache_dir: str = MODELS_DIR,
+    model_name: str | None = None,
+    cache_dir: str | None = None,
 ) -> list[dict[str, Any]]:
     """Score and re-order candidate documents using cross-encoder attention over (query, document).
 
     If reranking is disabled or fails, cleanly returns candidates[:top_n] as fallback.
     """
+    model_name = settings.reranker_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
     return rerank_with_status(query, candidates, top_n, model_name, cache_dir)[0]
 
 
 def score_pairs(
     query: str,
     docs: Sequence[str],
-    model_name: str = RERANKER_MODEL,
-    cache_dir: str = MODELS_DIR,
+    model_name: str | None = None,
+    cache_dir: str | None = None,
 ) -> list[float]:
     """Score (query, doc) text pairs using the pinned cross-encoder model.
 
@@ -115,7 +121,9 @@ def score_pairs(
     Returns an empty list if ENABLE_RERANKER is False, query is empty/whitespace,
     docs contains no valid text, or if scoring fails.
     """
-    if not ENABLE_RERANKER or not query or not str(query).strip() or not docs:
+    model_name = settings.reranker_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
+    if not settings.enable_reranker or not query or not str(query).strip() or not docs:
         return []
     try:
         valid_docs = [str(d).strip() for d in docs if d is not None and str(d).strip()]

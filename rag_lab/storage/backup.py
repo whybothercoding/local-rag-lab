@@ -27,7 +27,7 @@ from pathlib import Path
 
 from rag_lab.security.audit import head_hash, verify_anchors, verify_chain
 from rag_lab.storage.checkpointer import get_sqlite_path, is_postgres_uri
-from rag_lab.config import ACCESS_POLICY_PATH, AUDIT_DB_PATH, ANCHOR_PATH, BACKUP_DIR, CACHE_DB_PATH, DB_URI
+from rag_lab.config import settings
 
 MANIFEST = "manifest.json"
 
@@ -48,27 +48,27 @@ def _sqlite_copy(source: Path, destination: Path) -> None:
 
 def create(destination: Path | None = None) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    target = destination or Path(BACKUP_DIR) / f"backup-{stamp}"
+    target = destination or Path(settings.backup_dir) / f"backup-{stamp}"
     target.mkdir(parents=True, exist_ok=False)
 
     files: dict[str, str] = {}
     # Ensure audit database and schema exist even on a fresh deployment with 0 events
-    verify_chain(str(AUDIT_DB_PATH))
-    _sqlite_copy(Path(AUDIT_DB_PATH), target / "audit.db")
+    verify_chain(str(settings.audit_db_path))
+    _sqlite_copy(Path(settings.audit_db_path), target / "audit.db")
     files["audit.db"] = _sha256(target / "audit.db")
 
-    if not is_postgres_uri(DB_URI):
-        checkpoints = Path(get_sqlite_path(DB_URI))
+    if not is_postgres_uri(settings.db_uri):
+        checkpoints = Path(get_sqlite_path(settings.db_uri))
         if checkpoints.exists():
             _sqlite_copy(checkpoints, target / "checkpoints.db")
             files["checkpoints.db"] = _sha256(target / "checkpoints.db")
 
-    cache_db = Path(CACHE_DB_PATH)
+    cache_db = Path(settings.cache_db_path)
     if cache_db.exists():
         _sqlite_copy(cache_db, target / "cache.db")
         files["cache.db"] = _sha256(target / "cache.db")
 
-    for source, name in ((Path(ANCHOR_PATH), "audit_anchors.jsonl"), (Path(ACCESS_POLICY_PATH), "access_policy.json")):
+    for source, name in ((Path(settings.anchor_path), "audit_anchors.jsonl"), (Path(settings.access_policy_path), "access_policy.json")):
         if source.exists():
             shutil.copy2(source, target / name)
             files[name] = _sha256(target / name)
@@ -80,7 +80,7 @@ def create(destination: Path | None = None) -> Path:
         "audit_records": records,
         "audit_head": head_hash(str(target / "audit.db")),
         "audit_chain_ok": chain_ok,
-        "checkpoints_backend": "postgres (external pg_dump required)" if is_postgres_uri(DB_URI) else "sqlite",
+        "checkpoints_backend": "postgres (external pg_dump required)" if is_postgres_uri(settings.db_uri) else "sqlite",
         "excluded": ["data.key", "access.key"],
     }
     (target / MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -129,7 +129,7 @@ def verify(directory: Path) -> list[str]:
 
 def list_backups(base_dir: Path | None = None) -> list[dict]:
     """Return metadata for each backup directory under backups/, newest first."""
-    root = base_dir or Path(BACKUP_DIR)
+    root = base_dir or Path(settings.backup_dir)
     if not root.is_dir():
         return []
     entries = []

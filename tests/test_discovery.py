@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from rag_lab.ingestion.ingest import ingest_workspace
+from rag_lab.config import settings
 from rag_lab.storage.workspace_manager import (
     discover_knowledge_base_workspaces,
     list_workspaces,
@@ -14,10 +15,10 @@ from rag_lab.storage.workspace_manager import (
 def storage(tmp_path: Path, monkeypatch) -> Path:
     kb = tmp_path / "knowledge_base"
     kb.mkdir()
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.KNOWLEDGE_BASE_DIR", str(kb))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "knowledge_base_dir", str(kb))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
     return kb
 
 
@@ -118,8 +119,7 @@ def test_ingest_merges_knowledge_base_and_uploads(storage, tmp_path):
 
 
 def test_ingest_skips_oversized_empty_and_invalid_clearance_files(storage, monkeypatch):
-    import rag_lab.ingestion.ingest as ingest
-    monkeypatch.setattr(ingest, "MAX_SOURCE_BYTES", 100)
+    monkeypatch.setattr(settings, "max_source_bytes", 100)
     ws_dir = storage / "ops"
     ws_dir.mkdir()
     (ws_dir / "valid.md").write_text("Valid short operational runbook.")
@@ -137,7 +137,6 @@ def test_ingest_skips_oversized_empty_and_invalid_clearance_files(storage, monke
 
 def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tmp_path):
     import chromadb
-    import rag_lab.storage.workspace_manager as workspace_manager
     kb_acc = storage / "accounting"
     kb_acc.mkdir()
     (kb_acc / "z_policy.txt").write_text("Corporate tax policy requires quarterly filings.")
@@ -147,7 +146,7 @@ def test_ingest_produces_identical_chunk_ids_regardless_of_entry_dir(storage, tm
     (up_acc / "a_memo.txt").write_text("Supplemental expense memo for Q4.")
 
     assert ingest_workspace("accounting", str(kb_acc), force=True).ok
-    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    client = chromadb.PersistentClient(path=settings.chroma_path)
     ids_from_kb = sorted(client.get_collection("ws_accounting").get()["ids"])
 
     assert ingest_workspace("accounting", str(up_acc), force=True).ok
@@ -172,7 +171,7 @@ def test_ingest_reclassifies_when_clearance_changes_and_supports_folder_clearanc
     res2 = ingest_workspace("ops", str(ws_dir))
     assert res2.ok and not res2.unchanged
 
-    client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
+    client = chromadb.PersistentClient(path=settings.chroma_path)
     metas = client.get_collection("ws_ops").get()["metadatas"]
     assert all(m["clearance"] == "secret" for m in metas)
 

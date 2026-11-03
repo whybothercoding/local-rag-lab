@@ -23,6 +23,7 @@ from rag_lab.security.access import (
 from rag_lab.ingestion.ingest import _extract_doc_clearance, ingest_workspace
 from rag_lab.retrieval.sparse_search import index_sparse_chunks, search_sparse_chunks
 from rag_lab.pipeline.retrieval import hybrid_retrieval_node
+from rag_lab.config import settings
 
 
 def test_clearance_taxonomy_and_hierarchy():
@@ -178,12 +179,12 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
     bm25_dir = str(tmp_path / "bm25")
     policy_path = str(tmp_path / "access_policy.json")
 
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", chroma_dir)
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", bm25_dir)
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", chroma_dir)
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", bm25_dir)
-    monkeypatch.setattr("rag_lab.config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("rag_lab.security.access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "chroma_path", chroma_dir)
+    monkeypatch.setattr(settings, "bm25_dir", bm25_dir)
+    monkeypatch.setattr(settings, "chroma_path", chroma_dir)
+    monkeypatch.setattr(settings, "bm25_dir", bm25_dir)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
 
     # Ingest workspace
     res = ingest_workspace(ws_id, str(source_dir), force=True)
@@ -229,8 +230,8 @@ def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
     from rag_lab.retrieval.semantic_cache import cache_key
 
     policy_path = str(tmp_path / "access_policy.json")
-    monkeypatch.setattr("rag_lab.config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("rag_lab.security.access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
 
     add_user("alice", "Password123!@#", clearance="secret", path=policy_path)
     add_user("bob", "Password123!@#", clearance="public", path=policy_path)
@@ -261,8 +262,8 @@ def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
 def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path: Path, mocker, monkeypatch):
     """When Chroma's where filter raises an exception, the Python post-filter must still enforce clearance."""
     policy_path = str(tmp_path / "access_policy.json")
-    monkeypatch.setattr("rag_lab.config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("rag_lab.security.access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
     add_user("bob", "Password123!@#", clearance="public", path=policy_path)
 
     fake_collection = mocker.MagicMock()

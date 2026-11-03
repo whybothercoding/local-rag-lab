@@ -31,8 +31,24 @@ os.environ["DATA_KEY_PATH"] = os.path.join(_scratch_dir, "data.key")
 os.environ["ANCHOR_PATH"] = os.path.join(_scratch_dir, "audit_anchors.jsonl")
 os.environ["BACKUP_DIR"] = os.path.join(_scratch_dir, "backups")
 os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')}"
+# Indexes and uploads too: no test may write to the repository's chroma_data/, bm25_indices/, or uploads/.
+# knowledge_base/ stays real; tests only read it.
+os.environ["CHROMA_PATH"] = os.path.join(_scratch_dir, "chroma")
+os.environ["BM25_DIR"] = os.path.join(_scratch_dir, "bm25")
+os.environ["UPLOADS_DIR"] = os.path.join(_scratch_dir, "uploads")
 # Tests never depend on a running model server; the deterministic synthesizer keeps answers reproducible.
 os.environ["LLM_PROVIDER"] = "deterministic"
+
+# Only now may project modules load: settings is built from the environment on first import.
+from rag_lab.config import settings  # noqa: E402
+
+# Fail fast if anything imported settings before the redirect above: tests would write real keys and data.
+for _field in ("audit_db_path", "cache_db_path", "access_policy_path", "access_key_path", "data_key_path",
+               "anchor_path", "backup_dir", "chroma_path", "bm25_dir", "uploads_dir"):
+    if not str(getattr(settings, _field)).startswith(_scratch_dir):
+        raise RuntimeError(f"settings.{_field} was built before the test redirect: {getattr(settings, _field)}")
+if not settings.db_uri.startswith(f"sqlite:///{_scratch_dir}"):
+    raise RuntimeError(f"settings.db_uri was built before the test redirect: {settings.db_uri}")
 
 TEST_PASSWORD = "correct-horse-battery"
 
@@ -56,10 +72,9 @@ def rollback_index(tmp_path, monkeypatch):
     (source / "company_policy.md").write_text("Rollback SLA is strictly under 5 minutes.", encoding="utf-8")
 
     store = tmp_path / "store"
-    for target in ("rag_lab.storage.workspace_manager", "rag_lab.pipeline.retrieval"):
-        monkeypatch.setattr(f"{target}.CHROMA_PATH", str(store / "chroma"))
-        monkeypatch.setattr(f"{target}.BM25_DIR", str(store / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(store / "uploads"))
+    monkeypatch.setattr(settings, "chroma_path", str(store / "chroma"))
+    monkeypatch.setattr(settings, "bm25_dir", str(store / "bm25"))
+    monkeypatch.setattr(settings, "uploads_dir", str(store / "uploads"))
 
     assert ingest_workspace("default", str(source)).ok
     return source

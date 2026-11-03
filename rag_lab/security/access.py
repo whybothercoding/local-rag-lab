@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover - Windows
 
 from rag_lab.security.audit import count_events_since
 from rag_lab.security.audit import record as audit_record
-from rag_lab.config import ACCESS_KEY_PATH, ACCESS_POLICY_PATH
+from rag_lab.config import settings
 from rag_lab.security.vault import load_or_create_key
 from rag_lab.storage.workspace_manager import sanitize_workspace_id
 
@@ -151,7 +151,7 @@ def check_password_strength(password: str, username: str = "") -> None:
 
 def _signing_key(path: str | None = None) -> bytes:
     """The local signing key for tokens and the policy tag. Created with owner-only permissions on first use."""
-    return load_or_create_key(path or ACCESS_KEY_PATH)
+    return load_or_create_key(path or settings.access_key_path)
 
 
 def _canonical_defaults(defaults: Any) -> dict[str, Any]:
@@ -176,7 +176,7 @@ def new_policy() -> dict[str, Any]:
 
 
 def load_policy(path: str | None = None) -> dict[str, Any]:
-    target = Path(path or ACCESS_POLICY_PATH)
+    target = Path(path or settings.access_policy_path)
     if not target.is_file():
         return new_policy()
     try:
@@ -206,7 +206,7 @@ def load_policy(path: str | None = None) -> dict[str, Any]:
 
 
 def save_policy(policy: dict[str, Any], path: str | None = None) -> None:
-    target = Path(path or ACCESS_POLICY_PATH)
+    target = Path(path or settings.access_policy_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     defaults = policy.get("defaults")
     if defaults is not None:
@@ -225,7 +225,7 @@ def save_policy(policy: dict[str, Any], path: str | None = None) -> None:
 @contextlib.contextmanager
 def _policy_lock(path: str | None = None):
     """Serialize read-modify-write cycles on the policy file across threads and processes."""
-    target = Path(path or ACCESS_POLICY_PATH)
+    target = Path(path or settings.access_policy_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     if fcntl is None:  # pragma: no cover - Windows
         yield
@@ -277,7 +277,7 @@ def issue_token(username: str, now: float | None = None, path: str | None = None
         user = load_policy(path)["users"].get(username)
         version = _token_version(user)
         if user and user.get("uid"):
-            _LAST_POLICY_BY_UID[str(user["uid"])] = str(Path(path or ACCESS_POLICY_PATH).resolve())
+            _LAST_POLICY_BY_UID[str(user["uid"])] = str(Path(path or settings.access_policy_path).resolve())
     except PolicyIntegrityError:
         version = ""
     payload = json.dumps(
@@ -691,11 +691,10 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
 
 
 def _workspaces_with_classified_documents(workspace_ids: list[str]) -> list[str]:
-    import rag_lab.storage.workspace_manager as workspace_manager
     from rag_lab.retrieval.sparse_search import indexed_clearances
 
     classified = {"confidential", "secret"}
-    return [ws for ws in workspace_ids if indexed_clearances(ws, base_dir=workspace_manager.BM25_DIR) & classified]
+    return [ws for ws in workspace_ids if indexed_clearances(ws, base_dir=settings.bm25_dir) & classified]
 
 
 def enable_team_mode(workspace_ids: list[str], path: str | None = None, actor: str | None = None) -> ReviewReport:

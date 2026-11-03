@@ -18,7 +18,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from rag_lab.config import BM25_DIR
+from rag_lab.config import settings
 
 logger = logging.getLogger("sparse_search")
 
@@ -29,7 +29,7 @@ class SparseIndexError(RuntimeError):
 
 def get_fts_db_path(workspace_id: str, base_dir: str | None = None) -> str:
     """Return the filesystem path to the workspace's SQLite FTS5 database."""
-    target_dir = Path(base_dir or BM25_DIR)
+    target_dir = Path(base_dir or settings.bm25_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     return str(target_dir / f"{workspace_id}.db")
 
@@ -98,7 +98,7 @@ def search_sparse_chunks(
     if not clearances:
         return []
 
-    target_dir = base_dir or BM25_DIR
+    target_dir = base_dir or settings.bm25_dir
     db_path = os.path.join(target_dir, f"{workspace_id}.db")
     if not os.path.exists(db_path):
         return []
@@ -135,7 +135,7 @@ def search_sparse_chunks(
 
 def delete_sparse_index(workspace_id: str, base_dir: str | None = None) -> None:
     """Safely delete all sparse index files (.db, .db-wal, .db-shm, and leftover legacy .pkl) for a workspace."""
-    target_dir = Path(base_dir or BM25_DIR)
+    target_dir = Path(base_dir or settings.bm25_dir)
     for ext in [".db", ".db-wal", ".db-shm", ".pkl", ".db.tmp", ".pkl.tmp"]:
         fpath = target_dir / f"{workspace_id}{ext}"
         if fpath.exists():
@@ -160,4 +160,4 @@ def indexed_clearances(workspace_id: str, base_dir: str | None = None) -> set[st
 
 def has_sparse_index(workspace_id: str, base_dir: str | None = None) -> bool:
     """Return True if an FTS5 index exists for the workspace."""
-    return (Path(base_dir or BM25_DIR) / f"{workspace_id}.db").exists()
+    return (Path(base_dir or settings.bm25_dir) / f"{workspace_id}.db").exists()

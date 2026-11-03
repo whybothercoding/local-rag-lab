@@ -7,7 +7,7 @@ from langchain_ollama import OllamaEmbeddings
 import rag_lab.retrieval.embedding_provider as embedding_provider
 from rag_lab.pipeline.state import BLOCKING_DEGRADED_PREFIXES
 from rag_lab.pipeline.retrieval import _embedding_mismatch, hybrid_retrieval_node
-from rag_lab.config import EMBED_MODEL, FASTEMBED_MODEL
+from rag_lab.config import settings
 from rag_lab.retrieval.embedding_provider import (
     FINGERPRINT_KEY,
     EmbeddingUnavailableError,
@@ -19,8 +19,8 @@ from rag_lab.retrieval.embedding_provider import (
 from rag_lab.pipeline.llm_provider import ollama_models
 
 QUESTION = "What is the rollback SLA?"
-OLLAMA_FINGERPRINT = f"ollama:{EMBED_MODEL}"
-FASTEMBED_FINGERPRINT = f"fastembed:{FASTEMBED_MODEL}"
+OLLAMA_FINGERPRINT = f"ollama:{settings.embed_model}"
+FASTEMBED_FINGERPRINT = f"fastembed:{settings.fastembed_model}"
 
 
 def _retrieval_state(question: str = QUESTION) -> dict:
@@ -86,8 +86,7 @@ def test_stored_fingerprint_prefers_collection_metadata_then_manifest():
 
 
 def test_ingest_stamps_the_fingerprint_on_the_live_collection(rollback_index):
-    import rag_lab.pipeline.retrieval as app
-    client = chromadb.PersistentClient(path=app.CHROMA_PATH)
+    client = chromadb.PersistentClient(path=settings.chroma_path)
     meta = client.get_collection("ws_default").metadata
     assert meta[FINGERPRINT_KEY] == embedding_fingerprint()
     assert meta["hnsw:space"] == "cosine"
@@ -130,7 +129,7 @@ def test_legacy_collection_without_metadata_is_checked_against_the_manifest(roll
 
 def test_index_of_unknown_origin_is_queried(tmp_path, monkeypatch):
     """No metadata and no manifest: nothing to compare, so retrieval proceeds as before."""
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path))
     monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
     assert _embedding_mismatch("default", {"hnsw:space": "l2"}) is None
     (tmp_path / "default_manifest.json").write_text("not json", encoding="utf-8")
@@ -182,7 +181,7 @@ def test_sync_with_an_unknown_provider_reports_instead_of_raising(rollback_index
     """Even when files are unchanged (the shortcut path), a bad provider is a sync error, not an exception."""
     from rag_lab.ingestion.ingest import ingest_workspace
 
-    monkeypatch.setattr("rag_lab.retrieval.embedding_provider.EMBEDDING_PROVIDER", "bogus")
+    monkeypatch.setattr(settings, "embedding_provider", "bogus")
     result = ingest_workspace("default", str(rollback_index))
     assert not result.ok
     assert "Unknown EMBEDDING_PROVIDER" in result.error

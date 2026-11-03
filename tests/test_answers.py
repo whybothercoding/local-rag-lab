@@ -16,6 +16,7 @@ from rag_lab.security.audit import list_rejections, record
 from conftest import token_for
 from rag_lab.ingestion.ingest import ingest_workspace
 from rag_lab.pipeline.llm_provider import OpenAICompatibleChat
+from rag_lab.config import settings
 
 ROLLBACK_QUESTION = "What is the rollback SLA?"
 OFF_TOPIC_QUESTION = "What is the office dress code policy?"
@@ -110,8 +111,8 @@ def test_dense_outage_is_recorded_and_sparse_results_still_return(rollback_index
 
 
 def test_missing_index_is_reported_as_not_indexed(tmp_path, monkeypatch):
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", str(tmp_path / "empty-chroma"))
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path / "empty-bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "empty-chroma"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "empty-bm25"))
     state = hybrid_retrieval_node(_retrieval_state(ROLLBACK_QUESTION, workspace="ghost"))
     assert any(note.startswith("not_indexed") for note in state["degraded"])
     assert state["documents"] == []
@@ -135,8 +136,8 @@ def test_model_failure_gives_a_labelled_extractive_answer(monkeypatch):
 
 
 def test_seeded_documents_cannot_bypass_retrieval(tmp_path, monkeypatch):
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.CHROMA_PATH", str(tmp_path / "empty-chroma"))
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.BM25_DIR", str(tmp_path / "empty-bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "empty-chroma"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "empty-bm25"))
     state = hybrid_retrieval_node({
         "sanitized_question": ROLLBACK_QUESTION,
         "workspace_id": "ghost",

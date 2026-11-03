@@ -1,6 +1,8 @@
 from contextlib import closing
 from pathlib import Path
 import pytest
+
+from rag_lab.config import settings
 from rag_lab.storage.workspace_manager import (
     sanitize_workspace_id,
     list_workspaces,
@@ -13,7 +15,7 @@ from rag_lab.storage.workspace_manager import (
 
 @pytest.fixture(autouse=True)
 def isolated_knowledge_base(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.KNOWLEDGE_BASE_DIR", str(tmp_path / "knowledge_base"))
+    monkeypatch.setattr(settings, "knowledge_base_dir", str(tmp_path / "knowledge_base"))
 
 
 def test_sanitize_workspace_id():
@@ -24,9 +26,9 @@ def test_sanitize_workspace_id():
 
 
 def test_create_and_list_workspace(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
 
     ensure_base_dirs()
     create_workspace("accounting")
@@ -38,9 +40,9 @@ def test_create_and_list_workspace(tmp_path: Path, monkeypatch):
 
 
 def test_workspace_stats_empty(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
 
     ensure_base_dirs()
     stats = get_workspace_stats("nonexistent")
@@ -53,10 +55,10 @@ def test_delete_workspace(tmp_path: Path, monkeypatch):
     from conftest import TEST_PASSWORD
 
     policy_path = str(tmp_path / "access_policy.json")
-    monkeypatch.setattr("rag_lab.security.access.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
 
     ensure_base_dirs()
     create_workspace("accounting")
@@ -74,9 +76,9 @@ def test_workspace_manager_cli(tmp_path: Path, monkeypatch, capsys):
     import rag_lab.storage.workspace_manager as workspace_manager
     from conftest import TEST_PASSWORD
 
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
     monkeypatch.setattr("rag_lab.security.access.getpass.getpass", lambda _="": TEST_PASSWORD)
 
     # Without --as or with non-admin, create/delete is refused
@@ -106,12 +108,11 @@ def test_workspace_manager_cli(tmp_path: Path, monkeypatch, capsys):
 
 def test_delete_workspace_escapes_sql_like_underscore_wildcard(tmp_path: Path, monkeypatch):
     import sqlite3
-    import rag_lab.storage.workspace_manager as workspace_manager
     db_file = tmp_path / "checkpoints.db"
-    monkeypatch.setattr(workspace_manager, "DB_URI", f"sqlite:///{db_file}")
-    monkeypatch.setattr(workspace_manager, "UPLOADS_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setattr(workspace_manager, "BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr(workspace_manager, "CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "db_uri", f"sqlite:///{db_file}")
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
 
     with closing(sqlite3.connect(db_file)) as conn, conn:
         conn.execute("CREATE TABLE checkpoints (thread_id TEXT)")
@@ -139,10 +140,10 @@ def test_delete_workspace_escapes_sql_like_underscore_wildcard(tmp_path: Path, m
 def test_workspace_stats_counts_nested_supported_files_and_ignores_unsupported(tmp_path: Path, monkeypatch):
     kb_dir = tmp_path / "knowledge_base"
     up_dir = tmp_path / "uploads"
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.KNOWLEDGE_BASE_DIR", str(kb_dir))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(up_dir))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.BM25_DIR", str(tmp_path / "bm25"))
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.CHROMA_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setattr(settings, "knowledge_base_dir", str(kb_dir))
+    monkeypatch.setattr(settings, "uploads_dir", str(up_dir))
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path / "bm25"))
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
 
     nested_kb = kb_dir / "engineering" / "architecture" / "2026"
     nested_kb.mkdir(parents=True)
@@ -164,8 +165,8 @@ def test_workspace_stats_counts_nested_supported_files_and_ignores_unsupported(t
 def _status(capsys, monkeypatch, *, embedding="fastembed", llm="deterministic", pulled=None):
     from rag_lab.storage.workspace_manager import print_status
 
-    monkeypatch.setattr("rag_lab.retrieval.embedding_provider.EMBEDDING_PROVIDER", embedding)
-    monkeypatch.setattr("rag_lab.config.LLM_PROVIDER", llm)
+    monkeypatch.setattr(settings, "embedding_provider", embedding)
+    monkeypatch.setattr(settings, "llm_provider", llm)
     monkeypatch.setattr("rag_lab.pipeline.llm_provider.ollama_models", lambda *a, **k: pulled)
     code = print_status()
     return code, capsys.readouterr().out
@@ -180,27 +181,27 @@ def test_status_default_configuration_is_healthy_without_ollama(rollback_index, 
 
 
 def test_status_flags_ollama_embeddings_when_ollama_is_offline(rollback_index, capsys, monkeypatch):
-    from rag_lab.config import FASTEMBED_MODEL
+    from rag_lab.config import settings
 
     code, out = _status(capsys, monkeypatch, embedding="ollama")
     assert code == 1
     assert "the configuration requires it" in out
-    assert f"Model verified      : {FASTEMBED_MODEL}" not in out, "FastEmbed weights are not needed on Ollama"
+    assert f"Model verified      : {settings.fastembed_model}" not in out, "FastEmbed weights are not needed on Ollama"
 
 
 def test_status_flags_missing_ollama_models(rollback_index, capsys, monkeypatch):
-    from rag_lab.config import EMBED_MODEL, OLLAMA_MODEL
+    from rag_lab.config import settings
 
     code, out = _status(capsys, monkeypatch, embedding="ollama", llm="auto", pulled=set())
     assert code == 1
-    assert f"{OLLAMA_MODEL} is not pulled" in out
-    assert f"{EMBED_MODEL} is not pulled" in out
+    assert f"{settings.chat_model} is not pulled" in out
+    assert f"{settings.embed_model} is not pulled" in out
 
 
 def test_status_reports_a_workspace_indexed_with_another_model(rollback_index, capsys, monkeypatch):
-    from rag_lab.config import EMBED_MODEL, OLLAMA_MODEL
+    from rag_lab.config import settings
 
-    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="ollama", pulled={EMBED_MODEL, OLLAMA_MODEL})
+    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="ollama", pulled={settings.embed_model, settings.chat_model})
     assert code == 1
     assert "default: indexed with fastembed:" in out
     assert "make sync WS=default FORCE=1" in out

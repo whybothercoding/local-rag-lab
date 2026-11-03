@@ -18,7 +18,7 @@ from collections.abc import Generator
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from rag_lab.config import CHECKPOINT_POOL_SIZE, DB_URI, ROOT
+from rag_lab.config import ROOT, settings
 from rag_lab.security.vault import EncryptedSerde, bind_thread
 
 logger = logging.getLogger("checkpointer")
@@ -28,13 +28,13 @@ _UUID6_EPOCH_OFFSET = 0x01B21DD213814000  # 100 ns ticks from 1582-10-15 to 1970
 
 def is_postgres_uri(uri: str | None = None) -> bool:
     """Return True if the URI specifies a PostgreSQL connection."""
-    target = uri if uri is not None else DB_URI
+    target = uri if uri is not None else settings.db_uri
     return target.startswith(("postgresql://", "postgres://"))
 
 
 def get_sqlite_path(uri: str | None = None) -> str:
     """Resolve and ensure parent directories for SQLite checkpoint file."""
-    target = uri if uri is not None else DB_URI
+    target = uri if uri is not None else settings.db_uri
     if target.startswith("sqlite:///"):
         raw_path = target[len("sqlite:///"):]
     elif target.startswith("sqlite://"):
@@ -105,14 +105,15 @@ def _bound_postgres_saver(pool) -> BaseCheckpointSaver:
 _OWNED: dict[int, object] = {}
 
 
-def open_checkpointer(uri: str | None = None, max_pool_size: int = CHECKPOINT_POOL_SIZE) -> BaseCheckpointSaver:
+def open_checkpointer(uri: str | None = None, max_pool_size: int | None = None) -> BaseCheckpointSaver:
     """Open an initialized, encrypting checkpointer that stays open until close_checkpointer.
 
     For long-lived processes (the UI server): one SQLite connection or one PostgreSQL pool serves every
     request instead of being opened per request. SqliteSaver serializes access to its connection with
     its own lock, and the pool hands each request its own connection, so both are safe to share.
     """
-    target = uri if uri is not None else DB_URI
+    max_pool_size = settings.checkpoint_pool_size if max_pool_size is None else max_pool_size
+    target = uri if uri is not None else settings.db_uri
 
     if is_postgres_uri(target):
         from psycopg_pool import ConnectionPool
@@ -166,12 +167,13 @@ def shared_pool(saver: BaseCheckpointSaver | None):
 @contextmanager
 def get_checkpointer(
     uri: str | None = None,
-    max_pool_size: int = CHECKPOINT_POOL_SIZE,
+    max_pool_size: int | None = None,
 ) -> Generator[BaseCheckpointSaver, None, None]:
     """Context manager yielding an initialized, encrypting checkpointer ready for LangGraph.
 
     For one-shot commands. Long-lived servers use open_checkpointer once instead.
     """
+    max_pool_size = settings.checkpoint_pool_size if max_pool_size is None else max_pool_size
     saver = open_checkpointer(uri, max_pool_size)
     try:
         yield saver
@@ -192,7 +194,7 @@ def fetch_checkpoint_threads(
     Without either, IDs are sorted alphabetically as before. Pass `pool` (see shared_pool) to reuse an
     open PostgreSQL pool instead of opening one for this query.
     """
-    target = uri if uri is not None else DB_URI
+    target = uri if uri is not None else settings.db_uri
     escaped = None
     if prefix:
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -243,7 +245,7 @@ def prune_checkpoints(retention_days: int, uri: str | None = None, now: float | 
     Threads that are waiting for a human decision are never deleted, however old they are.
     Returns the number of threads removed. Works for SQLite and PostgreSQL.
     """
-    target = uri if uri is not None else DB_URI
+    target = uri if uri is not None else settings.db_uri
     cutoff = (now if now is not None else time.time()) - retention_days * 86400
     removed = 0
 

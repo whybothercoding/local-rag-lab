@@ -11,7 +11,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 import rag_lab.storage.backup as backup
 from rag_lab.security.audit import anchor, export_events, head_hash, list_events, prune, record, verify_anchors, verify_chain
 from rag_lab.storage.checkpointer import get_checkpointer, prune_checkpoints
-from rag_lab.config import RETENTION_DAYS
+from rag_lab.config import settings
 from conftest import token_for
 from rag_lab.security.vault import EncryptedSerde
 
@@ -174,7 +174,7 @@ def test_clean_log_and_anchors_verify(audit_path, anchor_path):
 # --- G14: retention ---------------------------------------------------------
 
 def test_default_retention_is_six_months():
-    assert RETENTION_DAYS == 183
+    assert settings.retention_days == 183
 
 
 def test_prune_deletes_old_records_and_the_chain_still_verifies(audit_path, anchor_path):
@@ -196,7 +196,7 @@ def test_prune_deletes_old_records_and_the_chain_still_verifies(audit_path, anch
 
 def test_prune_keeps_recent_records(audit_path):
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1}, path=audit_path)
-    result = prune(retention_days=RETENTION_DAYS, path=audit_path)
+    result = prune(retention_days=settings.retention_days, path=audit_path)
     assert result["removed"] == 0
     assert verify_chain(audit_path) == (True, None, 1)
 
@@ -247,7 +247,7 @@ def test_backup_verifies_excludes_keys_and_detects_tampering(tmp_path):
 def test_backup_list_and_audit_export_cli(tmp_path, monkeypatch, capsys):
     import rag_lab.security.audit as audit
     bk_root = tmp_path / "backups"
-    monkeypatch.setattr(backup, "BACKUP_DIR", str(bk_root))
+    monkeypatch.setattr(settings, "backup_dir", str(bk_root))
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1})
     backup.create(bk_root / "backup-20261102T000000Z")
 
@@ -353,7 +353,7 @@ def test_audit_cli_subcommands(capsys):
 
 def test_backup_verify_edge_cases_and_cli(tmp_path, monkeypatch, capsys):
     bk_root = tmp_path / "backups"
-    monkeypatch.setattr(backup, "BACKUP_DIR", str(bk_root))
+    monkeypatch.setattr(settings, "backup_dir", str(bk_root))
     record("query_received", workspace_id="ops", session_id="s", data={"i": 1})
 
     # 1. CLI create & verify clean backup

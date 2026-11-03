@@ -27,6 +27,7 @@ from rag_lab.pipeline.graph import workflow
 from conftest import TEST_PASSWORD, token_for
 from rag_lab.ingestion.parsers import ParseError, extract_text_from_file
 from rag_lab.storage.workspace_manager import safe_upload_name, staged_path
+from rag_lab.config import settings
 
 
 # --- G1: upload names -------------------------------------------------------
@@ -43,7 +44,7 @@ def test_unsafe_or_unsupported_upload_names_are_refused(raw):
 
 
 def test_staged_upload_stays_inside_the_workspace_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr("rag_lab.storage.workspace_manager.UPLOADS_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
     target = staged_path("ops", "../../report.md")
     assert target.parent == (tmp_path / "uploads" / "ops").resolve()
     assert target.name == "report.md"

@@ -10,23 +10,11 @@ from typing import List, Dict, Any, Tuple
 import chromadb
 from psycopg_pool import ConnectionPool
 
-from rag_lab.config import (
-    BM25_DIR as _BM25_DIR,
-    CHROMA_PATH as _CHROMA_PATH,
-    DB_URI as _DB_URI,
-    UPLOADS_DIR as _UPLOADS_DIR,
-    KNOWLEDGE_BASE_DIR as _KNOWLEDGE_BASE_DIR,
-)
+from rag_lab.config import settings
 from rag_lab.storage.checkpointer import is_postgres_uri, get_sqlite_path
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index
 
-# Re-exported so tests and ingest can redirect storage without editing config.
-CHROMA_PATH = _CHROMA_PATH
-BM25_DIR = _BM25_DIR
-UPLOADS_DIR = _UPLOADS_DIR
-KNOWLEDGE_BASE_DIR = _KNOWLEDGE_BASE_DIR
-DB_URI = _DB_URI
 
 logger = logging.getLogger("workspace_manager")
 
@@ -62,7 +50,7 @@ def safe_upload_name(raw_name: str) -> str:
 
 def staged_path(ws_id: str, raw_name: str) -> Path:
     """Where an upload for a workspace is staged. Always inside that workspace's upload folder."""
-    base = (Path(UPLOADS_DIR) / ws_id).resolve()
+    base = (Path(settings.uploads_dir) / ws_id).resolve()
     target = (base / safe_upload_name(raw_name)).resolve()
     if target.parent != base:
         raise ValueError("Invalid file name.")
@@ -71,9 +59,9 @@ def staged_path(ws_id: str, raw_name: str) -> Path:
 
 def ensure_base_dirs():
     """Ensure all required root directories exist on disk."""
-    os.makedirs(CHROMA_PATH, exist_ok=True)
-    os.makedirs(BM25_DIR, exist_ok=True)
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    os.makedirs(settings.chroma_path, exist_ok=True)
+    os.makedirs(settings.bm25_dir, exist_ok=True)
+    os.makedirs(settings.uploads_dir, exist_ok=True)
 
 
 def list_workspaces() -> List[str]:
@@ -83,7 +71,7 @@ def list_workspaces() -> List[str]:
 
     # 1. Discover collections from ChromaDB (not the temporary __build/__old copies used while re-indexing)
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=settings.chroma_path)
         for col in client.list_collections():
             name = getattr(col, "name", str(col))
             if name.startswith("ws_") and not name.endswith(_TEMP_SUFFIXES):
@@ -92,15 +80,15 @@ def list_workspaces() -> List[str]:
         logger.warning("Could not list Chroma collections: %s", exc)
 
     # 2. Discover SQLite FTS5 keyword indices
-    if os.path.exists(BM25_DIR):
-        for f in os.listdir(BM25_DIR):
+    if os.path.exists(settings.bm25_dir):
+        for f in os.listdir(settings.bm25_dir):
             if f.endswith(".db"):
                 workspaces.add(f[:-3])
 
     # 3. Discover staged upload folders
-    if os.path.exists(UPLOADS_DIR):
-        for entry in os.listdir(UPLOADS_DIR):
-            full_path = os.path.join(UPLOADS_DIR, entry)
+    if os.path.exists(settings.uploads_dir):
+        for entry in os.listdir(settings.uploads_dir):
+            full_path = os.path.join(settings.uploads_dir, entry)
             if os.path.isdir(full_path) and not entry.startswith("."):
                 workspaces.add(entry)
 
@@ -117,7 +105,7 @@ def discover_knowledge_base_workspaces(base_dir: str | None = None) -> list[Tupl
     Symlinked folders are skipped so a link cannot pull content from outside the tree.
     When two folder names sanitize to the same ID, the first one wins.
     """
-    kb_path = Path(base_dir or KNOWLEDGE_BASE_DIR)
+    kb_path = Path(base_dir or settings.knowledge_base_dir)
     if not kb_path.is_dir():
         return []
 
@@ -175,11 +163,11 @@ def create_workspace(raw_name: str, actor: str | None = None) -> str:
         return ""
 
     # Ensure staging folder exists
-    os.makedirs(os.path.join(UPLOADS_DIR, ws_id), exist_ok=True)
+    os.makedirs(os.path.join(settings.uploads_dir, ws_id), exist_ok=True)
 
     # Initialize empty collection in ChromaDB
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=settings.chroma_path)
         client.get_or_create_collection(name=f"ws_{ws_id}", metadata={"hnsw:space": "cosine"})
     except Exception as exc:
         logger.warning("Could not create Chroma collection for %s: %s", ws_id, exc)
@@ -208,7 +196,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
 
     # 1. Delete Chroma collections
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=settings.chroma_path)
         for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
             try:
                 client.delete_collection(name=name)
@@ -218,7 +206,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
         logger.warning("Could not delete Chroma collection for %s: %s", ws_id, exc)
 
     # 2. Delete sparse index (SQLite FTS5 and any leftover legacy PKL)
-    delete_sparse_index(ws_id, base_dir=BM25_DIR)
+    delete_sparse_index(ws_id, base_dir=settings.bm25_dir)
 
     # 3. Delete semantic cache entries for this workspace
     try:
@@ -228,7 +216,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
         logger.debug("Could not clear cache for %s: %s", ws_id, exc)
 
     # 4. Delete manifest file if present
-    manifest_file = os.path.join(BM25_DIR, f"{ws_id}_manifest.json")
+    manifest_file = os.path.join(settings.bm25_dir, f"{ws_id}_manifest.json")
     if os.path.exists(manifest_file):
         try:
             os.remove(manifest_file)
@@ -236,16 +224,16 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
             pass
 
     # 5. Delete uploaded source files
-    upload_path = os.path.join(UPLOADS_DIR, ws_id)
+    upload_path = os.path.join(settings.uploads_dir, ws_id)
     if os.path.exists(upload_path):
         shutil.rmtree(upload_path, ignore_errors=True)
 
     # 6. Clean up checkpoint records for this workspace prefix
     escaped_ws = ws_id.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
     like_pattern = f"ui-{escaped_ws}-%"
-    if is_postgres_uri(DB_URI):
+    if is_postgres_uri(settings.db_uri):
         try:
-            with ConnectionPool(conninfo=DB_URI, max_size=2, open=True, kwargs={"autocommit": True}) as pool:
+            with ConnectionPool(conninfo=settings.db_uri, max_size=2, open=True, kwargs={"autocommit": True}) as pool:
                 with pool.connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute("DELETE FROM checkpoints WHERE thread_id LIKE %s ESCAPE '\\';", (like_pattern,))
@@ -255,7 +243,7 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
             logger.warning("Could not delete checkpoints for %s: %s", ws_id, exc)
     else:
         try:
-            sqlite_db = get_sqlite_path(DB_URI)
+            sqlite_db = get_sqlite_path(settings.db_uri)
             if os.path.exists(sqlite_db):
                 with closing(sqlite3.connect(sqlite_db)) as conn:
                     tables = {
@@ -291,7 +279,7 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
     # Chunks from Chroma
     try:
         from chromadb.errors import NotFoundError
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=settings.chroma_path)
         col = client.get_collection(name=f"ws_{ws_id}")
         chunk_count = col.count()
     except NotFoundError:
@@ -300,10 +288,10 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
         logger.warning("Could not read chunk count for %s: %s", ws_id, exc)
 
     # Sparse index presence
-    bm25_indexed = has_sparse_index(ws_id, base_dir=BM25_DIR)
+    bm25_indexed = has_sparse_index(ws_id, base_dir=settings.bm25_dir)
 
     # 1. Manifest count (tracks all indexed files across knowledge_base and uploads)
-    manifest_file = os.path.join(BM25_DIR, f"{ws_id}_manifest.json")
+    manifest_file = os.path.join(settings.bm25_dir, f"{ws_id}_manifest.json")
     if os.path.exists(manifest_file):
         try:
             import json
@@ -316,7 +304,7 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
     # 2. Fallback / union with unindexed files on disk
     seen_files = set()
-    roots = [Path(UPLOADS_DIR) / ws_id]
+    roots = [Path(settings.uploads_dir) / ws_id]
     for disc_id, kb_dir in discover_knowledge_base_workspaces():
         if disc_id == ws_id:
             roots.append(Path(kb_dir))
@@ -350,16 +338,7 @@ def print_status() -> int:
     from rag_lab.pipeline.graph import workflow
     from rag_lab.security.audit import verify_anchors, verify_chain
     from rag_lab.storage.checkpointer import get_checkpointer
-    from rag_lab.config import (
-        EMBED_MODEL,
-        ENABLE_RERANKER,
-        FASTEMBED_MODEL,
-        LLM_PROVIDER,
-        MODELS_DIR,
-        OLLAMA_BASE_URL,
-        OLLAMA_MODEL,
-        RERANKER_MODEL,
-    )
+    from rag_lab.config import settings
     from rag_lab.security.context_sanitizer import RUST_ACCEL
     from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
     from rag_lab.pipeline.llm_provider import ollama_models
@@ -378,10 +357,10 @@ def print_status() -> int:
     except EmbeddingUnavailableError as exc:
         print(f"[!!] Embedding provider  : {exc}")
         ok = False
-    required = ([FASTEMBED_MODEL] if provider == "fastembed" else []) + ([RERANKER_MODEL] if ENABLE_RERANKER else [])
+    required = ([settings.fastembed_model] if provider == "fastembed" else []) + ([settings.reranker_model] if settings.enable_reranker else [])
     for model_name in required:
         try:
-            verify_model(model_name, MODELS_DIR)
+            verify_model(model_name, settings.models_dir)
             print(f"[OK] Model verified      : {model_name}")
         except ModelIntegrityError as exc:
             print(f"[!!] Model unverified    : {model_name} ({exc})")
@@ -390,27 +369,27 @@ def print_status() -> int:
     # 2. Rust accelerator & Ollama. Ollama is optional unless a setting depends on it.
     accel_state = "active (native PyO3)" if RUST_ACCEL else "fallback (pure Python; run 'make rust-build' to compile)"
     print(f"[OK] Context sanitizer   : {accel_state}")
-    pulled = ollama_models(OLLAMA_BASE_URL)
-    chat_provider = LLM_PROVIDER.lower().strip()
+    pulled = ollama_models(settings.ollama_base_url)
+    chat_provider = settings.llm_provider.lower().strip()
     if pulled is None:
         if chat_provider == "ollama" or provider == "ollama":
-            print(f"[!!] Ollama              : offline at {OLLAMA_BASE_URL}, but the configuration requires it")
+            print(f"[!!] Ollama              : offline at {settings.ollama_base_url}, but the configuration requires it")
             ok = False
         else:
-            print(f"[OK] LLM backend         : Ollama offline at {OLLAMA_BASE_URL} (using deterministic in-process fallback)")
+            print(f"[OK] LLM backend         : Ollama offline at {settings.ollama_base_url} (using deterministic in-process fallback)")
     else:
-        if OLLAMA_MODEL in pulled:
-            print(f"[OK] LLM backend         : reachable ({OLLAMA_MODEL} at {OLLAMA_BASE_URL})")
+        if settings.chat_model in pulled:
+            print(f"[OK] LLM backend         : reachable ({settings.chat_model} at {settings.ollama_base_url})")
         elif chat_provider in ("ollama", "auto"):
-            print(f"[!!] LLM backend         : Ollama is up but {OLLAMA_MODEL} is not pulled (run 'make ollama-pull')")
+            print(f"[!!] LLM backend         : Ollama is up but {settings.chat_model} is not pulled (run 'make ollama-pull')")
             ok = False
         else:
-            print(f"[--] LLM backend         : {chat_provider}; {OLLAMA_MODEL} is not pulled into Ollama")
+            print(f"[--] LLM backend         : {chat_provider}; {settings.chat_model} is not pulled into Ollama")
         if provider == "ollama":
-            if EMBED_MODEL in pulled:
-                print(f"[OK] Ollama embeddings   : {EMBED_MODEL} pulled")
+            if settings.embed_model in pulled:
+                print(f"[OK] Ollama embeddings   : {settings.embed_model} pulled")
             else:
-                print(f"[!!] Ollama embeddings   : {EMBED_MODEL} is not pulled (run 'make ollama-pull')")
+                print(f"[!!] Ollama embeddings   : {settings.embed_model} is not pulled (run 'make ollama-pull')")
                 ok = False
 
     # 3. Accounts & RBAC policy
@@ -456,8 +435,8 @@ def print_status() -> int:
         ok = False
 
     # 6. Audit chain & anchors
-    from rag_lab.config import AUDIT_DB_PATH
-    if not Path(AUDIT_DB_PATH).exists():
+    from rag_lab.config import settings
+    if not Path(settings.audit_db_path).exists():
         print("[OK] Audit log integrity : 0 record(s) verified (not initialized yet)")
     else:
         chain_ok, bad_seq, count = verify_chain()

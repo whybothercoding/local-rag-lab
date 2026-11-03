@@ -16,11 +16,13 @@ os.environ["HF_HUB_OFFLINE"] = "0"
 
 from huggingface_hub import snapshot_download
 
-from rag_lab.config import FASTEMBED_MODEL, MODELS_DIR, RERANKER_MODEL
+from rag_lab.config import settings
 from rag_lab.security.model_integrity import PINNED_MODELS, ModelIntegrityError, verify_model
 
 
-def fetch_model(model_name: str = FASTEMBED_MODEL, cache_dir: str = MODELS_DIR):
+def fetch_model(model_name: str | None = None, cache_dir: str | None = None):
+    model_name = settings.fastembed_model if model_name is None else model_name
+    cache_dir = settings.models_dir if cache_dir is None else cache_dir
     spec = PINNED_MODELS.get(model_name)
     if spec is None:
         raise ModelIntegrityError(f"Model '{model_name}' has no pinned SHA-256 entries; refusing to download it.")
@@ -42,14 +44,14 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        models_to_check = [FASTEMBED_MODEL, RERANKER_MODEL]
+        models_to_check = [settings.fastembed_model, settings.reranker_model]
         if args.verify_only:
             for m in models_to_check:
-                path = verify_model(m, MODELS_DIR)
+                path = verify_model(m, settings.models_dir)
                 print(f"Model '{m}' verified offline at {path}")
         else:
             for m in models_to_check:
-                path = fetch_model(m, MODELS_DIR)
+                path = fetch_model(m, settings.models_dir)
                 print(f"Model '{m}' downloaded and verified at {path}")
     except ModelIntegrityError as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -136,28 +136,24 @@ def test_runtime_data_defaults_resolve_to_the_repository_root(monkeypatch):
     A default inside the package would silently create fresh keys there, so the real policy would fail
     its integrity check and existing audit and checkpoint data could not be decrypted.
     """
-    import importlib
-
     import rag_lab
-    import rag_lab.config as config
+    from rag_lab.config import DEFAULT_SQLITE_PATH, Settings
 
     repo = Path(__file__).resolve().parent.parent
     assert rag_lab.ROOT == repo
-    for var in ("CHROMA_PATH", "BM25_DIR", "UPLOADS_DIR", "KNOWLEDGE_BASE_DIR", "AUDIT_DB_PATH", "CACHE_DB_PATH",
-                "ACCESS_POLICY_PATH", "ACCESS_KEY_PATH", "DATA_KEY_PATH", "ANCHOR_PATH", "BACKUP_DIR", "MODELS_DIR",
-                "DB_URI"):
-        monkeypatch.delenv(var, raising=False)
-    try:
-        defaults = importlib.reload(config)
-        for name in ("CHROMA_PATH", "BM25_DIR", "UPLOADS_DIR", "KNOWLEDGE_BASE_DIR", "AUDIT_DB_PATH",
-                     "CACHE_DB_PATH", "ACCESS_POLICY_PATH", "ACCESS_KEY_PATH", "DATA_KEY_PATH", "ANCHOR_PATH",
-                     "BACKUP_DIR", "MODELS_DIR", "DEFAULT_SQLITE_PATH"):
-            path = Path(getattr(defaults, name)).resolve()
-            assert path.is_relative_to(repo), name
-            assert not path.is_relative_to(repo / "rag_lab"), f"{name} points inside the package: {path}"
-    finally:
-        monkeypatch.undo()
-        importlib.reload(config)
+    path_fields = ("chroma_path", "bm25_dir", "uploads_dir", "knowledge_base_dir", "audit_db_path", "cache_db_path",
+                   "access_policy_path", "access_key_path", "data_key_path", "anchor_path", "backup_dir", "models_dir")
+    for field in path_fields + ("db_uri",):
+        monkeypatch.delenv(field.upper(), raising=False)
+    # A fresh instance, never a reload: every module holds the one shared settings object.
+    defaults = Settings.from_env()
+    paths = {field: getattr(defaults, field) for field in path_fields}
+    paths["db_uri"] = defaults.db_uri.removeprefix("sqlite:///")
+    paths["DEFAULT_SQLITE_PATH"] = DEFAULT_SQLITE_PATH
+    for name, raw in paths.items():
+        path = Path(raw).resolve()
+        assert path.is_relative_to(repo), name
+        assert not path.is_relative_to(repo / "rag_lab"), f"{name} points inside the package: {path}"
 
 
 def test_rag_lab_home_overrides_the_root(monkeypatch, tmp_path):
@@ -189,3 +185,22 @@ def test_password_denylist_ships_with_the_package():
 
     assert _DENYLIST_PATH.is_file()
     assert len(_common_passwords()) >= 30  # only entries of at least MIN_PASSWORD_LENGTH matter
+
+
+def test_settings_are_read_at_call_time(monkeypatch, tmp_path):
+    """Overriding one settings field redirects every module that uses it; no module keeps a copy."""
+    import ast
+
+    from rag_lab.config import LEGACY_NAMES, settings
+    from rag_lab.retrieval.sparse_search import get_fts_db_path
+
+    monkeypatch.setattr(settings, "bm25_dir", str(tmp_path))
+    assert get_fts_db_path("ws").startswith(str(tmp_path))
+
+    # No module may import a former config constant or bind one at module level.
+    for path in (Path(__file__).resolve().parent.parent / "rag_lab").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "rag_lab.config":
+                stale = [a.name for a in node.names if a.name in LEGACY_NAMES]
+                assert not stale, f"{path.name} imports {stale}; read settings.<field> at call time instead"

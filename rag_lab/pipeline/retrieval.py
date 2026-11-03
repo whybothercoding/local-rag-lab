@@ -11,11 +11,7 @@ import time
 from chromadb.errors import NotFoundError
 import chromadb
 
-from rag_lab.config import BM25_DIR
-from rag_lab.config import CHROMA_PATH
-from rag_lab.config import MAX_RETRIEVAL_RETRIES
-from rag_lab.config import RELEVANCE_MIN_COVERAGE
-from rag_lab.config import RELEVANCE_MIN_SIMILARITY
+from rag_lab.config import settings
 from rag_lab.pipeline import llm_provider
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError
@@ -53,7 +49,7 @@ class _EmbeddingMismatch(RuntimeError):
 
 def _manifest(ws_id: str) -> dict | None:
     """The workspace's ingestion manifest, or None. Used for indexes that predate fingerprinted collections."""
-    path = Path(BM25_DIR) / f"{ws_id}_manifest.json"
+    path = Path(settings.bm25_dir) / f"{ws_id}_manifest.json"
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -128,7 +124,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
 
     # 1. Dense retrieval (ChromaDB) with clearance filter + fail-closed post-query verification
     try:
-        chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+        chroma_client = chromadb.PersistentClient(path=settings.chroma_path)
         collection = chroma_client.get_collection(name=f"ws_{ws_id}")
         raw_meta = getattr(collection, "metadata", None)
         space = str(raw_meta.get("hnsw:space", "l2")) if isinstance(raw_meta, dict) else "l2"
@@ -174,9 +170,9 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             query,
             top_n=5,
             allowed_clearances=authorized_clrs,
-            base_dir=BM25_DIR,
+            base_dir=settings.bm25_dir,
         )
-        if dense_candidates and not has_sparse_index(ws_id, base_dir=BM25_DIR):
+        if dense_candidates and not has_sparse_index(ws_id, base_dir=settings.bm25_dir):
             degraded.append("sparse_retrieval_unavailable: the keyword index is missing; re-index the workspace")
     except Exception as exc:
         degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}: {exc}")
@@ -187,7 +183,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     query_terms = _content_terms(query)
     best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
     relevant = bool(candidates) and (
-        best_similarity >= RELEVANCE_MIN_SIMILARITY or best_coverage >= RELEVANCE_MIN_COVERAGE
+        best_similarity >= settings.relevance_min_similarity or best_coverage >= settings.relevance_min_coverage
     )
 
     # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant, drop chunks that carry
@@ -294,7 +290,7 @@ def grade_documents_node(state: StateInput) -> dict[str, Any]:
     retries = state.get("retry_count", 0)
 
     if not docs:
-        if retries >= MAX_RETRIEVAL_RETRIES:
+        if retries >= settings.max_retrieval_retries:
             return {"grade_status": "circuit_break"}
         return {"grade_status": "rewrite", "retry_count": retries + 1}
 

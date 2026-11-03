@@ -1,5 +1,5 @@
 
-from rag_lab.config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+from rag_lab.config import settings
 
 from conftest import token_for
 from rag_lab.pipeline.entry import guardrail_input_node, cache_lookup_node, router_node, SEMANTIC_CACHE
@@ -69,7 +69,7 @@ def test_grade_documents_approved():
 
 
 def test_grade_documents_trips_circuit_breaker_on_max_retries():
-    state = {"documents": [], "retry_count": MAX_RETRIEVAL_RETRIES}
+    state = {"documents": [], "retry_count": settings.max_retrieval_retries}
     result = grade_documents_node(state)
     assert result["grade_status"] == "circuit_break"
 
@@ -220,7 +220,7 @@ def test_grade_hallucination_trips_circuit_breaker_on_max_retries():
     state = {
         "documents": ["The capital of France is Paris."],
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     }
     result = grade_hallucination_node(state)
     assert result["hallucination_status"] == "circuit_break"
@@ -345,7 +345,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     hal_cb = grade_hallucination_node({
         "documents": ["Some valid document content."],
         "generation": "",
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     })
     assert hal_cb["hallucination_status"] == "circuit_break"
 
@@ -361,7 +361,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     rel_cb = grade_answer_relevance_node({
         "original_question": "What is the policy?",
         "generation": "",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
     })
     assert rel_cb["relevance_status"] == "circuit_break"
 

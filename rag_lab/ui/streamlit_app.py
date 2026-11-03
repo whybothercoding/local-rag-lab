@@ -35,9 +35,8 @@ from rag_lab.pipeline.graph import workflow
 from rag_lab.pipeline.state import GraphState
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
-import rag_lab.storage.checkpointer as checkpointer_module
 from rag_lab.storage.checkpointer import close_checkpointer, fetch_checkpoint_threads, open_checkpointer, shared_pool
-from rag_lab.config import MAX_SOURCE_BYTES, UPLOADS_DIR
+from rag_lab.config import settings
 from rag_lab.ingestion.ingest import ingest_workspace
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
 from rag_lab.security.redaction import redact_pii
@@ -314,7 +313,7 @@ active_ws = st.sidebar.selectbox("Active Workspace", visible)
 stats = get_workspace_stats(active_ws)
 st.sidebar.caption(f"Status: **{stats['files']}** files | **{stats['chunks']}** indexed chunks")
 
-engine = compiled_engine(checkpointer_module.DB_URI)
+engine = compiled_engine(settings.db_uri)
 
 user_threads = load_user_threads(engine, user, active_ws)
 
@@ -528,8 +527,8 @@ if admin:
     if st.sidebar.button(f"Index into '{active_ws}'", use_container_width=True) and uploaded_files:
         accepted = 0
         for uf in uploaded_files:
-            if uf.size > MAX_SOURCE_BYTES:
-                st.sidebar.error(f"'{uf.name}' is larger than {MAX_SOURCE_BYTES // (1024 * 1024)} MB and was not saved.")
+            if uf.size > settings.max_source_bytes:
+                st.sidebar.error(f"'{uf.name}' is larger than {settings.max_source_bytes // (1024 * 1024)} MB and was not saved.")
                 continue
             try:
                 target = staged_path(active_ws, uf.name)
@@ -543,7 +542,7 @@ if admin:
 
         if accepted:
             with st.spinner(f"Parsing, chunking, and embedding into '{active_ws}'..."):
-                res = ingest_workspace(active_ws, str(Path(UPLOADS_DIR) / active_ws), actor=user)
+                res = ingest_workspace(active_ws, str(Path(settings.uploads_dir) / active_ws), actor=user)
             for skipped_note in res.skipped:
                 st.sidebar.warning(f"Skipped {skipped_note}")
             if not res.ok:

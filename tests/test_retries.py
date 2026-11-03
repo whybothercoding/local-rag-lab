@@ -6,7 +6,7 @@ from rag_lab.pipeline.generation import _generation_prompt, generate_node
 from rag_lab.pipeline.grading import grade_answer_relevance_node, grade_hallucination_node
 from rag_lab.pipeline.retrieval import query_rewrite_node
 from rag_lab.pipeline.graph import workflow
-from rag_lab.config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+from rag_lab.config import settings
 from conftest import token_for
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 
@@ -112,7 +112,7 @@ def test_exhausted_rewrites_do_not_consume_generation_retries():
     result = grade_hallucination_node({
         "documents": DOCS,
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
         "generation_retry_count": 0,
         "telemetry": _real_model_telemetry(),
     })
@@ -125,7 +125,7 @@ def test_exhausted_generation_retries_do_not_consume_rewrites(monkeypatch):
         "original_question": QUESTION,
         "generation": "Expense reports are due monthly.",
         "retry_count": 0,
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     })
     assert result["relevance_status"] == "irrelevant"
     assert result["retry_count"] == 1
@@ -137,11 +137,11 @@ def test_generation_budget_is_enforced():
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
         "telemetry": _real_model_telemetry(),
     }
-    for attempt in range(MAX_GENERATION_RETRIES):
+    for attempt in range(settings.max_generation_retries):
         result = grade_hallucination_node({**state, "generation_retry_count": attempt})
         assert result["hallucination_status"] == "retry"
         assert result["generation_retry_count"] == attempt + 1
-    final = grade_hallucination_node({**state, "generation_retry_count": MAX_GENERATION_RETRIES})
+    final = grade_hallucination_node({**state, "generation_retry_count": settings.max_generation_retries})
     assert final["hallucination_status"] == "circuit_break"
 
 
@@ -225,16 +225,16 @@ def test_worst_case_path_terminates_within_both_budgets(rollback_index, monkeypa
 
     assert pending == ("human_approval",)
     assert values["relevance_status"] == "circuit_break"
-    assert values["retry_count"] == MAX_RETRIEVAL_RETRIES
-    assert values["generation_retry_count"] == MAX_GENERATION_RETRIES
+    assert values["retry_count"] == settings.max_retrieval_retries
+    assert values["generation_retry_count"] == settings.max_generation_retries
     # One answer per retrieval round plus one per generation retry: bounded, never a loop.
     # (The first rewrite also asks the model for a keyword query; that call is not an answer.)
     answers = [p for p in model.prompts if p.startswith("Context:")]
-    assert len(answers) == (MAX_RETRIEVAL_RETRIES + 1) + MAX_GENERATION_RETRIES
+    assert len(answers) == (settings.max_retrieval_retries + 1) + settings.max_generation_retries
     # Exact step count: 3 entry nodes, 6 nodes per retrieval round, a rewrite per extra round, 2 per
     # generation retry, and the review node. LangGraph >= 1.1 (the declared floor) allows 10,000 by default;
     # 1.0 allowed 25, which this path (26 at default budgets) would exceed.
-    expected = 3 + 6 * (MAX_RETRIEVAL_RETRIES + 1) + MAX_RETRIEVAL_RETRIES + 2 * MAX_GENERATION_RETRIES + 1
+    expected = 3 + 6 * (settings.max_retrieval_retries + 1) + settings.max_retrieval_retries + 2 * settings.max_generation_retries + 1
     assert steps == expected, steps
 
 
@@ -265,8 +265,8 @@ def test_a_new_question_in_the_same_thread_starts_with_fresh_budgets(rollback_in
         "question": QUESTION,
         "principal_token": token_for("carol"),
         "workspace_id": "default",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
+        "generation_retry_count": settings.max_generation_retries,
         "grader_feedback": "stale",
         "degraded": ["security_warning: from the previous question"],
     })
