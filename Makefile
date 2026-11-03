@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -60,6 +60,7 @@ help:
 	@echo "  make coverage                                  Run the suite with a per-module coverage report"
 	@echo "  make eval                                      Run offline RAG evaluation gate (eval/golden.json)"
 	@echo "  make eval-judge                                Run evaluation with local Ollama LLM-as-a-judge"
+	@echo "  make eval-llm [SUITE=en]                       Evaluate answers from the local Ollama model, judge gated"
 	@echo "  make eval-calibrate                            Print retrieval calibration split signals"
 	@echo "  make graph                                     Export LangGraph architecture diagram to docs/"
 	@echo "  make clean                                     Remove caches and temporary artifacts"
@@ -259,6 +260,10 @@ eval:
 # Same gates, plus an advisory answer-support check by the local Ollama model
 eval-judge:
 	./venv/bin/python -m rag_lab.ops.eval --judge
+
+# Answer with the local Ollama model and gate the LLM judge too (needs 'ollama serve'; SUITE=en limits it)
+eval-llm:
+	./venv/bin/python -m rag_lab.ops.eval --llm $(if $(SUITE),--suite $(SUITE),)
 
 # Print retrieval similarity and coverage signals for the calibration split
 eval-calibrate:

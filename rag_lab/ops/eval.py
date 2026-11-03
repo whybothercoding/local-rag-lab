@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Offline evaluation: retrieval, answer, abstention, and access-control behavior.
+"""Offline evaluation: retrieval, answers, abstention, access control, cache safety, and conversations.
 
-Builds its own index from eval/corpus/ under eval/out/ and runs the real LangGraph pipeline.
-Every store is redirected into eval/out/ before the project imports load, so the evaluation
-never reads or writes production data.
+Builds its own index from eval/corpus/ under eval/out/ and runs the real LangGraph pipeline. Every
+store is redirected into eval/out/ before the project imports load, so the evaluation never reads or
+writes production data.
 
-Cases are split into a calibration split, used to choose thresholds, and a held-out test split,
-which the gates measure. The default LLM is the deterministic in-process synthesizer, so results
-are reproducible and need no network or model daemon. Set LLM_PROVIDER to score another backend.
+Cases carry a `suite` (en, multilingual, conversation) and a `lang` (question language). Each suite
+has its own gates, measured on its held-out test split; the calibration split is for choosing
+thresholds. A suite whose gates are None is measured and reported but not gated yet (see SUITE_GATES).
+
+Default mode uses the deterministic in-process synthesizer, so results are reproducible and need no
+model daemon (this is what CI gates). `--llm` runs the same cases against the local Ollama model and
+also gates an LLM judge that checks every answer is supported by its retrieved context.
 
 --calibrate prints the retrieval signals per calibration case, for choosing thresholds.
---judge additionally asks the local Ollama model whether each answer is supported by its context.
-The judge is reported, never gated.
+--judge adds the judge to a deterministic run (reported, not gated).
 """
 import argparse
 import json
@@ -19,33 +22,17 @@ import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 from rag_lab import ROOT  # the package root only: no project module may load before the redirect below
 
 EVAL_DIR = ROOT / "eval"
-OUT_DIR = EVAL_DIR / "out"
+# EVAL_OUT_DIR lets tests and parallel runs keep their stores and report apart from eval/out/.
+OUT_DIR = Path(os.environ.get("EVAL_OUT_DIR") or EVAL_DIR / "out")
 CORPUS_DIR = EVAL_DIR / "corpus"
 GOLDEN_PATH = EVAL_DIR / "golden.json"
 
-# Redirect every store before config/app are imported. Setting these after import has no effect.
-shutil.rmtree(OUT_DIR, ignore_errors=True)
-os.environ["CHROMA_PATH"] = str(OUT_DIR / "chroma")
-os.environ["BM25_DIR"] = str(OUT_DIR / "bm25")
-os.environ["UPLOADS_DIR"] = str(OUT_DIR / "uploads")
-os.environ["AUDIT_DB_PATH"] = str(OUT_DIR / "audit.db")
-os.environ["CACHE_DB_PATH"] = str(OUT_DIR / "cache.db")
-os.environ["ACCESS_POLICY_PATH"] = str(OUT_DIR / "access_policy.json")
-os.environ["ACCESS_KEY_PATH"] = str(OUT_DIR / "access.key")
-os.environ["DATA_KEY_PATH"] = str(OUT_DIR / "data.key")
-os.environ["ANCHOR_PATH"] = str(OUT_DIR / "audit_anchors.jsonl")
-os.environ["DB_URI"] = f"sqlite:///{OUT_DIR / 'unused_checkpoints.db'}"
-os.environ.setdefault("LLM_PROVIDER", "deterministic")
-
-from langgraph.checkpoint.memory import MemorySaver
-
-from rag_lab.security.access import issue_token, save_policy
-from rag_lab.pipeline.graph import workflow
-from rag_lab.ops.eval_metrics import (
+from rag_lab.ops.eval_metrics import (  # pure functions: importing them loads no settings
     check_thresholds,
     cited_sources,
     context_precision,
@@ -53,12 +40,37 @@ from rag_lab.ops.eval_metrics import (
     keyword_recall,
     summarize,
 )
-from rag_lab.ingestion.ingest import ingest_workspace
-from rag_lab.pipeline.llm_provider import get_chat_llm, is_ollama_alive
-from rag_lab.retrieval.semantic_cache import clear_cache
 
-# Pass/fail gates, measured on the held-out test split only. Thresholds were chosen from the
-# calibration split. Judge support is reported but not gated.
+
+def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
+    """Point every store at out_dir (wiping it) before any project module that reads settings is imported.
+
+    settings is built from the environment on its first import, so this must run first. Importing this
+    module has no side effects; only main() calls it.
+    """
+    shutil.rmtree(out_dir, ignore_errors=True)
+    os.environ["CHROMA_PATH"] = str(out_dir / "chroma")
+    os.environ["BM25_DIR"] = str(out_dir / "bm25")
+    os.environ["UPLOADS_DIR"] = str(out_dir / "uploads")
+    os.environ["AUDIT_DB_PATH"] = str(out_dir / "audit.db")
+    os.environ["CACHE_DB_PATH"] = str(out_dir / "cache.db")
+    os.environ["ACCESS_POLICY_PATH"] = str(out_dir / "access_policy.json")
+    os.environ["ACCESS_KEY_PATH"] = str(out_dir / "access.key")
+    os.environ["DATA_KEY_PATH"] = str(out_dir / "data.key")
+    os.environ["ANCHOR_PATH"] = str(out_dir / "audit_anchors.jsonl")
+    os.environ["DB_URI"] = f"sqlite:///{out_dir / 'unused_checkpoints.db'}"
+    if llm_mode:
+        os.environ["LLM_PROVIDER"] = "ollama"
+    else:
+        os.environ.setdefault("LLM_PROVIDER", "deterministic")
+    if "rag_lab.config" in sys.modules:
+        raise RuntimeError("rag_lab.config was imported before the eval stores were redirected")
+
+
+# Pass/fail gates per suite, measured on that suite's held-out test split. Thresholds were chosen from
+# the calibration split. None means measured and reported, not gated yet:
+#   multilingual -> gated once Phase 2 (multilingual models, patterns, and language data) lands
+#   conversation -> gated once Phase 3 (follow-up questions use the conversation history) lands
 DEFAULT_THRESHOLDS = {
     "answer_rate": 0.9,
     "retrieval_recall": 0.9,
@@ -66,16 +78,29 @@ DEFAULT_THRESHOLDS = {
     "groundedness": 0.5,
     "abstention_accuracy": 0.8,
     "security_accuracy": 1.0,
+    "cache_accuracy": 1.0,
 }
+SUITE_GATES: dict[str, dict[str, float] | None] = {
+    "en": DEFAULT_THRESHOLDS,
+    "multilingual": None,
+    "conversation": None,
+}
+# Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
+LLM_JUDGE_MIN = float(os.getenv("EVAL_LLM_JUDGE_MIN", "0.8"))
 
 JUDGE_PROMPT = (
     "Context:\n{context}\n\nAnswer:\n{answer}\n\n"
-    "Is every factual claim in the answer supported by the context? Reply with exactly one word: yes or no."
+    "Is every factual claim in the answer supported by the context? The context and the answer may be in "
+    "different languages. Reply with exactly one word: yes or no."
 )
+
+WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens")
 
 
 def seed_policy() -> None:
     """Evaluation accounts need no passwords; they exist only to exercise authorization and clearance."""
+    from rag_lab.security.access import save_policy
+
     save_policy({
         "version": 2,
         "defaults": {"permissions": []},
@@ -83,16 +108,12 @@ def seed_policy() -> None:
             "eval": {
                 "password_hash": "", "admin": False, "clearance": "public",
                 "uid": "eval0001", "token_version": 0,
-                "grants": {
-                    "engineering": ["query", "auto_approve"],
-                    "finance": ["query", "auto_approve"],
-                    "hr": ["query", "auto_approve"],
-                },
+                "grants": {ws: ["query", "auto_approve"] for ws in WORKSPACES},
             },
             "eval-secret": {
                 "password_hash": "", "admin": False, "clearance": "secret",
                 "uid": "eval0002", "token_version": 0,
-                "grants": {"engineering": ["query", "auto_approve"]},
+                "grants": {"engineering": ["query", "auto_approve"], "zurich": ["query", "auto_approve"]},
             },
             "eval-outsider": {
                 "password_hash": "", "admin": False, "clearance": "public",
@@ -104,6 +125,8 @@ def seed_policy() -> None:
 
 
 def build_indices() -> None:
+    from rag_lab.ingestion.ingest import ingest_workspace
+
     for workspace_dir in sorted(p for p in CORPUS_DIR.iterdir() if p.is_dir()):
         result = ingest_workspace(workspace_dir.name, str(workspace_dir))
         if not result.ok:
@@ -119,49 +142,55 @@ def judge_support(llm, documents: list[str], answer: str) -> bool | None:
     return reply.startswith("yes")
 
 
-def run_case(engine, case: dict, judge_llm=None) -> dict:
-    clear_cache()
-    thread_id = f"eval-{case['id']}"
-    config = {"configurable": {"thread_id": thread_id}}
-    inputs = {
+def _inputs(case: dict, question: str, thread_id: str) -> dict:
+    from rag_lab.security.access import issue_token
+
+    return {
         "workspace_id": case["workspace"],
         "session_id": thread_id,
         "principal_token": issue_token(case.get("principal", "eval")),
-        "question": case["question"],
-        "original_question": case["question"],
-        "sanitized_question": "",
-        "documents": [],
-        "citations": [],
-        "generation": "",
-        "intent": "",
-        "cache_hit": False,
-        "is_safe": True,
-        "grade_status": "",
-        "hallucination_status": "",
-        "relevance_status": "",
-        "retry_count": 0,
-        "generation_retry_count": 0,
-        "grader_feedback": "",
-        "history": [],
+        "question": question,
+        "original_question": question,
         "telemetry": {},
-        "degraded": [],
     }
 
-    started = time.perf_counter()
-    for _ in engine.stream(inputs, config=config):
+
+def _ask(engine, case: dict, question: str, thread_id: str) -> dict:
+    config = {"configurable": {"thread_id": thread_id}}
+    for _ in engine.stream(_inputs(case, question, thread_id), config=config):
         pass
+    return dict(engine.get_state(config).values)
+
+
+def run_case(engine, case: dict, judge_llm=None) -> dict:
+    from rag_lab.retrieval.semantic_cache import cache_stats, clear_cache
+
+    clear_cache()
+    thread_id = f"eval-{case['id']}"
+    # Cache cases: earlier questions in their own threads, so only the shared cache links them.
+    for i, earlier in enumerate(case.get("setup", [])):
+        _ask(engine, case, earlier, f"{thread_id}-setup-{i}")
+    setup_cached = cache_stats()["total_entries"] > 0
+    # Conversation cases: earlier turns in the same thread as the follow-up.
+    for earlier in case.get("history", []):
+        _ask(engine, case, earlier, thread_id)
+
+    started = time.perf_counter()
+    values = _ask(engine, case, case["question"], thread_id)
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
 
-    values = engine.get_state(config).values
     telemetry = values.get("telemetry", {})
     answer = values.get("generation", "")
     citations = values.get("citations", [])
     sources = cited_sources(citations)
     expect = case.get("expect", "answer")
+    cache_hit = bool(telemetry.get("cache_hit"))
 
     result = {
         "id": case["id"],
         "split": case.get("split", "test"),
+        "suite": case.get("suite", "en"),
+        "lang": case.get("lang", "en"),
         "workspace": case["workspace"],
         "expect": expect,
         "question": case["question"],
@@ -169,6 +198,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "citations": citations,
         "latency_ms": latency_ms,
         "abstained": "could not find" in answer.lower(),
+        "cache_hit": cache_hit,
         "best_similarity": telemetry.get("best_similarity"),
         "best_coverage": telemetry.get("best_coverage"),
         "relevant": telemetry.get("relevant"),
@@ -181,6 +211,12 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         result["passed"] = values.get("is_safe") is False and "SECURITY VIOLATION" in answer
     elif expect == "abstain":
         result["passed"] = result["abstained"]
+    elif expect == "cached":
+        result["passed"] = cache_hit
+    elif expect == "fresh":
+        # Only meaningful when the earlier answer was cached; otherwise nothing could have been reused.
+        result["setup_cached"] = setup_cached
+        result["passed"] = setup_cached and not cache_hit
     else:
         expected_sources = case.get("expected_sources", [])
         keywords = case.get("expected_keywords", [])
@@ -197,51 +233,97 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
 
 
 def print_calibration(results: list[dict]) -> None:
-    print(f"\n{'case':<26}{'expect':<9}{'similarity':>11}{'coverage':>10}{'relevant':>10}  note")
-    print("-" * 74)
+    print(f"\n{'case':<28}{'lang':<5}{'expect':<9}{'similarity':>11}{'coverage':>10}{'relevant':>10}  note")
+    print("-" * 81)
     for r in results:
         sim = "-" if r["best_similarity"] is None else f"{r['best_similarity']:.3f}"
         cov = "-" if r["best_coverage"] is None else f"{r['best_coverage']:.2f}"
         note = "degraded" if r["degraded"] else ""
-        print(f"{r['id']:<26}{r['expect']:<9}{sim:>11}{cov:>10}{str(r['relevant']):>10}  {note}")
+        print(f"{r['id']:<28}{r['lang']:<5}{r['expect']:<9}{sim:>11}{cov:>10}{str(r['relevant']):>10}  {note}")
 
 
 def print_table(results: list[dict], summary: dict, title: str) -> None:
     print(f"\n{title}")
-    print(f"{'case':<26}{'expect':<9}{'recall':>8}{'prec':>7}{'keywd':>7}{'ground':>8}{'pass':>6}")
-    print("-" * 71)
+    print(f"{'case':<28}{'lang':<5}{'expect':<9}{'recall':>8}{'prec':>7}{'keywd':>7}{'ground':>8}{'pass':>6}")
+    print("-" * 78)
     for r in results:
         def fmt(value):
             return f"{value:.2f}" if isinstance(value, float) else "-"
         print(
-            f"{r['id']:<26}{r['expect']:<9}{fmt(r.get('context_recall')):>8}"
+            f"{r['id']:<28}{r['lang']:<5}{r['expect']:<9}{fmt(r.get('context_recall')):>8}"
             f"{fmt(r.get('context_precision')):>7}{fmt(r.get('keyword_recall')):>7}"
             f"{fmt(r.get('groundedness')):>8}{'yes' if r['passed'] else 'NO':>6}"
         )
-    print("-" * 71)
+    print("-" * 78)
     for key, value in summary.items():
         print(f"{key:<22} {value}")
 
 
+def print_language_breakdown(results: list[dict]) -> None:
+    """Pass rate per question language across every suite's test split."""
+    print(f"\n{'language':<10}{'cases':>7}{'passed':>8}{'rate':>7}")
+    for lang in sorted({r["lang"] for r in results}):
+        rows = [r for r in results if r["lang"] == lang]
+        passed = sum(1 for r in rows if r["passed"])
+        print(f"{lang:<10}{len(rows):>7}{passed:>8}{passed / len(rows):>7.2f}")
+
+
+def suite_gates(suite: str, overrides: dict[str, float], llm_mode: bool) -> dict[str, float] | None:
+    gates = SUITE_GATES.get(suite)
+    if gates is None:
+        return None
+    gates = {**gates, **(overrides if suite == "en" else {})}
+    if llm_mode:
+        gates["judge_support"] = LLM_JUDGE_MIN
+    return gates
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Offline retrieval, answer, abstention, and access evaluation.")
+    parser = argparse.ArgumentParser(description="Offline retrieval, answer, abstention, access, and cache evaluation.")
     for metric, default in DEFAULT_THRESHOLDS.items():
-        parser.add_argument(f"--min-{metric.replace('_', '-')}", type=float, default=default)
+        parser.add_argument(f"--min-{metric.replace('_', '-')}", type=float, default=default,
+                            help=f"gate for the en suite (default {default})")
     parser.add_argument("--calibrate", action="store_true", help="Print retrieval signals for the calibration split")
     parser.add_argument("--judge", action="store_true", help="Also score answer support with the local Ollama model")
+    parser.add_argument("--llm", action="store_true",
+                        help="Answer with the local Ollama model and gate the LLM judge (needs 'ollama serve')")
+    parser.add_argument("--suite", action="append", choices=sorted(SUITE_GATES),
+                        help="Run only these suites (repeatable); default all")
     args = parser.parse_args()
-    thresholds = {metric: getattr(args, f"min_{metric}") for metric in DEFAULT_THRESHOLDS}
+    overrides = {metric: getattr(args, f"min_{metric}") for metric in DEFAULT_THRESHOLDS}
+
+    redirect_stores(OUT_DIR, args.llm)
+    from langchain_core.language_models import BaseChatModel
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from rag_lab.pipeline.graph import workflow
+    from rag_lab.pipeline.llm_provider import get_chat_llm, is_ollama_alive
+
+    judge_llm: BaseChatModel | None = None
+    if args.llm or args.judge:
+        if not is_ollama_alive():
+            message = "Ollama is not reachable at its configured URL. Start it with 'ollama serve'."
+            if args.llm:
+                print(f"--llm needs a model: {message}")
+                return 2
+            print(f"Judge skipped: {message}")
+        else:
+            # A different judge model avoids the answering model grading itself (EVAL_JUDGE_MODEL).
+            judge_model = os.getenv("EVAL_JUDGE_MODEL")
+            if judge_model:
+                from langchain_ollama import ChatOllama
+
+                from rag_lab.config import settings
+
+                judge_llm = ChatOllama(model=judge_model, base_url=settings.ollama_base_url, temperature=0.0)
+            else:
+                judge_llm = get_chat_llm("ollama")
 
     seed_policy()
     build_indices()
     cases = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
-
-    judge_llm = None
-    if args.judge:
-        if is_ollama_alive():
-            judge_llm = get_chat_llm("ollama")
-        else:
-            print("Judge skipped: Ollama is not reachable at its configured URL.")
+    if args.suite:
+        cases = [c for c in cases if c.get("suite", "en") in args.suite]
 
     engine = workflow.compile(checkpointer=MemorySaver())
     results = [run_case(engine, case, judge_llm) for case in cases]
@@ -250,29 +332,32 @@ def main() -> int:
         print_calibration([r for r in results if r["split"] == "calibration"])
         return 0
 
-    calibration = [r for r in results if r["split"] == "calibration"]
-    test = [r for r in results if r["split"] == "test"]
-    cal_summary, test_summary = summarize(calibration), summarize(test)
-    failures = check_thresholds(test_summary, thresholds)
+    report: dict = {"mode": "llm" if args.llm else "deterministic", "suites": {}, "results": results}
+    all_failures: list[str] = []
+    for suite in [s for s in SUITE_GATES if any(r["suite"] == s for r in results)]:
+        rows = [r for r in results if r["suite"] == suite]
+        calibration = [r for r in rows if r["split"] == "calibration"]
+        test = [r for r in rows if r["split"] == "test"]
+        cal_summary, test_summary = summarize(calibration), summarize(test)
+        gates = suite_gates(suite, overrides, args.llm)
+        failures = check_thresholds(test_summary, gates) if gates is not None else []
+        all_failures += [f"[{suite}] {f}" for f in failures]
+        report["suites"][suite] = {
+            "calibration": cal_summary, "test": test_summary, "thresholds": gates, "failures": failures,
+        }
+        status = "gated" if gates is not None else "reported, not gated yet"
+        print_table(test, test_summary, f"SUITE {suite.upper()}: TEST SPLIT ({status})")
+
+    print_language_breakdown([r for r in results if r["split"] == "test"])
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    report = {
-        "calibration": cal_summary,
-        "test": test_summary,
-        "thresholds": thresholds,
-        "failures": failures,
-        "results": results,
-    }
-    (OUT_DIR / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-
-    print_table(test, test_summary, "TEST SPLIT (gated)")
-    print(f"\nCalibration split: {cal_summary['cases']} cases, not gated. See eval/out/report.json.")
-    if failures:
-        print("\nFAILED thresholds (test split):")
-        for failure in failures:
+    (OUT_DIR / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    if all_failures:
+        print("\nFAILED thresholds:")
+        for failure in all_failures:
             print(f"  - {failure}")
         return 1
-    print("\nAll thresholds met on the test split. Report: eval/out/report.json")
+    print("\nAll gated suites met their thresholds. Report: eval/out/report.json")
     return 0
 
 

@@ -30,12 +30,21 @@ def context_precision(cited: list[str], expected: list[str]) -> float:
     return sum(1 for source in cited if source in wanted) / len(cited)
 
 
-def keyword_recall(answer: str, keywords: list[str]) -> float:
-    """Share of the expected key facts that appear in the answer (case-insensitive)."""
+def keyword_recall(answer: str, keywords: list[str | list[str]]) -> float:
+    """Share of the expected key facts that appear in the answer (case-insensitive).
+
+    A fact given as a list matches if any alternative appears, so one case accepts an answer in the
+    document's language or the question's ("montag" or "monday").
+    """
     if not keywords:
         return 1.0
     text = answer.lower()
-    return sum(1 for keyword in keywords if keyword.lower() in text) / len(keywords)
+
+    def found(keyword: str | list[str]) -> bool:
+        options = [keyword] if isinstance(keyword, str) else keyword
+        return any(option.lower() in text for option in options)
+
+    return sum(1 for keyword in keywords if found(keyword)) / len(keywords)
 
 
 def mean(values: list[float | None]) -> float | None:
@@ -46,6 +55,7 @@ def mean(values: list[float | None]) -> float | None:
 def summarize(results: list[dict]) -> dict:
     answerable = [r for r in results if r["expect"] == "answer"]
     security = [r for r in results if r["expect"] in ("denied", "blocked")]
+    cache = [r for r in results if r["expect"] in ("fresh", "cached")]
     abstain = [r for r in results if r["expect"] == "abstain"]
     judged = [r for r in answerable if r.get("judge_supported") is not None]
     latencies = [r["latency_ms"] for r in results]
@@ -58,6 +68,7 @@ def summarize(results: list[dict]) -> dict:
         "groundedness": mean([r.get("groundedness") for r in answerable]),
         "abstention_accuracy": mean([1.0 if r["passed"] else 0.0 for r in abstain]),
         "security_accuracy": mean([1.0 if r["passed"] else 0.0 for r in security]),
+        "cache_accuracy": mean([1.0 if r["passed"] else 0.0 for r in cache]),
         "judge_support": mean([1.0 if r["judge_supported"] else 0.0 for r in judged]),
         "degraded_cases": sum(1 for r in results if r.get("degraded")),
         "median_latency_ms": round(median(latencies), 1) if latencies else None,
@@ -68,6 +79,8 @@ def check_thresholds(summary: dict, thresholds: dict[str, float]) -> list[str]:
     failures = []
     for metric, minimum in thresholds.items():
         value = summary.get(metric)
+        if value is None and metric == "cache_accuracy":
+            continue  # a suite without cache cases has nothing to gate there
         if value is None or value < minimum:
             failures.append(f"{metric} = {value} (required >= {minimum})")
     return failures
