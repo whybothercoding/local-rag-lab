@@ -116,7 +116,7 @@ def test_llm_mode_refuses_to_run_without_a_model(tmp_path):
 # --- golden set ----------------------------------------------------------------------------
 
 GOLDEN = json.loads((ROOT / "eval" / "golden.json").read_text(encoding="utf-8"))
-EXPECTS = {"answer", "abstain", "blocked", "denied", "fresh", "cached"}
+EXPECTS = {"answer", "abstain", "blocked", "denied", "fresh", "cached", "chitchat"}
 LANGS = {"en", "de", "fr", "el"}
 
 

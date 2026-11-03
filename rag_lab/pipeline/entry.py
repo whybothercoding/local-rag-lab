@@ -15,7 +15,10 @@ from rag_lab.security.context_sanitizer import scan_user_input
 from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.state import StateInput, _sha256
-from rag_lab.lang import CHITCHAT_PHRASES, CHITCHAT_WORDS, words
+from rag_lab.config import settings
+from rag_lab.lang import CHITCHAT_EXAMPLES, CHITCHAT_PHRASES, CHITCHAT_WORDS, chitchat_reply, detect_language, words
+from rag_lab.retrieval.embedding_provider import embedding_fingerprint, get_embedding_model
+from rag_lab.retrieval.semantic_cache import _cosine_similarity
 from rag_lab.pipeline.text import _content_terms
 
 
@@ -151,7 +154,29 @@ def router_node(state: StateInput) -> dict[str, Any]:
     domain_terms = _content_terms(cleaned) - CHITCHAT_WORDS
     if any(w in CHITCHAT_WORDS for w in tokens) and not domain_terms:
         return {"intent": "chitchat"}
+    # Greetings and thanks the word lists miss ("How are you doing today?", "Τι κάνεις σήμερα;"): only short
+    # questions, and only when they sit as close to a chitchat example as calibrated. A real question routed
+    # here would get the canned reply and never reach retrieval, so the threshold leaves a wide margin.
+    if len(domain_terms) <= 3 and _chitchat_similarity(state.get("sanitized_question", "")) >= settings.chitchat_min_similarity:
+        return {"intent": "chitchat"}
     return {"intent": "rag"}
+
+
+_EXAMPLE_VECTORS: dict[str, list[list[float]]] = {}
+
+
+def _chitchat_similarity(question: str) -> float:
+    if settings.chitchat_min_similarity > 1 or not question.strip():
+        return -1.0
+    try:
+        model = get_embedding_model()
+        key = embedding_fingerprint()
+        if key not in _EXAMPLE_VECTORS:
+            _EXAMPLE_VECTORS[key] = [model.embed_query(t) for t in CHITCHAT_EXAMPLES]
+        vector = model.embed_query(question)
+    except Exception:
+        return -1.0  # no embedder: questions go to retrieval
+    return max(_cosine_similarity(vector, example) for example in _EXAMPLE_VECTORS[key])
 
 
 def chitchat_node(state: StateInput) -> dict[str, Any]:
@@ -162,5 +187,5 @@ def chitchat_node(state: StateInput) -> dict[str, Any]:
         data={"query": state.get("sanitized_question", "")},
     )
     return {
-        "generation": "Hello! I am your local enterprise knowledge assistant. Ask me anything grounded in your active workspace."
+        "generation": chitchat_reply(detect_language(state.get("asked_question") or state.get("sanitized_question", ""))),
     }

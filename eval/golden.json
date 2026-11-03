@@ -1888,5 +1888,142 @@
   "setup": [
    "How many days per week may employees work from home?"
   ]
+ },
+ {
+  "id": "chat-en-evening",
+  "split": "calibration",
+  "suite": "en",
+  "lang": "en",
+  "workspace": "engineering",
+  "question": "Good evening!",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-en-how-are-you",
+  "split": "test",
+  "suite": "en",
+  "lang": "en",
+  "workspace": "engineering",
+  "question": "How are you doing today?",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-en-thanks",
+  "split": "test",
+  "suite": "en",
+  "lang": "en",
+  "workspace": "engineering",
+  "question": "Thank you so much for the help!",
+  "expect": "chitchat"
+ },
+ {
+  "id": "greet-en-question",
+  "split": "test",
+  "suite": "en",
+  "lang": "en",
+  "workspace": "engineering",
+  "question": "Hi, how long is the rollback SLA?",
+  "expected_sources": [
+   "rollback.md"
+  ],
+  "expected_keywords": [
+   "5"
+  ]
+ },
+ {
+  "id": "chat-de-morning",
+  "split": "calibration",
+  "suite": "multilingual",
+  "lang": "de",
+  "workspace": "zurich",
+  "question": "Guten Morgen, wie geht's?",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-de-thanks",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "de",
+  "workspace": "zurich",
+  "question": "Vielen Dank für die Hilfe!",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-fr-ca-va",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "fr",
+  "workspace": "geneve",
+  "question": "Comment ça va ?",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-fr-evening",
+  "split": "calibration",
+  "suite": "multilingual",
+  "lang": "fr",
+  "workspace": "geneve",
+  "question": "Bonsoir !",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-el-how",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "el",
+  "workspace": "athens",
+  "question": "Τι κάνεις σήμερα;",
+  "expect": "chitchat"
+ },
+ {
+  "id": "chat-el-evening",
+  "split": "calibration",
+  "suite": "multilingual",
+  "lang": "el",
+  "workspace": "athens",
+  "question": "Καλησπέρα!",
+  "expect": "chitchat"
+ },
+ {
+  "id": "greet-de-question",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "de",
+  "workspace": "zurich",
+  "question": "Hallo, wie lange ist die Kündigungsfrist nach der Probezeit?",
+  "expected_sources": [
+   "kuendigung.md"
+  ],
+  "expected_keywords": [
+   "2"
+  ]
+ },
+ {
+  "id": "greet-fr-question",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "fr",
+  "workspace": "geneve",
+  "question": "Bonjour, combien de jours de congés payés par an ?",
+  "expected_sources": [
+   "conges.md"
+  ],
+  "expected_keywords": [
+   "25"
+  ]
+ },
+ {
+  "id": "greet-el-question",
+  "split": "calibration",
+  "suite": "multilingual",
+  "lang": "el",
+  "workspace": "athens",
+  "question": "Γεια σας, πόσες ημέρες είναι η άδεια γάμου;",
+  "expected_sources": [
+   "adeies.md"
+  ],
+  "expected_keywords": [
+   "5"
+  ]
  }
 ]

@@ -48,6 +48,7 @@ MODEL_PROFILES: dict[str, dict[str, str]] = {
         "semantic_cache_similarity_threshold": "0.92",
         "relevance_gate": "similarity",
         "rerank_keep_margin": "1000",
+        "chitchat_min_similarity": "2.0",
     },
     "multilingual": {
         "fastembed_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -61,6 +62,7 @@ MODEL_PROFILES: dict[str, dict[str, str]] = {
         "semantic_cache_similarity_threshold": "0.92",
         "relevance_gate": "reranker",
         "rerank_keep_margin": "5.0",
+        "chitchat_min_similarity": "0.56",
     },
     "multilingual-large": {
         "fastembed_model": "intfloat/multilingual-e5-large",
@@ -75,6 +77,7 @@ MODEL_PROFILES: dict[str, dict[str, str]] = {
         "semantic_cache_similarity_threshold": "0.94",
         "relevance_gate": "reranker",
         "rerank_keep_margin": "5.0",
+        "chitchat_min_similarity": "0.88",
     },
 }
 DEFAULT_MODEL_PROFILE = "multilingual"
@@ -151,6 +154,8 @@ class Settings:
     # Reranker-gated profiles keep a passage only if it clears the relevance floor and scores within this
     # many logits of the best one; the best passage is always kept.
     rerank_keep_margin: float
+    # Router: a short question this similar to a greeting or thanks example is chitchat (above 1 = off).
+    chitchat_min_similarity: float
     relevance_min_coverage: float
     # Self-RAG graders: fast lexical screening first, ONNX cross-encoder fallback for paraphrases.
     groundedness_min_ratio: float
@@ -200,6 +205,7 @@ class Settings:
             relevance_gate=_env("RELEVANCE_GATE", profile["relevance_gate"]),
             relevance_min_rerank_score=float(_env("RELEVANCE_MIN_RERANK_SCORE", profile["relevance_min_rerank_score"])),
             rerank_keep_margin=float(_env("RERANK_KEEP_MARGIN", profile["rerank_keep_margin"])),
+            chitchat_min_similarity=float(_env("CHITCHAT_MIN_SIMILARITY", profile["chitchat_min_similarity"])),
             relevance_min_coverage=float(_env("RELEVANCE_MIN_COVERAGE", "0.40")),
             groundedness_min_ratio=float(_env("GROUNDEDNESS_MIN_RATIO", "0.25")),
             groundedness_cross_encoder_threshold=float(_env("GROUNDEDNESS_CROSS_ENCODER_THRESHOLD", profile["groundedness_cross_encoder_threshold"])),

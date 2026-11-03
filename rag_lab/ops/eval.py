@@ -77,6 +77,7 @@ DEFAULT_THRESHOLDS = {
     "abstention_accuracy": 0.8,
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
+    "chitchat_accuracy": 1.0,
 }
 # German, French, Greek, and cross-lingual questions. Keyword recall is lower than English because the
 # deterministic synthesizer quotes the document's language while some facts are checked in either language.
@@ -88,6 +89,7 @@ MULTILINGUAL_THRESHOLDS = {
     "abstention_accuracy": 0.9,
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
+    "chitchat_accuracy": 1.0,
 }
 # Follow-ups that only make sense with the earlier turn. Keyword recall is the extractive synthesizer's
 # limit (it cannot infer "business class" from "longer flights"); retrieval finds every expected source.
@@ -242,6 +244,8 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         result["passed"] = values.get("is_safe") is False and "SECURITY VIOLATION" in answer
     elif expect == "abstain":
         result["passed"] = result["abstained"]
+    elif expect == "chitchat":
+        result["passed"] = values.get("intent") == "chitchat"
     elif expect == "cached":
         result["passed"] = cache_hit
     elif expect == "fresh":
