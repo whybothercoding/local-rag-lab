@@ -1,4 +1,5 @@
 """Tests for persistent, clearance-partitioned semantic and vector-backed cache."""
+from contextlib import closing
 import sqlite3
 from pathlib import Path
 import pytest
@@ -255,7 +256,7 @@ def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path):
         db_path=db_file,
     )
 
-    with sqlite3.connect(db_file) as conn:
+    with closing(sqlite3.connect(db_file)) as conn, conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     raw_bytes = Path(db_file).read_bytes()
     assert secret_answer.encode("utf-8") not in raw_bytes
@@ -265,7 +266,7 @@ def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path):
     # AAD includes clearance, so decryption fails and the tampered row is refused!
     _L1_GENERATIONS.clear()
     _L1_CITATIONS.clear()
-    with sqlite3.connect(db_file) as conn:
+    with closing(sqlite3.connect(db_file)) as conn, conn:
         conn.execute("UPDATE semantic_cache SET clearance = 'public'")
         conn.commit()
 

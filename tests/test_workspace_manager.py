@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 import pytest
 from workspace_manager import (
@@ -113,7 +114,7 @@ def test_delete_workspace_escapes_sql_like_underscore_wildcard(tmp_path: Path, m
     monkeypatch.setattr(workspace_manager, "BM25_DIR", str(tmp_path / "bm25"))
     monkeypatch.setattr(workspace_manager, "CHROMA_PATH", str(tmp_path / "chroma"))
 
-    with sqlite3.connect(db_file) as conn:
+    with closing(sqlite3.connect(db_file)) as conn, conn:
         conn.execute("CREATE TABLE checkpoints (thread_id TEXT)")
         conn.execute("CREATE TABLE writes (thread_id TEXT)")
         conn.executemany(
@@ -129,7 +130,7 @@ def test_delete_workspace_escapes_sql_like_underscore_wildcard(tmp_path: Path, m
     create_workspace("ops_a")
     delete_workspace("ops_a")
 
-    with sqlite3.connect(db_file) as conn:
+    with closing(sqlite3.connect(db_file)) as conn, conn:
         remaining_cp = [r[0] for r in conn.execute("SELECT thread_id FROM checkpoints").fetchall()]
         remaining_wr = [r[0] for r in conn.execute("SELECT thread_id FROM writes").fetchall()]
     assert remaining_cp == ["ui-opsXa-222"]

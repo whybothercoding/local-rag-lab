@@ -1,3 +1,4 @@
+from contextlib import closing
 import pickle
 import sqlite3
 from pathlib import Path
@@ -74,7 +75,7 @@ def test_sparse_search_refuses_legacy_pickle_and_cleans_up(tmp_path: Path):
 def test_sparse_search_missing_clearance_column_raises_sparse_index_error(tmp_path: Path):
     ws_id = "old_schema_ws"
     db_path = tmp_path / f"{ws_id}.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id UNINDEXED, source UNINDEXED, content);")
         conn.execute("INSERT INTO chunks_fts VALUES ('c1', 'doc.md', 'secret content');")
         conn.commit()
