@@ -244,12 +244,17 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
     return list(reversed(threads))
 
 
-@st.cache_resource(show_spinner=False)
+def _release_engine(engine) -> None:
+    close_checkpointer(engine.checkpointer)
+
+
+@st.cache_resource(show_spinner=False, on_release=_release_engine)
 def compiled_engine(db_uri: str):
     """One checkpointer and compiled graph per server process and database, shared by every session.
 
     Reruns (every click) reuse them instead of reconnecting and recompiling. With PostgreSQL this keeps
-    a single pool (CHECKPOINT_POOL_SIZE connections) open instead of opening one per rerun.
+    a single pool (CHECKPOINT_POOL_SIZE connections) open instead of opening one per rerun. The
+    connection is closed when the cache entry is released, or at process exit.
     """
     saver = open_checkpointer(db_uri)
     atexit.register(close_checkpointer, saver)
