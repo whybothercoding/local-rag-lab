@@ -93,18 +93,21 @@ def test_semantic_vector_cache_hit_on_paraphrased_query(tmp_path: Path):
     assert exact_res["hit"] is True
     assert exact_res["hit_type"] == "exact"
 
-    # Query with paraphrased wording: trips semantic hit
+    # Query with paraphrased wording: trips a semantic hit once the threshold admits its similarity.
+    # The similarity scale depends on the embedding model, so the threshold is set from this model's score.
+    from rag_lab.retrieval.embedding_provider import get_embedding_model
+    from rag_lab.retrieval.semantic_cache import _cosine_similarity
+
     paraphrase = "What is our production rollback SLA timeframe?"
-    semantic_res = lookup_cache(
-        "default",
-        paraphrase,
-        "public",
-        threshold=0.85,
-        db_path=db_file,
-    )
+    model = get_embedding_model()
+    similarity = _cosine_similarity(model.embed_query("What is the rollback SLA limit for production?"),
+                                    model.embed_query(paraphrase))
+    below = lookup_cache("default", paraphrase, "public", threshold=similarity + 0.01, db_path=db_file)
+    assert below["hit"] is False
+    semantic_res = lookup_cache("default", paraphrase, "public", threshold=similarity - 0.01, db_path=db_file)
     assert semantic_res["hit"] is True
     assert semantic_res["hit_type"] == "semantic"
-    assert semantic_res["similarity"] >= 0.85
+    assert semantic_res["similarity"] >= similarity - 0.01
     assert semantic_res["generation"] == "Production rollback SLA is strictly under 5 minutes."
     assert semantic_res["citations"] == ["runbook.md"]
 
@@ -349,3 +352,29 @@ def test_unreviewed_cache_entries_withheld_from_users_requiring_human_review(tmp
     )
     assert auto_res["hit"] is True
 
+
+
+def test_cached_answer_is_not_served_across_languages(tmp_path: Path):
+    """A multilingual embedder makes an English and a German question near-identical; the answer is not."""
+    db_file = str(tmp_path / "cache.db")
+    store_cache(workspace_id="default", query="How many days per week may employees work from home?",
+                clearance="public", generation="Three days per week.", citations=["homeoffice.md"],
+                db_path=db_file, compute_vector=True)
+    german = lookup_cache("default", "Wie viele Tage pro Woche darf man im Homeoffice arbeiten?", "public",
+                          threshold=-1.0, db_path=db_file)
+    assert german["hit"] is False, "even with every similarity accepted, the language must match"
+    english = lookup_cache("default", "How many days a week may employees work from home?", "public",
+                           threshold=-1.0, db_path=db_file)
+    assert english["hit"] is True
+
+
+def test_changing_the_embedding_model_invalidates_cached_entries(tmp_path: Path, monkeypatch):
+    """Two models can share a vector size; vectors from the old one must never meet the new one's."""
+    db_file = str(tmp_path / "cache.db")
+    store_cache(workspace_id="default", query="What is the rollback SLA?", clearance="public",
+                generation="Under 5 minutes.", citations=["runbook.md"], db_path=db_file, compute_vector=True)
+    assert lookup_cache("default", "What is the rollback SLA?", "public", db_path=db_file)["hit"] is True
+    _L1_GENERATIONS.clear()
+    _L1_CITATIONS.clear()
+    monkeypatch.setattr("rag_lab.retrieval.embedding_provider.embedding_fingerprint", lambda *a, **k: "fastembed:other")
+    assert lookup_cache("default", "What is the rollback SLA?", "public", db_path=db_file)["hit"] is False

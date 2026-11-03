@@ -1876,5 +1876,17 @@
   "history": [
    "How many home office days are allowed per week?"
   ]
+ },
+ {
+  "id": "cache-x-en-de",
+  "split": "test",
+  "suite": "multilingual",
+  "lang": "de",
+  "workspace": "zurich",
+  "question": "Wie viele Tage pro Woche darf man im Homeoffice arbeiten?",
+  "expect": "fresh",
+  "setup": [
+   "How many days per week may employees work from home?"
+  ]
  }
 ]

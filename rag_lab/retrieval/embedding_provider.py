@@ -80,11 +80,12 @@ class LocalFastEmbeddings(Embeddings):
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        vectors = self.model.embed(texts)
+        # Models such as e5 expect a "passage: " / "query: " prefix (settings, from the model profile).
+        vectors = self.model.embed([settings.embedding_passage_prefix + text for text in texts])
         return [vec.tolist() for vec in vectors]
 
     def embed_query(self, text: str) -> list[float]:
-        vectors = list(self.model.embed([text]))
+        vectors = list(self.model.embed([settings.embedding_query_prefix + text]))
         if not vectors:
             return []
         return [float(x) for x in vectors[0]]

@@ -18,7 +18,7 @@ from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError
 from rag_lab.retrieval.embedding_provider import embedding_fingerprint
 from rag_lab.retrieval.embedding_provider import get_embedding_model
 from rag_lab.retrieval.embedding_provider import stored_fingerprint
-from rag_lab.retrieval.reranker import rerank_with_status
+from rag_lab.retrieval.reranker import rerank_with_status, score_pairs
 from rag_lab.retrieval.sparse_search import has_sparse_index
 from rag_lab.retrieval.sparse_search import search_sparse_chunks
 from rag_lab.security.access import allowed_clearances
@@ -71,6 +71,18 @@ def _embedding_mismatch(ws_id: str, collection_metadata: Any) -> str | None:
         f"dense_retrieval_unavailable: the index was built with {built_with} but the runtime uses {runtime}; "
         "re-index with 'make sync FORCE=1' or restore EMBEDDING_PROVIDER"
     )
+
+
+def _top_rerank_score(query: str, reranked: List[Dict[str, Any]], rerank_note: str | None) -> float | None:
+    """The cross-encoder score of the best passage, or None when the reranker is off or failed."""
+    if not reranked or rerank_note or not settings.enable_reranker:
+        return None
+    scores = [item["rerank_score"] for item in reranked if "rerank_score" in item]
+    if scores:
+        return float(max(scores))
+    # A single candidate is not reranked; score it directly so the same gate applies.
+    single = score_pairs(query, [reranked[0]["content"]])
+    return single[0] if single else None
 
 
 def reciprocal_rank_fusion(
@@ -179,19 +191,16 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     except Exception as exc:
         degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}: {exc}")
 
-    # 3. Relevance gate
+    # 3. Retrieval signals, kept for telemetry and as the fallback relevance gate.
     candidates = dense_candidates + sparse_candidates
     best_similarity = max((c["similarity"] for c in dense_candidates), default=0.0)
     query_terms = _content_terms(query)
     best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
-    relevant = bool(candidates) and (
-        best_similarity >= settings.relevance_min_similarity or best_coverage >= settings.relevance_min_coverage
-    )
 
-    # 4. Fuse with Reciprocal Rank Fusion (RRF) only when the evidence is relevant, drop chunks that carry
-    # injected instructions, and only then cut to the final top 3 with the cross-encoder. Screening before
-    # the cut means a poisoned chunk is replaced by the next-best clean one instead of leaving a gap.
-    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=8) if relevant else []
+    # 4. Fuse with Reciprocal Rank Fusion (RRF), drop chunks that carry injected instructions, and only
+    # then cut to the final top 3 with the cross-encoder. Screening before the cut means a poisoned chunk
+    # is replaced by the next-best clean one instead of leaving a gap.
+    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=8) if candidates else []
     clean_pool: List[Dict[str, Any]] = []
     dropped_chunks: List[Dict[str, Any]] = []
     for item in fused_docs:
@@ -208,6 +217,22 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     if rerank_note:
         degraded.append(rerank_note)
 
+    # 5. Relevance gate. The cross-encoder reads the question and the passage together, so its score
+    # separates "answers this" from "is merely about the same topic" far better than vector similarity,
+    # across languages too. Without a reranker score, similarity or word coverage decide.
+    best_rerank = _top_rerank_score(query, reranked_docs, rerank_note)
+    if best_rerank is not None and settings.relevance_gate == "reranker":
+        relevant = best_rerank >= settings.relevance_min_rerank_score
+        telemetry["relevance_gate"] = "reranker"
+    else:
+        relevant = bool(candidates) and (
+            best_similarity >= settings.relevance_min_similarity or best_coverage >= settings.relevance_min_coverage
+        )
+        telemetry["relevance_gate"] = "similarity"
+    if not relevant:
+        # Nothing reaches generation, so nothing was released from these chunks either.
+        reranked_docs, dropped_chunks = [], []
+
     chunks_found = [item["content"] for item in reranked_docs]
     citations = [item["citation"] for item in reranked_docs]
 
@@ -217,6 +242,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     telemetry["fused_chunks_count"] = len(chunks_found)
     telemetry["best_similarity"] = round(best_similarity, 4)
     telemetry["best_coverage"] = round(best_coverage, 4)
+    telemetry["best_rerank_score"] = None if best_rerank is None else round(best_rerank, 4)
     telemetry["relevant"] = relevant
 
     audit_record(

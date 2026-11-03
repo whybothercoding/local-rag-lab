@@ -108,3 +108,16 @@ def test_greek_answers_get_a_real_groundedness_check():
                                          "telemetry": {"generator_deterministic": True}})
     assert invented["telemetry"]["groundedness_ratio"] is not None
     assert invented["telemetry"]["groundedness_ratio"] < 0.25
+
+
+@pytest.mark.parametrize(("text", "lang"), [
+    ("How many days per week may employees work from home?", "en"),
+    ("Wie viele Tage pro Woche darf man im Homeoffice arbeiten?", "de"),
+    ("Combien de jours de télétravail sont autorisés par semaine ?", "fr"),
+    ("Πόσες ημέρες τηλεργασίας επιτρέπονται;", "el"),
+    ("Rollback SLA?", "und"),
+])
+def test_detect_language_on_short_questions(text, lang):
+    from rag_lab.lang import detect_language
+
+    assert detect_language(text) == lang

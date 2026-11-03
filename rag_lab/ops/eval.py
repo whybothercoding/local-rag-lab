@@ -201,6 +201,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "cache_hit": cache_hit,
         "best_similarity": telemetry.get("best_similarity"),
         "best_coverage": telemetry.get("best_coverage"),
+        "best_rerank_score": telemetry.get("best_rerank_score"),
         "relevant": telemetry.get("relevant"),
         "degraded": values.get("degraded", []),
         "judge_supported": None,
