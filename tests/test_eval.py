@@ -183,7 +183,7 @@ def test_suite_gates_follow_the_phase_plan():
     assert suite_gates("en", {}, llm_mode=False)["security_accuracy"] == 1.0
     assert suite_gates("multilingual", {}, llm_mode=False)["security_accuracy"] == 1.0
     assert suite_gates("multilingual", {"answer_rate": 0.1}, llm_mode=False)["answer_rate"] == 0.9, "overrides are en-only"
-    assert suite_gates("conversation", {}, llm_mode=True) is None
+    assert suite_gates("conversation", {}, llm_mode=True)["answer_rate"] == 0.9
     assert suite_gates("en", {}, llm_mode=True)["judge_support"] == LLM_JUDGE_MIN
     assert suite_gates("en", {"answer_rate": 0.5}, llm_mode=False)["answer_rate"] == 0.5
 

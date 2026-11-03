@@ -151,7 +151,10 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
     if review_reasons:
         st.caption(f"Gate triggered by: `{', '.join(review_reasons)}`")
     display_q = state.values.get("original_question") or state.values.get("sanitized_question", "")
-    st.caption(f"Question ({req_clearance}): {display_q}")
+    asked_q = state.values.get("asked_question") or display_q
+    st.caption(f"Question ({req_clearance}): {asked_q}")
+    if asked_q != display_q:
+        st.caption(f"Read in the conversation as: {display_q}")
     st.text_area("Candidate Output", value=state.values.get("generation", ""), height=130,
                  disabled=True, key=f"candidate-{thread_id}")
     render_citations(state.values.get("citations", []))
@@ -210,6 +213,24 @@ def review_queue(engine, ws_id: str, user: str, own_thread: str) -> None:
         pending_review_panel(engine, choice, ws_id, user)
 
 
+def thread_messages(thread: dict) -> list[dict]:
+    """Chat messages for a conversation: every finished turn from its history, then the current one."""
+    msgs: list[dict] = []
+    turns = [h for h in thread.get("history", []) if isinstance(h, dict)]
+    for turn in turns:
+        msgs.append({"role": "user", "content": turn.get("asked") or turn.get("question", "")})
+        msgs.append({"role": "assistant", "content": turn.get("answer") or "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"})
+    last_asked = turns[-1].get("asked") if turns else None
+    if thread["paused"] or thread["question"] != last_asked:
+        msgs.append({"role": "user", "content": thread["question"]})
+        if not thread["paused"] and thread["generation"] and not turns:
+            msgs.append({"role": "assistant", "content": thread["generation"],
+                         "citations": thread["citations"], "degraded": thread["degraded"]})
+    if msgs and msgs[-1]["role"] == "assistant" and not thread["paused"]:
+        msgs[-1].update({"citations": thread["citations"], "degraded": thread["degraded"]})
+    return msgs
+
+
 def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
     """Retrieve existing conversation threads for this user in this workspace."""
     prefix = f"ui-{ws_id}-"
@@ -221,7 +242,8 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
             state = engine.get_state({"configurable": {"thread_id": tid}})
             if state.values and state.values.get("principal") == username:
                 q = (
-                    state.values.get("original_question")
+                    state.values.get("asked_question")
+                    or state.values.get("original_question")
                     or state.values.get("sanitized_question")
                     or state.values.get("question")
                     or ""
@@ -238,6 +260,7 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
                     "generation": state.values.get("generation", ""),
                     "citations": state.values.get("citations", []),
                     "degraded": state.values.get("degraded", []),
+                    "history": list(state.values.get("history", [])),
                     "paused": is_paused,
                 })
         except Exception:
@@ -329,15 +352,7 @@ if not st.session_state.get("thread_id") or "messages" not in st.session_state:
     if user_threads:
         latest = user_threads[0]
         st.session_state.thread_id = latest["thread_id"]
-        msgs = [{"role": "user", "content": latest["question"]}]
-        if not latest["paused"] and latest["generation"]:
-            msgs.append({
-                "role": "assistant",
-                "content": latest["generation"],
-                "citations": latest["citations"],
-                "degraded": latest["degraded"],
-            })
-        st.session_state.messages = msgs
+        st.session_state.messages = thread_messages(latest)
     else:
         st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
         st.session_state.messages = []
@@ -368,15 +383,7 @@ with st.sidebar.expander(f"Conversations ({len(user_threads)})", expanded=True):
             st.session_state.thread_id = selected_tid
             target = next((t for t in user_threads if t["thread_id"] == selected_tid), None)
             if target:
-                msgs = [{"role": "user", "content": target["question"]}]
-                if not target["paused"] and target["generation"]:
-                    msgs.append({
-                        "role": "assistant",
-                        "content": target["generation"],
-                        "citations": target["citations"],
-                        "degraded": target["degraded"],
-                    })
-                st.session_state.messages = msgs
+                st.session_state.messages = thread_messages(target)
             else:
                 st.session_state.messages = []
             st.rerun()
@@ -591,12 +598,8 @@ user_query = st.chat_input(
 )
 
 if user_query:
-    # If active thread was already completed, start fresh thread
-    prior_state = engine.get_state(config)
-    if prior_state.values and not prior_state.next and prior_state.values.get("generation"):
-        st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
-        config = {"configurable": {"thread_id": st.session_state.thread_id}}
-        st.session_state.messages = []
+    # A conversation keeps its thread, so follow-up questions are read with the earlier turns ("New Chat"
+    # starts a fresh one). The input box is disabled while the thread waits for a review decision.
 
     st.session_state.messages.append({"role": "user", "content": user_query})
     with st.chat_message("user"):
@@ -623,7 +626,6 @@ if user_query:
         "retry_count": 0,
         "generation_retry_count": 0,
         "grader_feedback": "",
-        "history": [],
         "telemetry": {}
     }
 

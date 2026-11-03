@@ -13,6 +13,7 @@ from rag_lab.security.access import verify_token
 from rag_lab.security.audit import record as audit_record
 from rag_lab.security.redaction import redact_pii
 
+from rag_lab.pipeline.context import MAX_HISTORY_TURNS
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, BLOCKING_DEGRADED_PREFIXES, StateInput, _sha256
 
 
@@ -77,6 +78,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         review = _normalize_decision(interrupt({
             "action": "human_approval",
             "question": display_q,
+            "asked_question": state.get("asked_question") or display_q,
             "citations": state.get("citations", []),
             "candidate_answer": state.get("generation", ""),
             "requested_by": principal,
@@ -123,8 +125,10 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         },
     )
 
+    asked = state.get("asked_question") or display_q
     if approved:
-        history.append(f"Assistant: {gen}")
+        # Only released answers become conversation context for later follow-ups.
+        history = (history + [{"question": display_q, "asked": asked, "answer": gen, "released": True}])[-MAX_HISTORY_TURNS:]
 
         q = state.get("original_question") or state.get("sanitized_question", "")
         clearance = get_user_clearance(principal) if principal else "public"
@@ -144,5 +148,5 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         return {"generation": gen, "history": history}
 
     rejection_notice = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
-    history.append(f"Assistant: {rejection_notice}")
+    history = (history + [{"question": display_q, "asked": asked, "answer": "", "released": False}])[-MAX_HISTORY_TURNS:]
     return {"generation": rejection_notice, "citations": [], "degraded": [], "history": history}

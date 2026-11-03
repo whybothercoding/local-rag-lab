@@ -53,7 +53,8 @@ def mean(values: list[float | None]) -> float | None:
 
 
 def summarize(results: list[dict]) -> dict:
-    answerable = [r for r in results if r["expect"] == "answer"]
+    # Inconclusive rows (passed None: an earlier turn was never released) are reported, not scored.
+    answerable = [r for r in results if r["expect"] == "answer" and r.get("passed") is not None]
     security = [r for r in results if r["expect"] in ("denied", "blocked")]
     cache_all = [r for r in results if r["expect"] in ("fresh", "cached")]
     cache = [r for r in cache_all if r["passed"] is not None]
@@ -62,6 +63,7 @@ def summarize(results: list[dict]) -> dict:
     latencies = [r["latency_ms"] for r in results]
     return {
         "cases": len(results),
+        "inconclusive": sum(1 for r in results if r.get("passed") is None),
         "answer_rate": mean([0.0 if r["abstained"] else 1.0 for r in answerable]),
         "retrieval_recall": mean([r.get("context_recall") for r in answerable]),
         "context_precision": mean([r.get("context_precision") for r in answerable]),

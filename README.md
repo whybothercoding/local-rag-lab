@@ -81,6 +81,8 @@ An offline evaluation suite (`rag_lab/ops/eval.py`, `rag_lab/ops/eval_metrics.py
    │
 [guardrail] ──(fail)──> [END] (Adversarial Prompt Violation)
    │ (pass)
+[contextualize] (Follow-up questions rewritten as standalone questions)
+   │
 [cache_lookup] ──(hit)──> [END] (Direct Semantic Cache Hit)
    │ (miss)
 [router] ──(chitchat)──> [chitchat] ──> [END]

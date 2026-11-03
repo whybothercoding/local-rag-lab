@@ -68,8 +68,7 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
 
 
 # Pass/fail gates per suite, measured on that suite's held-out test split. Thresholds were chosen from
-# the calibration split. None means measured and reported, not gated yet:
-#   conversation -> gated once follow-up questions use the conversation history
+# the calibration split. None would mean measured and reported, not gated.
 DEFAULT_THRESHOLDS = {
     "answer_rate": 0.9,
     "retrieval_recall": 0.9,
@@ -90,10 +89,18 @@ MULTILINGUAL_THRESHOLDS = {
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
 }
+# Follow-ups that only make sense with the earlier turn. Keyword recall is the extractive synthesizer's
+# limit (it cannot infer "business class" from "longer flights"); retrieval finds every expected source.
+CONVERSATION_THRESHOLDS = {
+    "answer_rate": 0.9,
+    "retrieval_recall": 0.9,
+    "keyword_recall": 0.7,
+    "groundedness": 0.5,
+}
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
     "multilingual": MULTILINGUAL_THRESHOLDS,
-    "conversation": None,
+    "conversation": CONVERSATION_THRESHOLDS,
 }
 # Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
 LLM_JUDGE_MIN = float(os.getenv("EVAL_LLM_JUDGE_MIN", "0.8"))
@@ -181,9 +188,21 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
     for i, earlier in enumerate(case.get("setup", [])):
         _ask(engine, case, earlier, f"{thread_id}-setup-{i}")
     setup_cached = cache_stats()["total_entries"] > 0
-    # Conversation cases: earlier turns in the same thread as the follow-up.
+    # Conversation cases: earlier turns in the same thread as the follow-up. A turn that was not released
+    # (a real model's answer sent to review) gives the follow-up no context: that case is inconclusive.
+    context_released = True
     for earlier in case.get("history", []):
-        _ask(engine, case, earlier, thread_id)
+        turn = _ask(engine, case, earlier, thread_id)
+        last = (turn.get("history") or [{}])[-1]
+        pending = engine.get_state({"configurable": {"thread_id": thread_id}}).next
+        context_released = context_released and not pending and isinstance(last, dict) and bool(last.get("released"))
+    if not context_released:
+        return {"id": case["id"], "split": case.get("split", "test"), "suite": case.get("suite", "en"),
+                "lang": case.get("lang", "en"), "workspace": case["workspace"], "expect": case.get("expect", "answer"),
+                "question": case["question"], "answer": "", "citations": [], "latency_ms": 0.0, "abstained": False,
+                "cache_hit": False, "best_similarity": None, "best_coverage": None, "best_rerank_score": None,
+                "relevant": None, "degraded": [], "judge_supported": None, "passed": None,
+                "note": "earlier turn not released"}
 
     started = time.perf_counter()
     values = _ask(engine, case, case["question"], thread_id)
@@ -204,6 +223,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "workspace": case["workspace"],
         "expect": expect,
         "question": case["question"],
+        "standalone_question": values.get("original_question", case["question"]),
         "answer": answer,
         "citations": citations,
         "latency_ms": latency_ms,

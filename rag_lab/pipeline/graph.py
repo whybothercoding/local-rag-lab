@@ -9,6 +9,7 @@ from langgraph.graph import END
 from langgraph.graph import START
 from langgraph.graph import StateGraph
 
+from rag_lab.pipeline.context import contextualize_node
 from rag_lab.pipeline.entry import cache_lookup_node, chitchat_node, guardrail_input_node, router_node
 from rag_lab.pipeline.generation import generate_node
 from rag_lab.pipeline.grading import grade_answer_relevance_node, grade_hallucination_node
@@ -62,6 +63,8 @@ builder = StateGraph(GraphState)
 builder.add_node("guardrail", guardrail_input_node)
 
 
+builder.add_node("contextualize", contextualize_node)
+builder.add_edge("contextualize", "cache_lookup")
 builder.add_node("cache_lookup", cache_lookup_node)
 
 
@@ -101,7 +104,7 @@ builder.add_edge(START, "guardrail")
 builder.add_conditional_edges(
     "guardrail",
     route_safety,
-    {"pass": "cache_lookup", "fail": END}
+    {"pass": "contextualize", "fail": END}
 )
 
 

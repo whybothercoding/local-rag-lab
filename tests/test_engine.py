@@ -177,7 +177,8 @@ def test_hitl_node_approval_preserves_original_question_after_rewrite(mocker):
     }
 
     result = human_in_the_loop_node(state)
-    assert "Assistant: Rollback SLA is strictly under 5 minutes." in result["history"][-1]
+    assert result["history"][-1]["answer"] == "Rollback SLA is strictly under 5 minutes."
+    assert result["history"][-1]["released"] is True
 
     key = cache_key("default", state["original_question"])
     assert SEMANTIC_CACHE[key] == "Rollback SLA is strictly under 5 minutes."

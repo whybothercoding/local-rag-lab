@@ -82,6 +82,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
         "is_safe": True,
         "principal": principal,
         "principal_clearance": get_user_clearance(principal),
+        "asked_question": sanitized,
         "original_question": sanitized,
         "sanitized_question": sanitized,
         "telemetry": telemetry,

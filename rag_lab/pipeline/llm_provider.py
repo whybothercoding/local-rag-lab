@@ -21,6 +21,21 @@ from pydantic import Field
 from rag_lab.config import settings
 from rag_lab.lang import STOPWORDS, words
 
+def _same_word(a: str, b: str) -> bool:
+    """Inflection-tolerant match: "γαμο" ~ "γαμου", "reporter" ~ "reportes", "flight" ~ "flights"."""
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    if len(shorter) >= 4 and longer.startswith(shorter):
+        return True
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return common >= 5
+
+
 # Words the extractive synthesizer ignores when matching a question to context sentences.
 _EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"}
 
@@ -48,9 +63,11 @@ class DeterministicContextLLM(BaseChatModel):
                 ctx_part = ctx_part[len("Context:"):].strip()
             else:
                 ctx_part = ctx_part.replace("Context:", "", 1).strip()
-            # Remove separator markers
-            chunks = [c.strip() for c in ctx_part.split("---") if c.strip()]
-            context = " ".join(chunks)
+            # Remove document tags, separators, and markdown headings: only document sentences may be quoted.
+            ctx_part = re.sub(r"</?documents?\b[^>]*>", "\n", ctx_part)
+            ctx_part = re.sub(r"(?m)^\s*#.*$", "", ctx_part)
+            chunks = [c.strip() for c in re.split(r"\n\s*---\s*\n|\n{2,}", ctx_part) if c.strip()]
+            context = " ".join(" ".join(c.split()) for c in chunks)
 
             if "\n\nAnswer" in q_part:
                 question = q_part.rsplit("\n\nAnswer", 1)[0].strip()
@@ -75,7 +92,7 @@ class DeterministicContextLLM(BaseChatModel):
             if not s_clean:
                 continue
             s_tokens = set(words(s_clean))
-            overlap = len(q_tokens & s_tokens)
+            overlap = sum(1 for q in q_tokens if any(_same_word(q, t) for t in s_tokens))
             if overlap > 0:
                 matched_sentences.append((overlap, s_clean))
 
