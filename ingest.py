@@ -28,7 +28,12 @@ from access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
 from audit import record as audit_record
 from config import MAX_SOURCE_BYTES
 from context_sanitizer import scan_chunk
-from embedding_provider import FINGERPRINT_KEY, embedding_fingerprint, get_embedding_model
+from embedding_provider import (
+    FINGERPRINT_KEY,
+    EmbeddingUnavailableError,
+    embedding_fingerprint,
+    get_embedding_model,
+)
 from parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
 from sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
 from workspace_manager import ensure_base_dirs, sanitize_workspace_id
@@ -279,6 +284,13 @@ def ingest_workspace(
         result.error = f"Directory not found: {source_dir}"
         return result
 
+    # The model that will embed this sync. A misconfigured provider is reported, never raised to the caller.
+    try:
+        fingerprint = embedding_fingerprint()
+    except EmbeddingUnavailableError as exc:
+        result.error = str(exc)
+        return result
+
     raw_docs, skipped = _collect_documents(source_path)
 
     # Also merge documents from the complementary workspace directory (knowledge_base <-> uploads)
@@ -345,7 +357,7 @@ def ingest_workspace(
             manifest.get("files") == file_hashes
             and manifest.get("chunk_size") == chunk_size
             and manifest.get("chunk_overlap") == chunk_overlap
-            and manifest.get("embedding") == embedding_fingerprint()
+            and manifest.get("embedding") == fingerprint
         ):
             try:
                 client = chromadb.PersistentClient(path=workspace_manager.CHROMA_PATH)
@@ -393,8 +405,6 @@ def ingest_workspace(
         return result
 
     try:
-        # Taken before embedding, so the stored fingerprint names the model that produced these vectors.
-        fingerprint = embedding_fingerprint()
         embeddings = get_embedding_model()
         vectors = embeddings.embed_documents(chunks)
     except Exception as exc:

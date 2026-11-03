@@ -176,3 +176,13 @@ def test_ollama_models_is_none_when_unreachable_or_erroring(monkeypatch):
     assert ollama_models("http://ollama.invalid") is None
     monkeypatch.setattr("llm_provider.httpx.get", lambda *a, **k: httpx.Response(500))
     assert ollama_models("http://ollama.invalid") is None
+
+
+def test_sync_with_an_unknown_provider_reports_instead_of_raising(rollback_index, monkeypatch):
+    """Even when files are unchanged (the shortcut path), a bad provider is a sync error, not an exception."""
+    from ingest import ingest_workspace
+
+    monkeypatch.setattr("embedding_provider.EMBEDDING_PROVIDER", "bogus")
+    result = ingest_workspace("default", str(rollback_index))
+    assert not result.ok
+    assert "Unknown EMBEDDING_PROVIDER" in result.error
