@@ -1,7 +1,8 @@
 """Shared test setup.
 
-Set RAG_OFFLINE=1 (`make test-offline`) to block every outbound TCP connection,
-including localhost. Unix domain sockets stay available for local IPC.
+Set RAG_OFFLINE=1 (`make test-offline`) to block every outbound TCP connection made through Python
+sockets, including localhost. Unix domain sockets stay available for local IPC. PostgreSQL (libpq
+opens its own sockets in C) is only used in the offline run when it is on a loopback address.
 """
 import atexit
 import os
@@ -82,19 +83,22 @@ def postgres_uri() -> str:
 
     The offline run blocks every TCP connection, so it always skips there.
     """
-    if os.getenv("RAG_OFFLINE") == "1":
-        pytest.skip("network sockets are blocked in the offline run")
+    from urllib.parse import urlsplit
+
+    from config import POSTGRES_DB_URI
 
     def unavailable(reason: str):
         if os.getenv("REQUIRE_POSTGRES") == "1":
             pytest.fail(f"REQUIRE_POSTGRES=1 but {reason}")
         pytest.skip(reason)
 
-    if not POSTGRES_TEST_URI:
-        unavailable("no PostgreSQL configured (set POSTGRES_TEST_URI, e.g. after 'make up')")
-    if not _postgres_reachable(POSTGRES_TEST_URI):
-        unavailable(f"PostgreSQL not reachable at {POSTGRES_TEST_URI.split('@')[-1]}")
-    return _dedicated_test_database(POSTGRES_TEST_URI)
+    # Without an explicit server, use the docker-compose one (`make up`) when it is running.
+    uri = POSTGRES_TEST_URI or POSTGRES_DB_URI
+    if os.getenv("RAG_OFFLINE") == "1" and urlsplit(uri).hostname not in ("localhost", "127.0.0.1", "::1"):
+        pytest.skip("the offline run only uses a PostgreSQL server on this machine")
+    if not _postgres_reachable(uri):
+        unavailable(f"PostgreSQL not reachable at {uri.split('@')[-1]} (start it with 'make up')")
+    return _dedicated_test_database(uri)
 
 
 def _dedicated_test_database(uri: str) -> str:
@@ -148,12 +152,15 @@ def _seed_access_policy() -> None:
 
 _seed_access_policy()
 
+_original_connect = socket.socket.connect
+
+
+def offline_connect_guard(self, address):
+    """socket.connect replacement for the offline run: Unix domain sockets only."""
+    if self.family == socket.AF_UNIX:
+        return _original_connect(self, address)
+    raise ConnectionError(f"Network access is disabled for offline tests (attempted {address}).")
+
+
 if os.getenv("RAG_OFFLINE") == "1":
-    _original_connect = socket.socket.connect
-
-    def _guarded_connect(self, address):
-        if self.family == socket.AF_UNIX:
-            return _original_connect(self, address)
-        raise ConnectionError(f"Network access is disabled for offline tests (attempted {address}).")
-
-    socket.socket.connect = _guarded_connect
+    socket.socket.connect = offline_connect_guard

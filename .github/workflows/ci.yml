@@ -76,5 +76,6 @@ jobs:
       - name: Run test suite with all outbound network blocked
         env:
           RAG_OFFLINE: "1"
+          REQUIRE_POSTGRES: "1"
           REQUIRE_RUST_ACCEL: "1"
         run: pytest -v
