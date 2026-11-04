@@ -80,6 +80,8 @@ def store(request, tmp_path, monkeypatch):
         if kind == "qdrant-local":
             adapter = QdrantStore(":memory:", "", prefix)
         else:
+            if os.getenv("RAG_OFFLINE") == "1":
+                pytest.skip("the offline run blocks TCP connections made through Python sockets, a Qdrant server included")
             url = os.getenv("QDRANT_TEST_URL")
             if not url:
                 _unavailable("QDRANT_TEST_URL is not set (start one with `make scale-up SERVICE=qdrant`)", "REQUIRE_QDRANT")
