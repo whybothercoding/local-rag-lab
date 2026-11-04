@@ -1,10 +1,12 @@
 """The embedding adapter for dense vector retrieval: an in-process ONNX runtime (`fastembed`).
 
 It needs no daemon and no network, and its weights are pinned by SHA-256 (model_integrity.py). An
-Ollama embedding path existed until it was measured and dropped: on the eval corpus it retrieved no
-better (recall@1 0.90 against 0.93), took about 2.5 times as long per query, its model could not be
-hash-pinned, and the pipeline's thresholds are calibrated for the ONNX model, so with it the
-multilingual gates failed (retrieval recall 0.75, abstention accuracy 0.27).
+Ollama embedding path existed until it was measured and dropped. The reasons, strongest first: with it
+the pipeline's multilingual gates fail (retrieval recall 0.75, abstention accuracy 0.27, both required
+>= 0.9) because every threshold is calibrated for the ONNX model; its model cannot be hash-pinned; and
+it took about 2.5 times as long per query. Retrieval quality was close (recall@1 0.90 against 0.93, a
+three-case difference of 91, recall@3 1.00 for both) and is not a reason: as integrated it never added
+the task prefixes nomic-embed-text expects, so that gap says nothing about the model itself.
 
 Models never switch automatically: they produce vectors of different sizes. Changing the model
 (MODEL_PROFILE, FASTEMBED_MODEL) is a deliberate setting followed by `make calibrate-models` and a

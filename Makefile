@@ -123,7 +123,7 @@ calibrate-models:
 up:
 	@command -v docker >/dev/null 2>&1 || { echo "Error: Docker is not installed. (Note: Docker is optional; SQLite is used by default with zero setup)."; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
-	@./venv/bin/python -m rag_lab.ops.init_env
+	@$(if $(wildcard venv/bin/python),./venv/bin/python,python3) -m rag_lab.ops.init_env
 	docker compose up -d
 
 # Optional LAN TLS (compose profile "caddy"): Caddy terminates HTTPS with its own local CA and proxies to the
