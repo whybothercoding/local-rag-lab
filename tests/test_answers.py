@@ -104,7 +104,7 @@ def test_dense_outage_is_recorded_and_sparse_results_still_return(rollback_index
     def broken_client(*args, **kwargs):
         raise RuntimeError("vector store offline")
 
-    monkeypatch.setattr("rag_lab.pipeline.retrieval.chromadb.PersistentClient", broken_client)
+    monkeypatch.setattr("chromadb.PersistentClient", broken_client)  # what ChromaStore opens
     state = hybrid_retrieval_node(_retrieval_state(ROLLBACK_QUESTION))
     assert "dense_retrieval_unavailable: RuntimeError" in state["degraded"]
     assert state["documents"], "keyword retrieval should still answer from the index"

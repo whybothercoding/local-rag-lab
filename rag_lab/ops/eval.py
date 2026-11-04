@@ -62,6 +62,14 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
     os.environ["KEY_STORE"] = "file"
     os.environ["KEY_ENVELOPE"] = ""
     os.environ["AUDIT_ANCHOR_COPY_DIR"] = ""
+    # The evaluation measures the embedded defaults; a .env that enables a scaling option must not redirect it.
+    # To evaluate an adapter on purpose, say so in the shell: `VECTOR_STORE=qdrant make eval` (docs/scaling.md). Even
+    # then it gets its own namespace, never the real collections or schema.
+    os.environ.setdefault("VECTOR_STORE", "chroma")
+    os.environ.setdefault("QDRANT_PREFIX", "eval_")
+    os.environ.setdefault("PGVECTOR_SCHEMA", "eval")
+    os.environ["CACHE_BACKEND"] = "sqlite"
+    os.environ["CACHE_DB_URI"] = ""
     os.environ["DB_URI"] = f"sqlite:///{out_dir / 'unused_checkpoints.db'}"
     if llm_mode:
         os.environ["LLM_PROVIDER"] = "ollama"

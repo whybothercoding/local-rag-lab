@@ -19,7 +19,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import chromadb
 import numpy as np
 import yaml
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -30,7 +29,6 @@ from rag_lab.security.audit import record as audit_record
 from rag_lab.config import settings
 from rag_lab.security.context_sanitizer import scan_chunk
 from rag_lab.retrieval.embedding_provider import (
-    FINGERPRINT_KEY,
     EmbeddingUnavailableError,
     embedding_fingerprint,
     get_embedding_model,
@@ -38,19 +36,11 @@ from rag_lab.retrieval.embedding_provider import (
 )
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
+from rag_lab.storage.vector_store import get_vector_store
 from rag_lab.storage.workspace_manager import ensure_base_dirs, sanitize_workspace_id
 
 logger = logging.getLogger("ingest")
 
-# Chroma rejects a single add() above a few thousand rows.
-_ADD_BATCH = 256
-# Cosine distance keeps similarity meaningful whichever embedding model produced the vectors.
-_COLLECTION_METADATA = {"hnsw:space": "cosine"}
-
-
-def _collection_metadata(fingerprint: str) -> dict[str, str]:
-    """Metadata for a new collection: distance space plus the model that built its vectors."""
-    return {**_COLLECTION_METADATA, FINGERPRINT_KEY: fingerprint}
 _FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _HEADER_TAG = re.compile(r"\A(?:#\s*clearance:\s*|\[clearance\]:\s*)([a-zA-Z0-9_-]+)[ \t]*(?:\r?\n|\Z)", re.IGNORECASE)
 
@@ -125,20 +115,14 @@ def _reusable_vectors(ws_id: str, fingerprint: str, manifest: dict | None, force
     if manifest.get("embedding") != fingerprint or manifest.get("passage_prefix") != settings.embedding_passage_prefix:
         return {}
     try:
-        collection = chromadb.PersistentClient(path=settings.chroma_path).get_collection(f"ws_{ws_id}")
-        if stored_fingerprint(getattr(collection, "metadata", None), manifest) != fingerprint:
+        store = get_vector_store()
+        if stored_fingerprint(store.collection_metadata(ws_id), manifest) != fingerprint:
             return {}
         found: dict[str, list[float]] = {}
-        total = collection.count()
-        for offset in range(0, total, 1000):
-            page = collection.get(include=["documents", "embeddings"], limit=1000, offset=offset)
-            texts, vectors = page.get("documents") or [], page.get("embeddings")
-            if vectors is None or len(texts) != len(vectors):
-                return {}
-            for text, vector in zip(texts, vectors):
-                array = np.asarray(vector, dtype=np.float64)
-                if text and array.ndim == 1 and array.size and bool(np.isfinite(array).all()):
-                    found.setdefault(text, array.tolist())
+        for text, vector in store.read_vectors(ws_id):
+            array = np.asarray(vector, dtype=np.float64)
+            if text and array.ndim == 1 and array.size and bool(np.isfinite(array).all()):
+                found.setdefault(text, array.tolist())
         return found
     except Exception:
         logger.debug("Could not read the previous vectors of %s; embedding everything", ws_id, exc_info=True)
@@ -172,54 +156,9 @@ def _save_manifest(ws_id: str, manifest_data: dict) -> None:
     os.replace(temporary, path)
 
 
-def _add_in_batches(collection, ids, documents, metadatas, embeddings) -> None:
-    for start in range(0, len(ids), _ADD_BATCH):
-        end = start + _ADD_BATCH
-        collection.add(
-            ids=ids[start:end],
-            documents=documents[start:end],
-            metadatas=metadatas[start:end],
-            embeddings=embeddings[start:end],
-        )
-
-
-def _delete_quiet(client, name: str) -> None:
-    try:
-        client.delete_collection(name=name)
-    except Exception as exc:
-        logger.info("Collection %s was not deleted (%s)", name, exc)
-
-
-def _publish_collection(client, name: str, ids, documents, metadatas, embeddings, fingerprint: str) -> None:
-    """Build the new collection beside the live one, then swap them by renaming.
-
-    Readers see the old index until the swap, and the gap while it happens is two renames long.
-    If the swap fails the old collection is put back, so a failed publish never loses the live index.
-    """
-    build_name, old_name = f"{name}__build", f"{name}__old"
-    _delete_quiet(client, build_name)
-    _delete_quiet(client, old_name)
-    building = client.create_collection(name=build_name, metadata=_collection_metadata(fingerprint))
-    _add_in_batches(building, ids, documents, metadatas, embeddings)
-
-    live_exists = name in [getattr(c, "name", str(c)) for c in client.list_collections()]
-    if live_exists:
-        client.get_collection(name).modify(name=old_name)
-    try:
-        building.modify(name=name)
-    except Exception:
-        logger.exception("Could not publish collection %s; restoring the previous index", name)
-        if live_exists:
-            client.get_collection(old_name).modify(name=name)
-        raise
-    _delete_quiet(client, old_name)
-
-
 def _clear_index(ws_id: str) -> None:
     """Remove every index artifact of a workspace: vectors, keywords, manifest, and cached answers."""
-    client = chromadb.PersistentClient(path=settings.chroma_path)
-    for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
-        _delete_quiet(client, name)
+    get_vector_store().delete(ws_id)
     delete_sparse_index(ws_id, base_dir=settings.bm25_dir)
     manifest = _get_manifest_path(ws_id)
     if manifest.exists():
@@ -438,10 +377,8 @@ def ingest_workspace(
             and manifest.get("chunker") == CHUNKER_VERSION
         ):
             try:
-                client = chromadb.PersistentClient(path=settings.chroma_path)
-                existing_cols = [getattr(c, "name", str(c)) for c in client.list_collections()]
                 fts_exists = os.path.exists(os.path.join(settings.bm25_dir, f"{ws_id}.db"))
-                if f"ws_{ws_id}" in existing_cols and fts_exists:
+                if get_vector_store().exists(ws_id) and fts_exists:
                     result.documents = len(raw_docs)
                     result.chunks = manifest.get("total_chunks", 0)
                     result.indexed_files = list(file_hashes.keys())
@@ -504,12 +441,9 @@ def ingest_workspace(
     result.reused = sum(1 for text in chunks if text in stored)
     result.embedded = len(to_embed)
 
-    chroma_path = settings.chroma_path
     bm25_dir = settings.bm25_dir
-    collection_name = f"ws_{ws_id}"
     try:
-        client = chromadb.PersistentClient(path=chroma_path)
-        _publish_collection(client, collection_name, chunk_ids, chunks, metadatas, vectors, fingerprint)
+        get_vector_store().publish(ws_id, chunk_ids, chunks, metadatas, vectors, fingerprint)
     except Exception as exc:
         logger.exception("Chroma write failed for workspace %s", ws_id)
         result.error = f"Vector index write failed: {exc}"

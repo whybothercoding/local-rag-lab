@@ -174,7 +174,7 @@ def test_an_unreadable_previous_index_means_embedding_everything_not_failing(sto
     first = sync(source)
     embedder.calls.clear()
     (source / "alpha.md").write_text("# Alpha\n\nChanged so that a sync is needed at all.")
-    real, reads = ing.chromadb.PersistentClient, {"n": 0}
+    real, reads = chromadb.PersistentClient, {"n": 0}
 
     class Client:
         def __init__(self, path):
@@ -189,7 +189,7 @@ def test_an_unreadable_previous_index_means_embedding_everything_not_failing(sto
         def __getattr__(self, item):
             return getattr(self._client, item)
 
-    monkeypatch.setattr(ing.chromadb, "PersistentClient", lambda path: Client(path))
+    monkeypatch.setattr(chromadb, "PersistentClient", lambda path: Client(path))
     result = sync(source)
     assert result.reused == 0 and len(embedder.embedded) >= first.chunks - 2
 

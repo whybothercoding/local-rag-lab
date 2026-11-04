@@ -287,7 +287,7 @@ def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path
     fake_collection.query.side_effect = query_side_effect
     fake_client = mocker.MagicMock()
     fake_client.get_collection.return_value = fake_collection
-    mocker.patch("rag_lab.pipeline.retrieval.chromadb.PersistentClient", return_value=fake_client)
+    mocker.patch("chromadb.PersistentClient", return_value=fake_client)  # what ChromaStore opens
     mocker.patch("rag_lab.pipeline.retrieval.search_sparse_chunks", return_value=[])
 
     out = hybrid_retrieval_node({
