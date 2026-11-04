@@ -382,7 +382,21 @@ def print_status() -> int:
         ok = False
     pulled = ollama_models(settings.ollama_base_url)
     chat_provider = settings.llm_provider.lower().strip()
-    if pulled is None:
+    if chat_provider == "openai":
+        from rag_lab.pipeline.llm_provider import openai_model_name, probe_openai
+
+        probe = probe_openai()
+        wanted = openai_model_name()
+        if probe.models is None:
+            print(f"[!!] LLM backend         : OpenAI-compatible server at {settings.local_llm_url}: {probe.error}")
+            ok = False
+        elif wanted in probe.models:
+            print(f"[OK] LLM backend         : OpenAI-compatible server reachable ({wanted} at {settings.local_llm_url})")
+        else:
+            print(f"[!!] LLM backend         : {settings.local_llm_url} is up but does not serve '{wanted}' "
+                  f"(serves: {', '.join(sorted(probe.models)) or 'nothing'}); set LOCAL_LLM_MODEL")
+            ok = False
+    elif pulled is None:
         if chat_provider == "ollama":
             print(f"[!!] Ollama              : offline at {settings.ollama_base_url}, but the configuration requires it")
             ok = False
