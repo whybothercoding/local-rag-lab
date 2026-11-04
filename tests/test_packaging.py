@@ -77,12 +77,21 @@ def test_package_modules_import_and_ship_their_data():
     assert {"common_passwords.txt", "injection_patterns.tsv"} <= set(data["tool"]["setuptools"]["package-data"]["rag_lab.security"])
     assert "data/*.json" in data["tool"]["setuptools"]["package-data"]["rag_lab.lang"]
 
+    # Modules that need an optional package (an extra in pyproject.toml): they must import where it is installed and may
+    # fail to import, with exactly that package missing, where it is not.
+    optional = {"rag_lab.storage.qdrant_store": "qdrant_client"}
+    assert set(optional.values()) <= {"qdrant_client"} and "qdrant" in data["project"]["optional-dependencies"]
+
     names = [m.name for m in pkgutil.walk_packages(rag_lab.__path__, "rag_lab.")]
     assert len(names) >= 30
     for name in names:
         # The Streamlit page runs only inside a Streamlit session (see the root ui.py launcher).
-        if name != "rag_lab.ui.streamlit_app":
+        if name == "rag_lab.ui.streamlit_app":
+            continue
+        try:
             assert importlib.import_module(name) is not None
+        except ModuleNotFoundError as exc:
+            assert optional.get(name) == exc.name, f"{name} failed to import: {exc}"
 
 
 def test_no_flat_modules_are_left_at_the_repository_root():
