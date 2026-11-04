@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset db-password lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -33,6 +33,7 @@ help:
 	@echo "  make totp-enroll ADMIN=<me>                    Turn on two-factor sign-in for yourself (owners and admins)"
 	@echo "  make totp-recovery ADMIN=<me>                  Replace your recovery codes"
 	@echo "  make totp-disable ADMIN=<me> [ACCOUNT=<u>]     Turn it off (yours; another account's: owner only)"
+	@echo "  make recover ACCOUNT=<u> [RESET_TOTP=1] [RESET_PASSWORD=1]  Operator break-glass at this machine for a locked-out account"
 	@echo "  make groups                                    List groups, members, and workspace roles"
 	@echo "  make create-group GROUP=<g> ADMIN=<admin>"
 	@echo "  make delete-group GROUP=<g> ADMIN=<admin>      Members keep their own access"
@@ -269,6 +270,12 @@ set-role:
 set-default:
 	@test -n "$(or $(ROLE),$(PERMS))" || (echo "Usage: make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>  (or PERMS=query,auto_approve)" && exit 1)
 	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-default $(if $(ROLE),--role $(ROLE),--perms $(PERMS))
+
+# Break-glass for an account that cannot sign in (lost authenticator and codes, forgotten password), including a sole
+# owner. No sign-in: run it at the machine, from a terminal. See README "When someone is locked out".
+recover:
+	@test -n "$(ACCOUNT)" && { test -n "$(RESET_TOTP)" || test -n "$(RESET_PASSWORD)"; } || (echo "Usage: make recover ACCOUNT=<account> [RESET_TOTP=1] [RESET_PASSWORD=1]" && exit 1)
+	./venv/bin/python -m rag_lab.security.access recover $(ACCOUNT) $(if $(RESET_TOTP),--totp,) $(if $(RESET_PASSWORD),--password,)
 
 totp-enroll:
 	@test -n "$(ADMIN)" || (echo "Usage: make totp-enroll ADMIN=<your account>" && exit 1)

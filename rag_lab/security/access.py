@@ -749,6 +749,55 @@ def disable_totp(
     _audit("totp_disabled" if who == name else "totp_reset", who, {"username": name})
 
 
+RECOVERY_ACTOR = "local-recovery"
+
+
+def recover_account(
+    username: str,
+    *,
+    reset_totp: bool = False,
+    new_password: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Break-glass for a locked-out account, run by whoever operates this machine (`make recover`).
+
+    It authenticates no one on purpose: the access key that signs the policy is readable only by the OS user running
+    this, so anyone who can call it could already rewrite the policy by hand. What it adds is a supported, audited
+    way to do that, instead of a hand-edit or a stale policy backup (which resurrects deleted accounts and revoked
+    sessions). It resets the second factor and/or sets a new password, and always signs the account out. It is
+    reachable from the command line only, never from the UI, and LOCAL_RECOVERY=off disables it.
+    """
+    if not settings.local_recovery:
+        raise PermissionError("Local recovery is switched off (LOCAL_RECOVERY=off).")
+    name = _normalize_username(username)
+    if not reset_totp and new_password is None:
+        raise ValueError("Choose what to recover: the second factor, the password, or both.")
+    if new_password is not None:
+        check_password_strength(new_password, name)
+
+    def mutate(policy: dict[str, Any]) -> bool:
+        user = _existing(policy, name)
+        had_totp = bool(user.get("totp") or user.get("totp_pending"))
+        if reset_totp:
+            user.pop("totp", None)
+            user.pop("totp_pending", None)
+        if new_password is not None:
+            user["password_hash"] = hash_password(new_password)
+        user["token_version"] = int(user.get("token_version", 0)) + 1
+        return had_totp
+
+    had_totp = _update(path, mutate)
+    try:
+        operator = getpass.getuser()
+    except Exception:
+        operator = "unknown"
+    _audit("account_recovered_local", RECOVERY_ACTOR, {
+        "username": name, "totp_reset": bool(reset_totp and had_totp), "password_reset": new_password is not None,
+        "os_user": operator,
+    })
+    return {"username": name, "totp_reset": bool(reset_totp and had_totp), "password_reset": new_password is not None}
+
+
 def prompt_second_factor() -> str:
     """Ask for an authentication or recovery code on a terminal."""
     return getpass.getpass("Authentication code (or a recovery code): ")
@@ -983,13 +1032,19 @@ def add_user(
 
 
 def set_password(username: str, password: str, path: str | None = None, actor: str | None = None) -> None:
-    """Set or reset an account's password. Grants and admin status are kept; open sessions are revoked."""
+    """Set or reset an account's password. Grants and admin status are kept; open sessions are revoked.
+
+    An owner's password is reset by an owner (or by `recover_account` at the machine): otherwise any administrator
+    could take over the account the owner rule exists to protect.
+    """
     name = _normalize_username(username)
     check_password_strength(password, name)
     who = _authorize_change(actor, path)
 
     def mutate(policy: dict[str, Any]) -> None:
         user = _existing(policy, name)
+        if actor is not None and role_of(user) == "owner" and role_of(policy["users"].get(who)) != "owner":
+            raise PermissionError("Only an owner can reset an owner's password.")
         user["password_hash"] = hash_password(password)
         user["token_version"] = int(user.get("token_version", 0)) + 1
 
@@ -1633,6 +1688,14 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Turn off two-factor sign-in: your own (needs a code), or another account's (owner only)")
     totp_off.add_argument("username", nargs="?", help="Account to reset (default: the --as account)")
 
+    rec = sub.add_parser(
+        "recover",
+        help="Break-glass at this machine for a locked-out account (no sign-in): reset its second factor and/or password",
+    )
+    rec.add_argument("username")
+    rec.add_argument("--totp", action="store_true", help="Turn off the account's two-factor sign-in")
+    rec.add_argument("--password", action="store_true", help="Set a new password (prompts)")
+
     sub.add_parser("groups", help="List groups, their members, and their workspace roles")
     cg = sub.add_parser("create-group", parents=[signer_parent], help="Create a group")
     cg.add_argument("group")
@@ -1684,7 +1747,7 @@ def _confirm(prompt: str) -> bool:
 
 def _resolve_actor(args: argparse.Namespace) -> str | None:
     """Sign the acting administrator in. The first administrator can be created without one."""
-    if args.command in ("list", "groups"):
+    if args.command in ("list", "groups", "recover"):  # recover authenticates no one: it is run at the machine
         return None
     if not has_admin() and args.command == "add-user" and args.admin:
         return None
@@ -1714,6 +1777,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"They hold {', '.join(perms) or 'no permissions'} on every workspace without a grant of its own.")
             for gap in review_mode_report(_workspace_ids()).gaps:
                 print(f"Warning: {gap}")
+        elif args.command == "recover":
+            _recover(args)
         elif args.command == "totp-enroll":
             _totp_enroll(actor)
         elif args.command == "totp-recovery":
@@ -1825,6 +1890,28 @@ def _print_recovery_codes(codes: list[str]) -> None:
     print("Recovery codes (each works once; keep them somewhere safe, they are not shown again):")
     for code in codes:
         print(f"  {code}")
+
+
+def _recover(args: argparse.Namespace) -> None:
+    if not settings.local_recovery:
+        raise PermissionError("Local recovery is switched off (LOCAL_RECOVERY=off).")
+    if not sys.stdin.isatty():
+        raise PermissionError("Recovery asks for a confirmation (and a new password) on a terminal. Run it from one, on this machine.")
+    if not (args.totp or args.password):
+        raise ValueError("Choose what to recover: --totp (make recover RESET_TOTP=1), --password (RESET_PASSWORD=1), or both.")
+    name = _normalize_username(args.username)
+    _existing(load_policy(), name)
+    wanted = " and ".join(part for part, on in (("turn off two-factor sign-in", args.totp), ("set a new password", args.password)) if on)
+    print(f"This will {wanted} for '{name}' and sign them out everywhere. It needs no sign-in: it is for an account that "
+          "cannot sign in, run by whoever operates this machine. The change is written to the audit log.")
+    if input(f"Type the account name ({name}) to confirm: ").strip().lower() != name:
+        print("Not confirmed. Nothing was changed.")
+        return
+    password = _prompt_new_password(name) if args.password else None
+    result = recover_account(name, reset_totp=args.totp, new_password=password)
+    done = [what for what, on in (("two-factor sign-in is off", result["totp_reset"]), ("the password was set", result["password_reset"])) if on]
+    print(f"Recovered '{name}': {', '.join(done) or 'two-factor sign-in was already off'}; their sessions were revoked.")
+    print("If they were just locked out by failed sign-ins, the lockout ends on its own within 15 minutes.")
 
 
 def _totp_enroll(actor: str | None) -> None:

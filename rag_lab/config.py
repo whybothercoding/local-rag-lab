@@ -138,6 +138,9 @@ class Settings:
     key_store: str
     # Service name for keychain entries; each key gets its own random account name, stored in its key file.
     key_service: str
+    # Whether `make recover` (the operator-run break-glass for a locked-out account) may run. On by default: this
+    # is a local-first tool and its operator owns the machine. Turn it off on a shared host.
+    local_recovery: bool
     # Name of a registered envelope-encryption provider (Vault/KMS) that wraps newly created keys. Empty: none.
     key_envelope: str
     backup_dir: str
@@ -217,6 +220,7 @@ class Settings:
             key_store=_env("KEY_STORE", "auto").strip().lower(),
             key_service=_env("KEY_SERVICE", "local-rag-lab"),
             key_envelope=_env("KEY_ENVELOPE", "").strip(),
+            local_recovery=_flag("LOCAL_RECOVERY", "on"),
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),
