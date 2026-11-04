@@ -10,6 +10,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from rag_lab import accel
+
 # The one pattern list both scanners use: this module reads it; crates/rag_accel compiles it in.
 PATTERNS_PATH = Path(__file__).resolve().parent / "injection_patterns.tsv"
 
@@ -33,12 +35,13 @@ def _load_patterns(path: Path = PATTERNS_PATH) -> tuple[list[tuple[re.Pattern[st
 _INJECTION_PATTERNS, _DOCUMENT_ONLY_REASONS = _load_patterns()
 
 
-# Try importing native Rust accelerator, fallback to pure Python
-try:
-    import rag_accel
-    RUST_ACCEL = True
-except ImportError:
-    RUST_ACCEL = False
+# The native Rust scanner when it is installed. Missing it is never silent (a warning now, `make status` degraded),
+# and RAG_ACCEL=required makes it an error right here, which every entry point reaches. See rag_lab/accel.py.
+rag_accel: Any = accel.module()
+RUST_ACCEL = rag_accel is not None
+accel.check()
+if not RUST_ACCEL:
+    accel.note_degraded(str(accel.status().reason))
 
 
 _INVISIBLE = dict.fromkeys(
@@ -94,8 +97,8 @@ def scan_chunk(text: str) -> tuple[bool, str | None]:
         try:
             verdict: tuple[bool, str | None] = rag_accel.scan_chunk(text)
             return verdict
-        except Exception:
-            pass
+        except Exception as exc:
+            accel.call_failed(exc)  # an error under RAG_ACCEL=required; otherwise a note, then the Python scan below
 
     for pattern, reason in _INJECTION_PATTERNS:
         match = pattern.search(text)

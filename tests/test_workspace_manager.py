@@ -162,9 +162,14 @@ def test_workspace_stats_counts_nested_supported_files_and_ignores_unsupported(t
 
 # --- make status: provider-aware readiness ---------------------------------------
 
-def _status(capsys, monkeypatch, *, embedding="fastembed", llm="deterministic", pulled=None):
+def _status(capsys, monkeypatch, *, embedding="fastembed", llm="deterministic", pulled=None, native=None):
     from rag_lab.storage.workspace_manager import print_status
 
+    from rag_lab import accel
+
+    # Whether this machine has the accelerator is not what these tests are about; its own tests set it.
+    given = native or accel.AccelStatus("preferred", True, version="test")
+    monkeypatch.setattr(accel, "status", lambda: given)
     monkeypatch.setattr(settings, "embedding_provider", embedding)
     monkeypatch.setattr(settings, "llm_provider", llm)
     monkeypatch.setattr("rag_lab.pipeline.llm_provider.ollama_models", lambda *a, **k: pulled)
@@ -214,3 +219,24 @@ def test_status_rejects_an_unknown_embedding_provider(rollback_index, capsys, mo
     code, out = _status(capsys, monkeypatch, embedding="bogus")
     assert code == 1
     assert "Unknown EMBEDDING_PROVIDER" in out
+
+
+# --- make status: the native accelerator ----------------------------------------
+
+def test_status_shows_the_accelerator_as_ok_when_it_is_active(rollback_index, capsys, monkeypatch):
+    from rag_lab import accel
+
+    code, out = _status(capsys, monkeypatch, native=accel.AccelStatus("preferred", True, version="0.1.0"))
+    assert code == 0, out
+    assert "[OK] Context sanitizer   : native accelerator active (rag-accel 0.1.0, RAG_ACCEL=preferred)" in out
+
+
+def test_status_shows_the_python_fallback_as_degraded_and_fails(rollback_index, capsys, monkeypatch):
+    from rag_lab import accel
+
+    code, out = _status(
+        capsys, monkeypatch, native=accel.AccelStatus("preferred", False, reason="No module named 'rag_accel'")
+    )
+    assert code == 1
+    assert "[!!] Context sanitizer   : DEGRADED, pure-Python fallback (No module named 'rag_accel')" in out
+    assert "wheelhouse" in out and "make rust-build" in out

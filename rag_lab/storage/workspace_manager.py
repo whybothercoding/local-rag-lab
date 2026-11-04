@@ -347,7 +347,7 @@ def print_status() -> int:
     from rag_lab.security.audit import verify_anchors, verify_chain
     from rag_lab.storage.checkpointer import get_checkpointer
     from rag_lab.config import settings
-    from rag_lab.security.context_sanitizer import RUST_ACCEL
+    from rag_lab import accel
     from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
     from rag_lab.pipeline.llm_provider import ollama_models
     from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
@@ -379,8 +379,13 @@ def print_status() -> int:
             ok = False
 
     # 2. Rust accelerator & Ollama. Ollama is optional unless a setting depends on it.
-    accel_state = "active (native PyO3)" if RUST_ACCEL else "fallback (pure Python; run 'make rust-build' to compile)"
-    print(f"[OK] Context sanitizer   : {accel_state}")
+    native = accel.status()
+    if native.active:
+        print(f"[OK] Context sanitizer   : native accelerator active (rag-accel {native.version}, RAG_ACCEL={native.mode})")
+    else:
+        # Loud on purpose: the pure-Python scanner gives the same verdicts but is slower, and Rust is the default.
+        print(f"[!!] Context sanitizer   : DEGRADED, pure-Python fallback ({native.reason}). {accel.HOW_TO_FIX}")
+        ok = False
     pulled = ollama_models(settings.ollama_base_url)
     chat_provider = settings.llm_provider.lower().strip()
     if pulled is None:
