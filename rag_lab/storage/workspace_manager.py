@@ -333,7 +333,15 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
 
 def print_status() -> int:
     """Print an end-to-end operational readiness and health summary."""
-    from rag_lab.security.access import PolicyIntegrityError, describe_review_mode, list_users, review_mode_report
+    from rag_lab.security.access import (
+        PolicyIntegrityError,
+        describe_review_mode,
+        get_default_role,
+        growth_suggestions,
+        list_groups,
+        list_users,
+        review_mode_report,
+    )
     from rag_lab.ops.approve import list_pending_threads
     from rag_lab.pipeline.graph import workflow
     from rag_lab.security.audit import verify_anchors, verify_chain
@@ -399,14 +407,20 @@ def print_status() -> int:
     # 3. Accounts & RBAC policy
     try:
         users = list_users()
-        admins = [u["username"] for u in users if u["admin"]]
-        print(f"[OK] RBAC accounts       : {len(users)} user(s), {len(admins)} admin(s)")
+        roles: dict[str, int] = {}
+        for u in users:
+            roles[u["role"] or "default"] = roles.get(u["role"] or "default", 0) + 1
+        breakdown = ", ".join(f"{n} {r}" for r, n in sorted(roles.items()))
+        print(f"[OK] RBAC accounts       : {len(users)} user(s){f' ({breakdown})' if breakdown else ''}, "
+              f"{len(list_groups())} group(s), default role {get_default_role() or 'custom'}")
         # Advisory: a release-mode gap is a governance choice to review, not a broken installation.
         report = review_mode_report(list_workspaces())
         for line in describe_review_mode(report):
             print(f"[OK] {line}")
         for warning in report.warnings:
             print(f"[--] Review coverage     : {warning}")
+        for suggestion in growth_suggestions(list_workspaces()):
+            print(f"[->] Next step           : {suggestion}")
     except PolicyIntegrityError as exc:
         print(f"[!!] RBAC policy error   : {exc}")
         ok = False

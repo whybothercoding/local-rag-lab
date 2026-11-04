@@ -9,24 +9,33 @@ from langgraph.types import Command
 
 from rag_lab.security.access import (
     CLEARANCE_LEVELS,
+    ROLES,
+    WORKSPACE_ROLES,
     PolicyIntegrityError,
+    add_to_group,
     add_user,
     allowed_workspaces,
     authorize,
     clearance_covers,
+    create_group,
     describe_review_mode,
     effective_permissions,
     get_default_permissions,
+    get_default_role,
+    grant_group,
     get_user_clearance,
     is_admin,
     is_idle_expired,
+    list_groups,
     load_policy,
+    remove_from_group,
     reset_grant,
     review_mode_report,
     revoke_sessions,
-    set_admin,
-    set_default_permissions,
+    role_of,
+    set_default_role,
     set_grant,
+    set_role,
     set_user_clearance,
     set_user_permissions_everywhere,
     sign_in,
@@ -398,17 +407,22 @@ if admin:
             st.caption(line)
         for warning in report.warnings:
             st.warning(warning)
-        st.caption(f"Global default permissions: `{', '.join(global_defaults) or 'none'}`")
-        def_q = st.checkbox("Default: query", value="query" in global_defaults, key="def_perm_q")
-        def_auto = st.checkbox("Default: auto_approve", value="auto_approve" in global_defaults, key="def_perm_auto")
-        if st.button("Save Global Defaults", use_container_width=True, key="save_global_defaults"):
-            next_defaults = []
-            if def_q:
-                next_defaults.append("query")
-            if def_auto:
-                next_defaults.append("auto_approve")
-            set_default_permissions(next_defaults, actor=user)
-            st.success(f"Global defaults updated to: {', '.join(next_defaults) or 'none'}")
+        current_default = get_default_role()
+        st.caption(
+            f"Default role (accounts without a role): `{current_default or 'custom'}` "
+            f"({', '.join(global_defaults) or 'none'})"
+        )
+        default_choice = st.selectbox(
+            "Default role",
+            list(WORKSPACE_ROLES),
+            index=WORKSPACE_ROLES.index(current_default) if current_default in WORKSPACE_ROLES else 0,
+            key="default_role_select",
+        )
+        if default_choice != current_default and st.button(
+            "Save Default Role", use_container_width=True, key="save_default_role"
+        ):
+            set_default_role(default_choice, actor=user)
+            st.success(f"Default role is now '{default_choice}'.")
             st.rerun()
 
         st.divider()
@@ -417,8 +431,11 @@ if admin:
             selected_user = st.selectbox("Account", user_list, key="grant_user_select")
             user_info = policy_data["users"][selected_user]
             curr_clr = user_info.get("clearance", "public")
-            curr_admin = bool(user_info.get("admin", False))
-            st.caption(f"Clearance: `{curr_clr}` | Admin: `{curr_admin}`")
+            curr_role = role_of(user_info) or "default"
+            st.caption(
+                f"Clearance: `{curr_clr}` | Role: `{curr_role}` | "
+                f"Groups: `{', '.join(user_info.get('groups') or []) or '-'}`"
+            )
 
             clr_idx = CLEARANCE_LEVELS.index(curr_clr) if curr_clr in CLEARANCE_LEVELS else 0
             new_clr = st.selectbox(
@@ -427,12 +444,14 @@ if admin:
                 index=clr_idx,
                 key=f"clr_select_{selected_user}",
             )
-            new_admin = st.checkbox(
-                "Administrator privilege",
-                value=curr_admin,
-                key=f"admin_chk_{selected_user}",
+            role_choices = ["default", *ROLES]
+            new_role = st.selectbox(
+                "Role",
+                role_choices,
+                index=role_choices.index(curr_role),
+                key=f"role_select_{selected_user}",
             )
-            if (new_clr != curr_clr or new_admin != curr_admin) and st.button(
+            if (new_clr != curr_clr or new_role != curr_role) and st.button(
                 "Update Role / Clearance",
                 use_container_width=True,
                 key=f"save_role_{selected_user}",
@@ -440,8 +459,8 @@ if admin:
                 try:
                     if new_clr != curr_clr:
                         set_user_clearance(selected_user, new_clr, actor=user)
-                    if new_admin != curr_admin:
-                        set_admin(selected_user, new_admin, actor=user)
+                    if new_role != curr_role:
+                        set_role(selected_user, new_role, actor=user)
                     st.success(f"Updated role/clearance for '{selected_user}'.")
                     st.rerun()
                 except (ValueError, PermissionError) as exc:
@@ -490,14 +509,60 @@ if admin:
         new_u_name = st.text_input("New Username", key="new_user_name").strip()
         new_u_pass = st.text_input("Initial Password (min 12 chars)", type="password", key="new_user_pass")
         new_u_clr = st.selectbox("Initial Clearance", list(CLEARANCE_LEVELS), index=0, key="new_user_clr")
-        new_u_adm = st.checkbox("Grant Admin Role", value=False, key="new_user_adm")
+        new_u_role = st.selectbox(
+            "Role", ["default", "member", "trusted", "reviewer", "admin", "owner", "none"], key="new_user_role",
+            help=f"'default' follows the default role ({get_default_role() or 'custom'}).",
+        )
         if st.button("Create User", use_container_width=True, key="create_user_btn"):
             try:
-                add_user(new_u_name, new_u_pass, admin=new_u_adm, clearance=new_u_clr, actor=user)
-                st.success(f"Created account '{new_u_name.lower()}' with default workspace access.")
+                add_user(new_u_name, new_u_pass, clearance=new_u_clr, actor=user,
+                         role=None if new_u_role == "default" else new_u_role)
+                st.session_state.account_notice = (
+                    f"Created account '{new_u_name.lower()}' with role '{new_u_role}'.",
+                    review_mode_report(list_workspaces()).gaps,
+                )
                 st.rerun()
             except (ValueError, PermissionError) as exc:
                 st.error(str(exc))
+        notice = st.session_state.pop("account_notice", None)
+        if notice:
+            st.success(notice[0])
+            for gap in notice[1]:
+                st.warning(f"Answers may wait with nobody able to approve them: {gap}")
+
+    # 1c. Groups
+    with st.sidebar.expander("Groups (Admin)"):
+        groups = list_groups()
+        for g in groups:
+            grants = ", ".join(f"{'all' if ws == '*' else ws}: {r}" for ws, r in sorted(g["grants"].items()))
+            st.caption(f"**{g['group']}**: {', '.join(g['members']) or 'no members'} | {grants or 'no grants'}")
+        new_group = st.text_input("New group", key="new_group_name").strip()
+        if st.button("Create Group", use_container_width=True, key="create_group_btn"):
+            try:
+                create_group(new_group, actor=user)
+                st.rerun()
+            except (ValueError, PermissionError) as exc:
+                st.error(str(exc))
+        group_names = [g["group"] for g in groups]
+        if group_names:
+            target_group = st.selectbox("Group", group_names, key="group_select")
+            member = st.selectbox("Account", sorted(load_policy()["users"]), key="group_member_select")
+            in_group = member in next(g["members"] for g in groups if g["group"] == target_group)
+            if st.button("Remove from group" if in_group else "Add to group", use_container_width=True,
+                         key="group_member_btn"):
+                try:
+                    (remove_from_group if in_group else add_to_group)(member, target_group, actor=user)
+                    st.rerun()
+                except (ValueError, PermissionError) as exc:
+                    st.error(str(exc))
+            group_ws = st.selectbox("Workspace", ["all", *all_workspaces], key="group_ws_select")
+            group_role = st.selectbox("Role on workspace", ["default", *WORKSPACE_ROLES], key="group_role_select")
+            if st.button("Save Group Grant", use_container_width=True, key="group_grant_btn"):
+                try:
+                    grant_group(target_group, group_ws, group_role, actor=user)
+                    st.rerun()
+                except (ValueError, PermissionError) as exc:
+                    st.error(str(exc))
 
     # 2. Add New Workspace
     with st.sidebar.expander("Create Workspace Bundle"):
