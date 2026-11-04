@@ -342,12 +342,20 @@ def print_status() -> int:
         list_users,
         review_mode_report,
     )
-    from rag_lab.ops.approve import list_pending_threads
-    from rag_lab.pipeline.graph import workflow
+    from rag_lab import accel
+    from rag_lab.config import settings
+
+    try:
+        # Importing the pipeline imports the sanitizer, which refuses to load under RAG_ACCEL=required without the
+        # accelerator. The status check is the tool that should say so, not crash with it.
+        from rag_lab.ops.approve import list_pending_threads
+        from rag_lab.pipeline.graph import workflow
+    except accel.AcceleratorUnavailableError as exc:
+        print("=== Local Enterprise RAG Lab: System Status ===")
+        print(f"[!!] Context sanitizer   : {exc}")
+        return 1
     from rag_lab.security.audit import verify_anchors, verify_chain
     from rag_lab.storage.checkpointer import get_checkpointer
-    from rag_lab.config import settings
-    from rag_lab import accel
     from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint
     from rag_lab.pipeline.llm_provider import ollama_models
     from rag_lab.security.model_integrity import ModelIntegrityError, verify_model

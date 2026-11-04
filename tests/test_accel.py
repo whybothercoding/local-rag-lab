@@ -108,3 +108,22 @@ def test_the_sanitizer_reports_a_crashing_extension_instead_of_hiding_it(monkeyp
 def test_status_never_raises_even_for_a_bad_mode(monkeypatch):
     monkeypatch.setattr(settings, "rag_accel", "nonsense")
     assert isinstance(accel.status(), AccelStatus)
+
+
+def test_status_reports_a_required_but_missing_accelerator_instead_of_crashing():
+    done = run_without_the_module("required", """
+import sys
+from rag_lab.storage.workspace_manager import main
+raise SystemExit(main(["status"]))
+""")
+    assert done.returncode == 1 and "Traceback" not in done.stderr, done.stderr
+    assert "[!!] Context sanitizer" in done.stdout and "RAG_ACCEL=required" in done.stdout
+    assert "wheelhouse" in done.stdout and "make rust-build" in done.stdout
+
+
+def test_status_under_preferred_without_the_module_shows_the_degraded_line_and_exits_1():
+    done = run_without_the_module("preferred", """
+from rag_lab.storage.workspace_manager import main
+raise SystemExit(main(["status"]))
+""")
+    assert done.returncode == 1 and "[!!] Context sanitizer   : DEGRADED" in done.stdout
