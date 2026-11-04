@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rag-accel"
+description = "Native accelerator for Local Enterprise RAG Lab: the prompt-injection pattern scan"
+requires-python = ">=3.11"
+dynamic = ["version"]
+
+# Build from a checkout of the repository: the crate compiles in ../../rag_lab/security/injection_patterns.tsv,
+# so there is one pattern list for the Python and the native scanner.
+[tool.maturin]
+module-name = "rag_accel"
+strip = true

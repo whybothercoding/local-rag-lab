@@ -2,11 +2,17 @@
 name = "rag_accel"
 version = "0.1.0"
 edition = "2021"
+description = "Native accelerator for Local Enterprise RAG Lab: the prompt-injection pattern scan"
 
 [lib]
 name = "rag_accel"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+# abi3-py311: one wheel per platform serves Python 3.11 and every later version, including 3.14.
+pyo3 = { version = "0.30", features = ["abi3-py311"] }
 regex = "1.11"
+
+[profile.release]
+lto = true
+codegen-units = 1

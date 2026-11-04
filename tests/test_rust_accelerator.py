@@ -2,8 +2,9 @@
 
 Validates:
 1. 100% behavioral parity between pure-Python reference implementation and native Rust accelerator.
-2. Ingestion chunker parity.
-3. Micro-benchmark measuring speedup on bulk multi-pattern context scanning.
+2. Micro-benchmark measuring speedup on bulk multi-pattern context scanning.
+
+There is no native chunker: chunking was 0.05 s of a 91 s ingest (embedding was 81 s), so it was removed.
 """
 import time
 import pytest
@@ -30,7 +31,7 @@ def test_rust_accelerator_loaded():
     import rag_accel
     assert hasattr(rag_accel, "scan_chunk")
     assert hasattr(rag_accel, "scan_chunks")
-    assert hasattr(rag_accel, "split_text")
+    assert not hasattr(rag_accel, "split_text"), "the native chunker was removed: it saved 0.05% of ingest time"
 
 
 def test_pure_python_and_rust_parity():
@@ -64,27 +65,6 @@ def test_pure_python_and_rust_parity():
         # Verdicts and exact reason strings must be 100% identical
         assert py_safe == rs_safe, f"Verdict mismatch on: '{case}' (Py: {py_safe}, Rs: {rs_safe})"
         assert py_reason == rs_reason, f"Reason mismatch on: '{case}' (Py: '{py_reason}' vs Rs: '{rs_reason}')"
-
-
-def test_chunker_behavior():
-    import rag_accel
-    text = "The quick brown fox jumps over the lazy dog. Local enterprise RAG with LangGraph and Rust acceleration."
-    chunks = rag_accel.split_text(text, chunk_size=30, chunk_overlap=5)
-    assert len(chunks) > 1
-    assert all(len(c) <= 30 for c in chunks)
-
-    # Edge cases: empty text, chunk_size=0, chunk_overlap >= chunk_size, and multi-byte Unicode
-    assert rag_accel.split_text("", chunk_size=30, chunk_overlap=5) == []
-    assert rag_accel.split_text("short", chunk_size=30, chunk_overlap=5) == ["short"]
-    assert rag_accel.split_text("hello", chunk_size=0, chunk_overlap=0) == []
-
-    overlap_clamped = rag_accel.split_text(text, chunk_size=25, chunk_overlap=50)
-    assert len(overlap_clamped) > 1
-
-    unicode_text = "Política de segurança 🚀 — confidencial. " * 4
-    u_chunks = rag_accel.split_text(unicode_text, chunk_size=40, chunk_overlap=8)
-    assert len(u_chunks) >= 2
-    assert all("Política" in c or "confidencial" in c or "segurança" in c for c in u_chunks)
 
 
 def test_scan_chunks_batch_and_mismatched_citations():
