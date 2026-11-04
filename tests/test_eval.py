@@ -2,7 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from eval_metrics import (
+from rag_lab.ops.eval_metrics import (
     check_thresholds,
     cited_sources,
     context_precision,
@@ -72,7 +72,7 @@ def test_threshold_gate_reports_each_failure():
 def test_evaluation_runs_end_to_end_and_meets_its_gates():
     """Runs eval.py as a separate process so its isolated stores never touch the test session's environment."""
     completed = subprocess.run(
-        [sys.executable, "eval.py"],
+        [sys.executable, "-m", "rag_lab.ops.eval"],
         cwd=ROOT,
         capture_output=True,
         text=True,

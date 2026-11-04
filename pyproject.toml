@@ -62,6 +62,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ruff>=0.6.0",
+    "mypy>=1.11.0",
     "pytest>=8.3.0",
     "pytest-mock>=3.14.0",
     "pytest-cov>=5.0.0",
@@ -71,51 +72,27 @@ rust = [
 ]
 
 [project.scripts]
-local-rag = "workspace_manager:main"
-local-rag-sync = "ingest:main"
-local-rag-access = "access:main"
-local-rag-audit = "audit:main"
-local-rag-approve = "approve:main"
-local-rag-eval = "eval:main"
-local-rag-retention = "retention:main"
-local-rag-backup = "backup:main"
-local-rag-models = "fetch_models:main"
-local-rag-graph = "export_graph:main"
+local-rag = "rag_lab.storage.workspace_manager:main"
+local-rag-sync = "rag_lab.ingestion.ingest:main"
+local-rag-access = "rag_lab.security.access:main"
+local-rag-audit = "rag_lab.security.audit:main"
+local-rag-approve = "rag_lab.ops.approve:main"
+local-rag-eval = "rag_lab.ops.eval:main"
+local-rag-retention = "rag_lab.storage.retention:main"
+local-rag-backup = "rag_lab.storage.backup:main"
+local-rag-models = "rag_lab.ops.fetch_models:main"
+local-rag-graph = "rag_lab.ops.export_graph:main"
 
 [project.urls]
 Homepage = "https://github.com/whybothercoding/local-rag-lab"
 Repository = "https://github.com/whybothercoding/local-rag-lab.git"
 Documentation = "https://github.com/whybothercoding/local-rag-lab#readme"
 
-[tool.setuptools]
-py-modules = [
-    "access",
-    "app",
-    "approve",
-    "audit",
-    "backup",
-    "checkpointer",
-    "config",
-    "context_sanitizer",
-    "embedding_provider",
-    "eval",
-    "eval_metrics",
-    "export_graph",
-    "fetch_models",
-    "ingest",
-    "llm_provider",
-    "model_integrity",
-    "parser_worker",
-    "parsers",
-    "redaction",
-    "reranker",
-    "retention",
-    "semantic_cache",
-    "sparse_search",
-    "ui",
-    "vault",
-    "workspace_manager",
-]
+[tool.setuptools.packages.find]
+include = ["rag_lab*"]
+
+[tool.setuptools.package-data]
+"rag_lab.security" = ["common_passwords.txt"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -149,7 +126,7 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 # eval.py must point every store at eval/out/ before the project modules are imported.
-"eval.py" = ["E402"]
+"rag_lab/ops/eval.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

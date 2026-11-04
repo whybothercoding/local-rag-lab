@@ -8,8 +8,8 @@ Validates:
 import time
 import pytest
 
-import context_sanitizer
-from context_sanitizer import _INJECTION_PATTERNS
+import rag_lab.security.context_sanitizer as context_sanitizer
+from rag_lab.security.context_sanitizer import _INJECTION_PATTERNS
 
 pytestmark = pytest.mark.skipif(
     not context_sanitizer.RUST_ACCEL,

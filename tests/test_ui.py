@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from access import add_user, authorize, delete_user, set_grant, set_user_permissions_everywhere
+from rag_lab.security.access import add_user, authorize, delete_user, set_grant, set_user_permissions_everywhere
 from conftest import TEST_PASSWORD
 
 UI = str(Path(__file__).resolve().parent.parent / "ui.py")

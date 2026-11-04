@@ -3,8 +3,8 @@ import socket
 
 import pytest
 
-from config import FASTEMBED_MODEL, MODELS_DIR
-from model_integrity import verify_model
+from rag_lab.config import settings
+from rag_lab.security.model_integrity import verify_model
 
 
 def test_offline_guard_blocks_outbound_connections(monkeypatch):
@@ -29,4 +29,4 @@ def test_offline_guard_blocks_outbound_connections(monkeypatch):
 
 def test_pinned_embedding_model_is_present_and_verified():
     """Fails with a clear message on a fresh clone until `make models` has run."""
-    verify_model(FASTEMBED_MODEL, MODELS_DIR)
+    verify_model(settings.fastembed_model, settings.models_dir)

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-import model_integrity
-from model_integrity import ModelIntegrityError, verify_model
+import rag_lab.security.model_integrity as model_integrity
+from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
 
 
 def _sha(data: bytes) -> str:
@@ -61,8 +61,7 @@ def test_verify_rejects_unpinned_model(tmp_path):
 
 
 def test_fetch_models_verify_only_and_unpinned_error(monkeypatch, capsys):
-    import fetch_models
-
+    import rag_lab.ops.fetch_models as fetch_models
     with pytest.raises(ModelIntegrityError, match="no pinned SHA-256"):
         fetch_models.fetch_model("unpinned/model")
 
@@ -79,8 +78,7 @@ def test_fetch_models_verify_only_and_unpinned_error(monkeypatch, capsys):
 
 
 def test_export_graph_mermaid_and_png_fallback(tmp_path, monkeypatch, mocker):
-    import export_graph
-
+    import rag_lab.ops.export_graph as export_graph
     out_dir = tmp_path / "docs"
     mmd_file = out_dir / "architecture.mmd"
     png_file = out_dir / "architecture.png"
@@ -89,14 +87,14 @@ def test_export_graph_mermaid_and_png_fallback(tmp_path, monkeypatch, mocker):
     monkeypatch.setattr(export_graph, "PNG_FILE", str(png_file))
 
     # 1. Without mmdc installed, render_png_locally returns False and .mmd is still written
-    monkeypatch.setattr("export_graph.shutil.which", lambda _: None)
+    monkeypatch.setattr("rag_lab.ops.export_graph.shutil.which", lambda _: None)
     export_graph.export_mermaid_diagram()
     assert mmd_file.is_file()
     assert "guardrail" in mmd_file.read_text(encoding="utf-8")
 
     # 2. With mmdc available, subprocess.run is invoked and render_png_locally returns True
-    monkeypatch.setattr("export_graph.shutil.which", lambda _: "/usr/local/bin/mmdc")
-    run_mock = mocker.patch("export_graph.subprocess.run")
+    monkeypatch.setattr("rag_lab.ops.export_graph.shutil.which", lambda _: "/usr/local/bin/mmdc")
+    run_mock = mocker.patch("rag_lab.ops.export_graph.subprocess.run")
     assert export_graph.render_png_locally(str(mmd_file), str(png_file)) is True
     run_mock.assert_called_once()
 

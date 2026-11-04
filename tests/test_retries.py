@@ -2,17 +2,13 @@
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from app import (
-    _generation_prompt,
-    generate_node,
-    grade_answer_relevance_node,
-    grade_hallucination_node,
-    query_rewrite_node,
-    workflow,
-)
-from config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+from rag_lab.pipeline.generation import _generation_prompt, generate_node
+from rag_lab.pipeline.grading import grade_answer_relevance_node, grade_hallucination_node
+from rag_lab.pipeline.retrieval import query_rewrite_node
+from rag_lab.pipeline.graph import workflow
+from rag_lab.config import settings
 from conftest import token_for
-from llm_provider import DeterministicContextLLM
+from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 
 DOCS = ["Rollback SLA is strictly under 5 minutes for production."]
 QUESTION = "What is the rollback SLA?"
@@ -31,8 +27,8 @@ class ScriptedModel:
 
 
 def _use_model(monkeypatch, model):
-    monkeypatch.setattr("app.get_chat_llm", lambda: model)
-    monkeypatch.setattr("app.llm_is_fallback", lambda llm: False)
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.get_chat_llm", lambda: model)
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.llm_is_fallback", lambda llm: False)
 
 
 def _real_model_telemetry() -> dict:
@@ -104,7 +100,7 @@ def test_extractive_synthesizer_matches_on_the_search_query(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError("model hung")
 
-    monkeypatch.setattr("app.get_chat_llm", lambda: Broken())
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.get_chat_llm", lambda: Broken())
     generate_node({"documents": DOCS, "original_question": QUESTION, "sanitized_question": "rollback sla minutes"})
     assert len(seen) == 2
     assert all("Question: rollback sla minutes" in prompt for prompt in seen)
@@ -116,7 +112,7 @@ def test_exhausted_rewrites_do_not_consume_generation_retries():
     result = grade_hallucination_node({
         "documents": DOCS,
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
         "generation_retry_count": 0,
         "telemetry": _real_model_telemetry(),
     })
@@ -124,12 +120,12 @@ def test_exhausted_rewrites_do_not_consume_generation_retries():
 
 
 def test_exhausted_generation_retries_do_not_consume_rewrites(monkeypatch):
-    monkeypatch.setattr("app.score_pairs", lambda *a, **k: [-20.0])
+    monkeypatch.setattr("rag_lab.pipeline.grading.score_pairs", lambda *a, **k: [-20.0])
     result = grade_answer_relevance_node({
         "original_question": QUESTION,
         "generation": "Expense reports are due monthly.",
         "retry_count": 0,
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     })
     assert result["relevance_status"] == "irrelevant"
     assert result["retry_count"] == 1
@@ -141,11 +137,11 @@ def test_generation_budget_is_enforced():
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
         "telemetry": _real_model_telemetry(),
     }
-    for attempt in range(MAX_GENERATION_RETRIES):
+    for attempt in range(settings.max_generation_retries):
         result = grade_hallucination_node({**state, "generation_retry_count": attempt})
         assert result["hallucination_status"] == "retry"
         assert result["generation_retry_count"] == attempt + 1
-    final = grade_hallucination_node({**state, "generation_retry_count": MAX_GENERATION_RETRIES})
+    final = grade_hallucination_node({**state, "generation_retry_count": settings.max_generation_retries})
     assert final["hallucination_status"] == "circuit_break"
 
 
@@ -175,7 +171,7 @@ def test_generate_marks_deterministic_and_fallback_generators(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError("model hung")
 
-    monkeypatch.setattr("app.get_chat_llm", lambda: Broken())
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.get_chat_llm", lambda: Broken())
     failed = generate_node({"documents": DOCS, "original_question": QUESTION})
     assert failed["telemetry"]["generator_deterministic"] is True
     assert failed["telemetry"]["generation_fallback"] is True
@@ -216,7 +212,7 @@ def test_graph_recovers_from_a_fabricated_figure_using_feedback(rollback_index, 
 
 def test_worst_case_path_terminates_within_both_budgets(rollback_index, monkeypatch):
     """Every grader fails every time. The run must still end at review, having spent exactly both budgets."""
-    monkeypatch.setattr("app.score_pairs", lambda *a, **k: [-20.0])
+    monkeypatch.setattr("rag_lab.pipeline.grading.score_pairs", lambda *a, **k: [-20.0])
 
     def answer(prompt, n):
         # Fabricated figure on first try (groundedness fails), then grounded but off-topic (relevance fails).
@@ -229,22 +225,22 @@ def test_worst_case_path_terminates_within_both_budgets(rollback_index, monkeypa
 
     assert pending == ("human_approval",)
     assert values["relevance_status"] == "circuit_break"
-    assert values["retry_count"] == MAX_RETRIEVAL_RETRIES
-    assert values["generation_retry_count"] == MAX_GENERATION_RETRIES
+    assert values["retry_count"] == settings.max_retrieval_retries
+    assert values["generation_retry_count"] == settings.max_generation_retries
     # One answer per retrieval round plus one per generation retry: bounded, never a loop.
     # (The first rewrite also asks the model for a keyword query; that call is not an answer.)
     answers = [p for p in model.prompts if p.startswith("Context:")]
-    assert len(answers) == (MAX_RETRIEVAL_RETRIES + 1) + MAX_GENERATION_RETRIES
+    assert len(answers) == (settings.max_retrieval_retries + 1) + settings.max_generation_retries
     # Exact step count: 3 entry nodes, 6 nodes per retrieval round, a rewrite per extra round, 2 per
     # generation retry, and the review node. LangGraph >= 1.1 (the declared floor) allows 10,000 by default;
     # 1.0 allowed 25, which this path (26 at default budgets) would exceed.
-    expected = 3 + 6 * (MAX_RETRIEVAL_RETRIES + 1) + MAX_RETRIEVAL_RETRIES + 2 * MAX_GENERATION_RETRIES + 1
+    expected = 3 + 6 * (settings.max_retrieval_retries + 1) + settings.max_retrieval_retries + 2 * settings.max_generation_retries + 1
     assert steps == expected, steps
 
 
 def test_deterministic_fallback_goes_straight_to_review(rollback_index, monkeypatch):
     """With the extractive synthesizer a failed groundedness check escalates instead of looping."""
-    monkeypatch.setattr("app._unsupported_numbers", lambda *a, **k: {"99"})
+    monkeypatch.setattr("rag_lab.pipeline.grading._unsupported_numbers", lambda *a, **k: {"99"})
     engine = workflow.compile(checkpointer=MemorySaver())
     values, pending, _ = _run(engine, "deterministic-escalates")
 
@@ -263,14 +259,14 @@ def test_deterministic_fallback_goes_straight_to_review(rollback_index, monkeypa
 
 def test_a_new_question_in_the_same_thread_starts_with_fresh_budgets(rollback_index, monkeypatch):
     """The UI keeps one thread per conversation; spent budgets and stale feedback must not carry over."""
-    from app import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     reset = guardrail_input_node({
         "question": QUESTION,
         "principal_token": token_for("carol"),
         "workspace_id": "default",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
+        "generation_retry_count": settings.max_generation_retries,
         "grader_feedback": "stale",
         "degraded": ["security_warning: from the previous question"],
     })

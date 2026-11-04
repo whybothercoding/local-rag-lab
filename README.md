@@ -33,7 +33,7 @@ Combines dense vector embeddings, sparse lexical search, and neural cross-encode
   Set `EMBEDDING_PROVIDER=ollama` to embed with `nomic-embed-text` instead. The two models produce vectors of different sizes, so there is no automatic switch between them: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`).
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
-* **Neural Cross-Encoder Reranker (`reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
+* **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (`Xenova/ms-marco-MiniLM-L-6-v2`) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
 
 ### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
 To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:
@@ -55,20 +55,20 @@ An intent router classifies incoming queries into **domain RAG** vs. conversatio
 ### 10. Human-in-the-Loop (HITL) Compliance & Dual-Control Gates
 * The state graph pauses before answer release at a compliance checkpoint node.
 * **Dual-Control Enforcement**: Reviewers must authenticate to approve or reject responses, and requesters are strictly prohibited from approving their own queries.
-* Workflows can be resumed via either the web interface or terminal CLI (`approve.py`).
+* Workflows can be resumed via either the web interface or terminal CLI (`rag_lab/ops/approve.py`).
 
 ### 11. Deterministic Source Provenance & Citations
 Every answer sentence is tied back to traceable chunk keys (`[workspace_doc_chunk]`) and original source files, rendered in the UI with expandable citation cards for instant auditability.
 
 ### 12. Offline Benchmarking & LLM-as-a-Judge Evaluation Gate
-An offline evaluation suite (`eval.py`, `eval_metrics.py`) benchmarks retrieval precision, keyword recall, groundedness, answer rate, and abstention accuracy against golden evaluation datasets (`eval/golden.json`), with optional LLM-as-a-judge support checks.
+An offline evaluation suite (`rag_lab/ops/eval.py`, `rag_lab/ops/eval_metrics.py`) benchmarks retrieval precision, keyword recall, groundedness, answer rate, and abstention accuracy against golden evaluation datasets (`eval/golden.json`), with optional LLM-as-a-judge support checks.
 
 ### 13. Multi-Tenant Knowledge Isolation & Document-Level RBAC
 * **Workspace Isolation**: Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
 * **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter or headers (unrecognized tags fail closed during ingestion). Vector search (`ChromaDB where` + post-query guard) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
 ### 14. Model Weight Pinning, Optional Rust Acceleration & Graceful Degradation
-* Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`model_integrity.py`).
+* Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`rag_lab/security/model_integrity.py`).
 * **Optional Native Rust Accelerator (`crates/rag_accel`)**: Compiles via PyO3/Maturin (`make rust-build`) to accelerate indirect prompt-injection scanning (`RegexSet` single-pass automaton) and document chunking (`split_text`) with 100% parity and automatic zero-config fallback to pure Python.
 * If the primary LLM, cross-encoder, or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
 
@@ -375,7 +375,7 @@ While **Local Enterprise RAG Lab** is engineered as a zero-cost, self-contained 
    - *Cloud Driver*: Real-time event streams (Apache Kafka, AWS SQS, Webhooks) connect directly to enterprise SaaS tools (Google Drive, SharePoint, Confluence, Jira, GitHub, Slack) to continuously parse, chunk, and index document edits as they happen via distributed worker workflows (Temporal, Celery).
 
 7. **Enterprise SSO Federation & Centralized SIEM Auditing**
-   - *Local Constraint*: Local scrypt passwords and HMAC-signed session tokens managed via `access.py`.
+   - *Local Constraint*: Local scrypt passwords and HMAC-signed session tokens managed via `rag_lab/security/access.py`.
    - *Cloud Driver*: Direct federation with corporate Identity Providers (IdPs) via SAML 2.0 / OIDC (Okta, Microsoft Entra ID / Azure AD, Google Workspace), automated SCIM user provisioning, and real-time audit log streaming to enterprise SIEM platforms (Splunk, Datadog, AWS CloudWatch).
 
 ---
@@ -392,7 +392,7 @@ To preserve this project's security invariants (Zero Trust clearance isolation, 
 | **State & Checkpoints** | Embedded SQLite WAL (`checkpoints.db`) | **Managed PostgreSQL (Aurora Serverless / Cloud SQL)** | Multi-AZ failover, automated continuous backup (PITR), connection pooling |
 | **Semantic & Response Cache** | SQLite float32 packed vector cache | **Valkey / Redis Cluster with Vector Search** | Distributed sub-millisecond LRU cache with multi-node clearance isolation |
 | **Model Inference Engine** | Local Ollama (`qwen2.5-coder:7b`) / CPU ONNX | **vLLM / TensorRT-LLM on GPU Pools (A100/H100)** | Continuous batching, PagedAttention, 20x higher throughput, 70B+ models |
-| **Ingestion Pipeline** | Batch CLI (`ingest.py`) & child processes | **Temporal.io / Celery + Apache Kafka / SQS** | Distributed asynchronous parsing, rate-limited chunking, dead-letter queues |
+| **Ingestion Pipeline** | Batch CLI (`rag_lab/ingestion/ingest.py`) & child processes | **Temporal.io / Celery + Apache Kafka / SQS** | Distributed asynchronous parsing, rate-limited chunking, dead-letter queues |
 | **Identity & Access** | Local `access_policy.json` (scrypt + HMAC) | **Okta / Microsoft Entra ID (OIDC / SAML 2.0)** | Enterprise SSO, SCIM automated provisioning, MFA enforcement |
 | **Audit & Observability** | Tamper-evident HMAC SQLite log + anchors | **OpenTelemetry + Splunk / Datadog / CloudWatch** | Immutable cloud audit vaults (S3 Object Lock / WORM), distributed tracing |
 | **User Interface & API** | Streamlit web UI & CLI | **FastAPI Async Gateway + React / Next.js SPA** | Server-Sent Events (SSE) streaming, WebSocket push, responsive web UX |
@@ -457,27 +457,17 @@ flowchart TD
 ```text
 local-rag-lab/
 ├── pyproject.toml           # Declarative PEP 517/518/621 package & tool configurations
-├── app.py                   # LangGraph state machine, nodes, Self-RAG conditional routes
-├── semantic_cache.py        # Persistent SQLite L2 vector cache with clearance isolation
-├── workspace_manager.py     # Multi-tenant workspace isolation and collection lifecycle
-├── ingest.py                # Multi-format document parser (.md, .txt, .pdf, .docx) & indexer
-├── parsers.py               # Document parsing implementations (pypdf, docx, html/txt)
-├── parser_worker.py         # Sandboxed child process parser with time/memory caps
-├── sparse_search.py         # SQLite FTS5 / BM25Okapi sparse lexical search engine
-├── reranker.py              # Local ONNX cross-encoder reranker (ms-marco-MiniLM-L-6-v2)
-├── embedding_provider.py    # Local ONNX FastEmbed embedding engine
-├── llm_provider.py          # Ollama and local OpenAI-compatible chat model connectors
-├── model_integrity.py       # SHA-256 model weight pinning and offline integrity checks
-├── access.py                # RBAC user accounts, scrypt hashing, signed session tokens
-├── approve.py               # CLI tool for inspecting and resolving HITL review threads
-├── audit.py                 # Append-only, hash-chained tamper-evident audit logger
-├── vault.py                 # AES-256-GCM data sealing and state encryption at rest
-├── retention.py             # Audit log and idle checkpoint thread retention manager
-├── backup.py                # Checksummed backup creation and verification utility
-├── redaction.py             # Automated PII detection and regex masking
-├── ui.py                    # Streamlit web application with citation drawers & review UI
-├── eval.py                  # Offline evaluation benchmark runner
-├── eval_metrics.py          # RAG evaluation metrics (precision, recall, groundedness)
+├── ui.py                    # Streamlit launcher (runs rag_lab/ui/streamlit_app.py)
+├── rag_lab/                 # The package; data stays at the repo root (rag_lab.ROOT / RAG_LAB_HOME)
+│   ├── config.py            # One mutable `settings` object built from the environment, read at call time
+│   ├── pipeline/            # LangGraph Self-RAG: state, entry, retrieval, generation, grading, review, graph
+│   │                        #   + llm_provider (Ollama / OpenAI-compatible / extractive fallback)
+│   ├── retrieval/           # Embeddings, FTS5 keyword index, cross-encoder reranker, semantic cache
+│   ├── ingestion/           # Indexer, format parsers, sandboxed parser worker
+│   ├── security/            # Accounts & RBAC, AES-GCM vault, hash-chained audit, redaction, injection scan, model pins
+│   ├── storage/             # Checkpointer, workspaces, backups, retention
+│   ├── ops/                 # approve (HITL CLI), eval + metrics, graph export, model download
+│   └── ui/                  # Streamlit page
 ├── crates/rag_accel/        # Optional native Rust PyO3 accelerator (context scanning & chunking)
 ├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows
 ├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints

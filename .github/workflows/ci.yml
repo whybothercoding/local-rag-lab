@@ -49,6 +49,9 @@ jobs:
       - name: Lint (ruff, rule set pinned in pyproject.toml)
         run: ruff check .
 
+      - name: Type-check (mypy)
+        run: mypy rag_lab
+
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -64,7 +67,7 @@ jobs:
           key: embedding-model-${{ hashFiles('model_integrity.py') }}
 
       - name: Fetch and verify pinned model weights
-        run: python fetch_models.py
+        run: python -m rag_lab.ops.fetch_models
 
       - name: Run test suite (PostgreSQL integration included)
         env:

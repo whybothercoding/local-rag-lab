@@ -2,8 +2,8 @@ import zipfile
 from pathlib import Path
 import pytest
 
-import parsers
-from parsers import ParseError, extract_text_from_file, unsupported_reason
+import rag_lab.ingestion.parsers as parsers
+from rag_lab.ingestion.parsers import ParseError, extract_text_from_file, unsupported_reason
 
 
 def test_extract_text_and_md(tmp_path: Path):

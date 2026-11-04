@@ -10,7 +10,7 @@ Verifies:
 from pathlib import Path
 import pytest
 
-from access import (
+from rag_lab.security.access import (
     CLEARANCE_LEVELS,
     DEFAULT_CLEARANCE,
     add_user,
@@ -20,9 +20,10 @@ from access import (
     set_grant,
     set_user_clearance,
 )
-from ingest import _extract_doc_clearance, ingest_workspace
-from sparse_search import index_sparse_chunks, search_sparse_chunks
-from app import hybrid_retrieval_node
+from rag_lab.ingestion.ingest import _extract_doc_clearance, ingest_workspace
+from rag_lab.retrieval.sparse_search import index_sparse_chunks, search_sparse_chunks
+from rag_lab.pipeline.retrieval import hybrid_retrieval_node
+from rag_lab.config import settings
 
 
 def test_clearance_taxonomy_and_hierarchy():
@@ -178,12 +179,12 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
     bm25_dir = str(tmp_path / "bm25")
     policy_path = str(tmp_path / "access_policy.json")
 
-    monkeypatch.setattr("workspace_manager.CHROMA_PATH", chroma_dir)
-    monkeypatch.setattr("workspace_manager.BM25_DIR", bm25_dir)
-    monkeypatch.setattr("app.CHROMA_PATH", chroma_dir)
-    monkeypatch.setattr("app.BM25_DIR", bm25_dir)
-    monkeypatch.setattr("config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "chroma_path", chroma_dir)
+    monkeypatch.setattr(settings, "bm25_dir", bm25_dir)
+    monkeypatch.setattr(settings, "chroma_path", chroma_dir)
+    monkeypatch.setattr(settings, "bm25_dir", bm25_dir)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
 
     # Ingest workspace
     res = ingest_workspace(ws_id, str(source_dir), force=True)
@@ -225,11 +226,12 @@ def test_hybrid_retrieval_clearance_enforcement(tmp_path: Path, monkeypatch):
 
 def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
     """Ensure a secret-clearance cached answer is never served to a public-clearance user."""
-    from app import SEMANTIC_CACHE, cache_key, cache_lookup_node
+    from rag_lab.pipeline.entry import SEMANTIC_CACHE, cache_lookup_node
+    from rag_lab.retrieval.semantic_cache import cache_key
 
     policy_path = str(tmp_path / "access_policy.json")
-    monkeypatch.setattr("config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
 
     add_user("alice", "Password123!@#", clearance="secret", path=policy_path)
     add_user("bob", "Password123!@#", clearance="public", path=policy_path)
@@ -260,8 +262,8 @@ def test_semantic_cache_partitioned_by_clearance(tmp_path: Path, monkeypatch):
 def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path: Path, mocker, monkeypatch):
     """When Chroma's where filter raises an exception, the Python post-filter must still enforce clearance."""
     policy_path = str(tmp_path / "access_policy.json")
-    monkeypatch.setattr("config.ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("access.ACCESS_POLICY_PATH", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
     add_user("bob", "Password123!@#", clearance="public", path=policy_path)
 
     fake_collection = mocker.MagicMock()
@@ -285,8 +287,8 @@ def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path
     fake_collection.query.side_effect = query_side_effect
     fake_client = mocker.MagicMock()
     fake_client.get_collection.return_value = fake_collection
-    mocker.patch("app.chromadb.PersistentClient", return_value=fake_client)
-    mocker.patch("app.search_sparse_chunks", return_value=[])
+    mocker.patch("rag_lab.pipeline.retrieval.chromadb.PersistentClient", return_value=fake_client)
+    mocker.patch("rag_lab.pipeline.retrieval.search_sparse_chunks", return_value=[])
 
     out = hybrid_retrieval_node({
         "workspace_id": "legacy_ws",

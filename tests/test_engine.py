@@ -1,20 +1,12 @@
 
-from config import MAX_GENERATION_RETRIES, MAX_RETRIEVAL_RETRIES
+from rag_lab.config import settings
 
 from conftest import token_for
-from app import (
-    guardrail_input_node,
-    cache_lookup_node,
-    router_node,
-    grade_documents_node,
-    query_rewrite_node,
-    grade_hallucination_node,
-    grade_answer_relevance_node,
-    human_in_the_loop_node,
-    reciprocal_rank_fusion,
-    SEMANTIC_CACHE,
-    cache_key,
-)
+from rag_lab.pipeline.entry import guardrail_input_node, cache_lookup_node, router_node, SEMANTIC_CACHE
+from rag_lab.pipeline.retrieval import grade_documents_node, query_rewrite_node, reciprocal_rank_fusion
+from rag_lab.pipeline.grading import grade_hallucination_node, grade_answer_relevance_node
+from rag_lab.pipeline.review import human_in_the_loop_node
+from rag_lab.retrieval.semantic_cache import cache_key
 
 
 def test_guardrail_redacts_email_and_phone():
@@ -77,7 +69,7 @@ def test_grade_documents_approved():
 
 
 def test_grade_documents_trips_circuit_breaker_on_max_retries():
-    state = {"documents": [], "retry_count": MAX_RETRIEVAL_RETRIES}
+    state = {"documents": [], "retry_count": settings.max_retrieval_retries}
     result = grade_documents_node(state)
     assert result["grade_status"] == "circuit_break"
 
@@ -135,7 +127,7 @@ def test_graders_handle_punctuation_and_abstention():
     assert rel["relevance_status"] == "relevant"
 
     # Abstained answers are relevant by definition and do not trigger rewrites
-    from app import ABSTAIN_MESSAGE
+    from rag_lab.pipeline.state import ABSTAIN_MESSAGE
     abstain_rel = grade_answer_relevance_node({
         "sanitized_question": "What is the office dress code?",
         "generation": ABSTAIN_MESSAGE,
@@ -172,7 +164,7 @@ def test_telemetry_recorded_in_nodes():
 
 
 def test_hitl_node_approval_preserves_original_question_after_rewrite(mocker):
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
     SEMANTIC_CACHE.clear()
 
     state = {
@@ -192,7 +184,7 @@ def test_hitl_node_approval_preserves_original_question_after_rewrite(mocker):
 
 
 def test_hitl_node_rejection(mocker):
-    mocker.patch("app.interrupt", return_value="rejected")
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value="rejected")
 
     state = {
         "workspace_id": "default",
@@ -228,16 +220,16 @@ def test_grade_hallucination_trips_circuit_breaker_on_max_retries():
     state = {
         "documents": ["The capital of France is Paris."],
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     }
     result = grade_hallucination_node(state)
     assert result["hallucination_status"] == "circuit_break"
 
 
 def test_semantic_cache_preserves_citations_on_hit(mocker):
-    from app import SEMANTIC_CACHE_CITATIONS
+    from rag_lab.pipeline.entry import SEMANTIC_CACHE_CITATIONS
 
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
     SEMANTIC_CACHE.clear()
     SEMANTIC_CACHE_CITATIONS.clear()
 
@@ -300,7 +292,7 @@ def test_grade_hallucination_hybrid_semantic_rejection_and_fallback(monkeypatch)
     assert result["telemetry"]["groundedness_grader"] == "semantic_rejected"
 
     # When cross-encoder is disabled/fails, falls back cleanly to lexical rejection
-    monkeypatch.setattr("app.score_pairs", lambda *a, **kw: [])
+    monkeypatch.setattr("rag_lab.pipeline.grading.score_pairs", lambda *a, **kw: [])
     result_fallback = grade_hallucination_node(state)
     assert result_fallback["hallucination_status"] == "retry"
     assert result_fallback["telemetry"]["groundedness_grader"] == "lexical_rejected"
@@ -334,7 +326,7 @@ def test_grade_answer_relevance_hybrid_semantic_rejection_and_fallback(monkeypat
     assert result["telemetry"]["relevance_grader"] == "semantic_rejected"
 
     # When cross-encoder is disabled/fails, falls back cleanly to lexical rejection
-    monkeypatch.setattr("app.score_pairs", lambda *a, **kw: [])
+    monkeypatch.setattr("rag_lab.pipeline.grading.score_pairs", lambda *a, **kw: [])
     result_fallback = grade_answer_relevance_node(state)
     assert result_fallback["relevance_status"] == "irrelevant"
     assert result_fallback["telemetry"]["relevance_grader"] == "lexical_rejected"
@@ -353,7 +345,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     hal_cb = grade_hallucination_node({
         "documents": ["Some valid document content."],
         "generation": "",
-        "generation_retry_count": MAX_GENERATION_RETRIES,
+        "generation_retry_count": settings.max_generation_retries,
     })
     assert hal_cb["hallucination_status"] == "circuit_break"
 
@@ -369,7 +361,7 @@ def test_graders_reject_empty_or_whitespace_generation():
     rel_cb = grade_answer_relevance_node({
         "original_question": "What is the policy?",
         "generation": "",
-        "retry_count": MAX_RETRIEVAL_RETRIES,
+        "retry_count": settings.max_retrieval_retries,
     })
     assert rel_cb["relevance_status"] == "circuit_break"
 
@@ -405,7 +397,7 @@ def test_grade_hallucination_rejects_fabricated_numbers():
 
 
 def test_expanded_pii_redaction_and_false_positive_protection():
-    from redaction import redact_pii
+    from rag_lab.security.redaction import redact_pii
 
     # SSN, formatted US phone, international phone, email, and Luhn-valid Visa card are redacted
     sample = (

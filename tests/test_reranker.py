@@ -7,14 +7,14 @@ Verifies:
 4. Offline verification in fetch_models.py.
 """
 
-from config import RERANKER_MODEL, MODELS_DIR
-from model_integrity import verify_model
-from reranker import rerank_documents, score_pairs
+from rag_lab.config import settings
+from rag_lab.security.model_integrity import verify_model
+from rag_lab.retrieval.reranker import rerank_documents, score_pairs
 
 
 def test_reranker_pinned_model_integrity():
     """Verify that the reranker model weights match pinned SHA-256 hashes offline."""
-    path = verify_model(RERANKER_MODEL, MODELS_DIR)
+    path = verify_model(settings.reranker_model, settings.models_dir)
     assert path.is_dir()
     assert (path / "onnx" / "model.onnx").is_file()
 
@@ -67,7 +67,7 @@ def test_reranker_graceful_fallback(monkeypatch):
     def faulty_get_reranker(*args, **kwargs):
         raise RuntimeError("ONNX memory error")
 
-    monkeypatch.setattr("reranker.get_reranker", faulty_get_reranker)
+    monkeypatch.setattr("rag_lab.retrieval.reranker.get_reranker", faulty_get_reranker)
     res = rerank_documents("test query", candidates, top_n=1)
     assert len(res) == 1
     assert res[0]["id"] == "c1"
@@ -108,9 +108,9 @@ def test_reranker_whitespace_query_returns_candidates():
 
 
 def test_score_pairs_disabled_and_error(monkeypatch):
-    monkeypatch.setattr("reranker.ENABLE_RERANKER", False)
+    monkeypatch.setattr(settings, "enable_reranker", False)
     assert score_pairs("query", ["doc"]) == []
 
-    monkeypatch.setattr("reranker.ENABLE_RERANKER", True)
-    monkeypatch.setattr("reranker.get_reranker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("error")))
+    monkeypatch.setattr(settings, "enable_reranker", True)
+    monkeypatch.setattr("rag_lab.retrieval.reranker.get_reranker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("error")))
     assert score_pairs("query", ["doc"]) == []

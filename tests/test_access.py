@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from access import (
+from rag_lab.security.access import (
     add_user,
     allowed_workspaces,
     authenticate,
@@ -14,8 +14,9 @@ from access import (
     verify_password,
     verify_token,
 )
-from audit import list_events
+from rag_lab.security.audit import list_events
 from conftest import TEST_PASSWORD, token_for
+from rag_lab.config import settings
 
 
 @pytest.fixture
@@ -56,7 +57,7 @@ def test_authentication_accepts_only_the_right_password(policy_path):
 
 
 def test_authorization_is_default_deny(policy_path):
-    from access import reset_grant, set_default_permissions
+    from rag_lab.security.access import reset_grant, set_default_permissions
 
     # Out-of-the-box v2 default: query + auto_approve enabled, review disabled
     add_user("erin", TEST_PASSWORD, path=policy_path)
@@ -105,7 +106,7 @@ def test_policy_file_is_owner_only_and_hashes_are_not_listed(policy_path):
 
 
 def test_allowed_workspaces_includes_query_and_review_grants(policy_path):
-    from access import set_default_permissions
+    from rag_lab.security.access import set_default_permissions
 
     add_user("erin", TEST_PASSWORD, path=policy_path)
     # With out-of-the-box defaults (query + auto_approve), all workspaces are allowed
@@ -123,9 +124,9 @@ def test_allowed_workspaces_includes_query_and_review_grants(policy_path):
 
 
 def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):
-    from app import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
-    retrieval = mocker.patch("app.hybrid_retrieval_node")
+    retrieval = mocker.patch("rag_lab.pipeline.retrieval.hybrid_retrieval_node")
     result = guardrail_input_node({
         "question": "What is the Q4 roadmap?",
         "workspace_id": "default",
@@ -143,7 +144,7 @@ def test_guardrail_denies_unauthorized_principal_before_retrieval(mocker):
 
 
 def test_guardrail_allows_principal_with_query_grant():
-    from app import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({
         "question": "What is the Q4 roadmap?",
@@ -157,14 +158,14 @@ def test_guardrail_allows_principal_with_query_grant():
 
 
 def test_guardrail_denies_anonymous_caller():
-    from app import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({"question": "hello", "workspace_id": "default", "telemetry": {}})
     assert result["is_safe"] is False
 
 
 def test_guardrail_ignores_a_bare_name_without_a_token():
-    from app import guardrail_input_node
+    from rag_lab.pipeline.entry import guardrail_input_node
 
     result = guardrail_input_node({
         "question": "hello",
@@ -176,9 +177,9 @@ def test_guardrail_ignores_a_bare_name_without_a_token():
 
 
 def test_reviewer_without_grant_cannot_release_an_answer(mocker):
-    from app import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("carol")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("carol")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "dave",
@@ -195,9 +196,9 @@ def test_reviewer_without_grant_cannot_release_an_answer(mocker):
 
 
 def test_requester_cannot_approve_their_own_query(mocker):
-    from app import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "bob",
@@ -213,9 +214,9 @@ def test_requester_cannot_approve_their_own_query(mocker):
 
 
 def test_reviewer_can_approve_another_users_query(mocker):
-    from app import human_in_the_loop_node
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
-    mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+    mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
     result = human_in_the_loop_node({
         "workspace_id": "default",
         "principal": "carol",
@@ -239,58 +240,53 @@ def thread_state():
 
 
 def test_cli_reviewer_signs_in_with_correct_password(mocker, thread_state, capsys):
-    import approve
-
-    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+    import rag_lab.ops.approve as approve
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", return_value=TEST_PASSWORD)
     assert verify_token(approve.confirm_reviewer(thread_state, "bob")) == "bob"
     assert "Forgot the password" in capsys.readouterr().out
 
 
 def test_cli_reviewer_gets_attempts_left_and_can_retry(mocker, thread_state, capsys):
-    import approve
-
-    mocker.patch("approve.getpass.getpass", side_effect=["wrong-password-value", TEST_PASSWORD])
+    import rag_lab.ops.approve as approve
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", side_effect=["wrong-password-value", TEST_PASSWORD])
     assert verify_token(approve.confirm_reviewer(thread_state, "bob")) == "bob"
     assert "Attempts left: 2" in capsys.readouterr().out
 
 
 def test_cli_reviewer_is_refused_after_three_failures(mocker, thread_state):
-    import approve
-
-    prompt = mocker.patch("approve.getpass.getpass", return_value="wrong-password-value")
+    import rag_lab.ops.approve as approve
+    prompt = mocker.patch("rag_lab.ops.approve.getpass.getpass", return_value="wrong-password-value")
     with pytest.raises(SystemExit, match="too many times"):
         approve.confirm_reviewer(thread_state, "bob")
     assert prompt.call_count == 3
 
 
 def test_cli_reviewer_can_cancel_without_recording_anything(mocker, thread_state):
-    import approve
-
-    mocker.patch("approve.getpass.getpass", side_effect=KeyboardInterrupt)
+    import rag_lab.ops.approve as approve
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", side_effect=KeyboardInterrupt)
     with pytest.raises(SystemExit, match="Cancelled"):
         approve.confirm_reviewer(thread_state, "bob")
 
 
 def test_cli_reviewer_needs_review_grant_even_with_correct_password(mocker, thread_state):
-    import approve
-
-    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+    import rag_lab.ops.approve as approve
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", return_value=TEST_PASSWORD)
     with pytest.raises(SystemExit, match="no review permission"):
         approve.confirm_reviewer(thread_state, "carol")
 
 
 def test_cli_reviewer_cannot_approve_own_query(mocker):
-    import approve
+    import rag_lab.ops.approve as approve
     from types import SimpleNamespace
 
-    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", return_value=TEST_PASSWORD)
     own_state = SimpleNamespace(values={"workspace_id": "default", "principal": "bob"})
     with pytest.raises(SystemExit, match="Separation of Duties"):
         approve.confirm_reviewer(own_state, "bob")
 
 
 def test_password_reset_keeps_grants(policy_path):
-    from access import set_password
+    from rag_lab.security.access import set_password
 
     add_user("erin", TEST_PASSWORD, path=policy_path)
     set_grant("erin", "accounting", ["query", "review"], path=policy_path)
@@ -304,7 +300,7 @@ def test_password_reset_keeps_grants(policy_path):
 
 
 def test_password_reset_requires_an_existing_account(policy_path):
-    from access import set_password
+    from rag_lab.security.access import set_password
 
     with pytest.raises(ValueError, match="does not exist"):
         set_password("nobody", "a-new-long-password", path=policy_path)
@@ -317,7 +313,7 @@ def test_adding_an_existing_user_points_to_password_reset(policy_path):
 
 
 def test_delete_user_removes_account_and_grants(policy_path):
-    from access import delete_user, load_policy
+    from rag_lab.security.access import delete_user, load_policy
 
     add_user("erin", TEST_PASSWORD, path=policy_path)
     set_grant("erin", "accounting", ["query", "review"], path=policy_path)
@@ -335,14 +331,14 @@ def test_delete_user_removes_account_and_grants(policy_path):
 
 
 def test_delete_nonexistent_user_raises(policy_path):
-    from access import delete_user
+    from rag_lab.security.access import delete_user
 
     with pytest.raises(ValueError, match="does not exist"):
         delete_user("ghost_user", path=policy_path)
 
 
 def test_reset_users_removes_all_accounts(policy_path):
-    from access import load_policy, reset_users
+    from rag_lab.security.access import load_policy, reset_users
 
     add_user("user_a", TEST_PASSWORD, path=policy_path)
     add_user("user_b", TEST_PASSWORD, path=policy_path)
@@ -356,10 +352,9 @@ def test_reset_users_removes_all_accounts(policy_path):
 
 
 def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
-    import access
-
-    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("access.getpass.getpass", lambda _="": TEST_PASSWORD)
+    import rag_lab.security.access as access
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr("rag_lab.security.access.getpass.getpass", lambda _="": TEST_PASSWORD)
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path)
 
@@ -388,12 +383,12 @@ def test_cli_delete_and_reset_user_commands(policy_path, monkeypatch, capsys):
 
 
 def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, capsys):
-    import access
-    from access import authorize, load_policy
+    import rag_lab.security.access as access
+    from rag_lab.security.access import authorize, load_policy
 
-    monkeypatch.setattr(access, "ACCESS_POLICY_PATH", policy_path)
-    monkeypatch.setattr("access.getpass.getpass", lambda _="": TEST_PASSWORD)
-    monkeypatch.setattr("workspace_manager.list_workspaces", lambda: ["accounting", "strategy", "legal"])
+    monkeypatch.setattr(settings, "access_policy_path", policy_path)
+    monkeypatch.setattr("rag_lab.security.access.getpass.getpass", lambda _="": TEST_PASSWORD)
+    monkeypatch.setattr("rag_lab.storage.workspace_manager.list_workspaces", lambda: ["accounting", "strategy", "legal"])
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path)
 
@@ -441,15 +436,14 @@ def test_cli_grant_and_revoke_multiple_workspaces(policy_path, monkeypatch, caps
 
 
 def test_cli_reviewer_rejects_empty_account_name(mocker, thread_state):
-    import approve
-
+    import rag_lab.ops.approve as approve
     mocker.patch("builtins.input", return_value="   ")
     with pytest.raises(SystemExit, match="Account name is required"):
         approve.confirm_reviewer(thread_state, None)
 
 
 def test_approve_list_inspect_and_process_decision(mocker, capsys):
-    import approve
+    import rag_lab.ops.approve as approve
     from types import SimpleNamespace
 
     interrupt_obj = SimpleNamespace(
@@ -488,7 +482,7 @@ def test_approve_list_inspect_and_process_decision(mocker, capsys):
 
     fake_app.get_state.side_effect = get_state_side_effect
     fake_app.stream.return_value = [{"human_approval": {"generation": "5 minutes for Tier-1."}}]
-    mocker.patch("approve.fetch_checkpoint_threads", return_value=["thread-pending", "thread-done"])
+    mocker.patch("rag_lab.ops.approve.fetch_checkpoint_threads", return_value=["thread-pending", "thread-done"])
 
     # 1. list_pending_threads finds only paused threads with active interrupts
     pending = approve.list_pending_threads(fake_app)
@@ -513,7 +507,7 @@ def test_approve_list_inspect_and_process_decision(mocker, capsys):
 
 
 def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
-    import approve
+    import rag_lab.ops.approve as approve
     from contextlib import contextmanager
     from types import SimpleNamespace
 
@@ -539,18 +533,18 @@ def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
     def dummy_checkpointer():
         yield mocker.MagicMock()
 
-    mocker.patch("approve.get_checkpointer", dummy_checkpointer)
-    mocker.patch("approve.workflow.compile", return_value=fake_app)
-    mocker.patch("approve.getpass.getpass", return_value=TEST_PASSWORD)
+    mocker.patch("rag_lab.ops.approve.get_checkpointer", dummy_checkpointer)
+    mocker.patch("rag_lab.ops.approve.workflow.compile", return_value=fake_app)
+    mocker.patch("rag_lab.ops.approve.getpass.getpass", return_value=TEST_PASSWORD)
 
     # Mode 1: --list with pending thread and with empty queue
-    mocker.patch("approve.fetch_checkpoint_threads", return_value=["t-1"])
+    mocker.patch("rag_lab.ops.approve.fetch_checkpoint_threads", return_value=["t-1"])
     fake_app.get_state.return_value = paused_state
     monkeypatch.setattr("sys.argv", ["approve.py", "--list"])
     approve.main()
     assert "1. t-1" in capsys.readouterr().out
 
-    mocker.patch("approve.fetch_checkpoint_threads", return_value=[])
+    mocker.patch("rag_lab.ops.approve.fetch_checkpoint_threads", return_value=[])
     monkeypatch.setattr("sys.argv", ["approve.py", "--list"])
     approve.main()
     assert "No threads currently paused" in capsys.readouterr().out
@@ -573,14 +567,14 @@ def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
     assert excinfo.value.code == 1
 
     # Mode 3: Interactive auto-select when no pending threads exist exits with code 0
-    mocker.patch("approve.fetch_checkpoint_threads", return_value=[])
+    mocker.patch("rag_lab.ops.approve.fetch_checkpoint_threads", return_value=[])
     monkeypatch.setattr("sys.argv", ["approve.py"])
     with pytest.raises(SystemExit) as excinfo:
         approve.main()
     assert excinfo.value.code == 0
 
     # Mode 3: Interactive auto-select with 'r' (reject) and 'q' (abort)
-    mocker.patch("approve.fetch_checkpoint_threads", return_value=["t-1"])
+    mocker.patch("rag_lab.ops.approve.fetch_checkpoint_threads", return_value=["t-1"])
     fake_app.get_state.side_effect = [paused_state, paused_state, done_state]
     monkeypatch.setattr("sys.argv", ["approve.py", "--approver", "bob"])
     monkeypatch.setattr("builtins.input", lambda _: "r")
@@ -594,7 +588,7 @@ def test_approve_main_cli_modes(mocker, monkeypatch, capsys):
 
 
 def test_auto_approve_permission_and_grant(policy_path):
-    from access import add_user, allowed_workspaces, authorize, set_grant
+    from rag_lab.security.access import add_user, allowed_workspaces, authorize, set_grant
 
     # Out of the box, new users get query + auto_approve by default
     add_user("dave", TEST_PASSWORD, path=policy_path)
@@ -620,7 +614,7 @@ def test_auto_approve_permission_and_grant(policy_path):
 
 
 def test_admin_only_enforcement_and_last_admin_protection(policy_path):
-    from access import (
+    from rag_lab.security.access import (
         add_user,
         clear_user_permissions_override,
         delete_user,
@@ -669,7 +663,7 @@ def test_admin_only_enforcement_and_last_admin_protection(policy_path):
 
 
 def test_token_revocation_on_password_change_delete_and_recreate(policy_path):
-    from access import add_user, delete_user, issue_token, revoke_sessions, set_password, verify_token
+    from rag_lab.security.access import add_user, delete_user, issue_token, revoke_sessions, set_password, verify_token
 
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path, actor="alice")
@@ -697,7 +691,7 @@ def test_token_revocation_on_password_change_delete_and_recreate(policy_path):
 
 def test_concurrent_policy_updates_do_not_drop_writes(policy_path):
     import threading
-    from access import add_user, load_policy, set_grant
+    from rag_lab.security.access import add_user, load_policy, set_grant
 
     add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
     add_user("erin", TEST_PASSWORD, path=policy_path, actor="alice")
@@ -716,13 +710,14 @@ def test_concurrent_policy_updates_do_not_drop_writes(policy_path):
 
 
 def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
-    from access import set_grant, set_user_clearance
-    from app import ABSTAIN_MESSAGE, human_in_the_loop_node
+    from rag_lab.security.access import set_grant, set_user_clearance
+    from rag_lab.pipeline.state import ABSTAIN_MESSAGE
+    from rag_lab.pipeline.review import human_in_the_loop_node
 
     # 1. Auto-approve user STILL pauses at human review when answer failed grading or has security warning
     set_grant("carol", "default", ["query", "auto_approve"])
     try:
-        mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
+        mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("alice")})
         res_ungrounded = human_in_the_loop_node({
             "workspace_id": "default",
             "principal": "carol",
@@ -742,7 +737,7 @@ def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
         assert "groundedness check did not pass (circuit_break)" in event["data"]["review_reasons"]
 
         # 2. Abstained answers are never stored in semantic cache even when approved
-        from semantic_cache import lookup_cache
+        from rag_lab.retrieval.semantic_cache import lookup_cache
         human_in_the_loop_node({
             "workspace_id": "default",
             "principal": "carol",
@@ -765,7 +760,7 @@ def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
     set_user_clearance("alice", "secret")
     set_user_clearance("bob", "public")
     try:
-        mocker.patch("app.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
+        mocker.patch("rag_lab.pipeline.review.interrupt", return_value={"decision": "approved", "approver_token": token_for("bob")})
         res_clr = human_in_the_loop_node({
             "workspace_id": "default",
             "principal": "alice",
