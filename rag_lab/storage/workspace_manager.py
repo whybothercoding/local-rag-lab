@@ -475,6 +475,12 @@ def print_status() -> int:
             for problem in problems:
                 print(f"[!!] Audit anchor error  : {problem}")
             ok = False
+        if settings.audit_anchor_copy_dir:
+            if chain_ok and anchors_ok:
+                print(f"[OK] Anchor copy         : {settings.audit_anchor_copy_dir} (in step with the primary)")
+        else:
+            print("[--] Anchor copy         : none (set AUDIT_ANCHOR_COPY_DIR to a second location so a rewound "
+                  "anchor file is detectable)")
 
     # 7. Semantic cache
     try:

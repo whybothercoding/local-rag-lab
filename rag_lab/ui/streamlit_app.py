@@ -324,7 +324,7 @@ if admin:
                 st.error(f"Chain broken at seq {bad_seq}.")
             anchors_ok, problems, anchor_count = verify_anchors()
             if anchor_count == 0:
-                st.info("No anchors yet. Run make audit-anchor, then copy data/audit_anchors.jsonl off the host.")
+                st.info("No anchors yet. Run make audit-anchor (set AUDIT_ANCHOR_COPY_DIR to keep a second copy elsewhere).")
             elif anchors_ok:
                 st.success(f"{anchor_count} anchors match the log.")
             for problem in problems:

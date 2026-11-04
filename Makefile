@@ -60,7 +60,7 @@ help:
 	@echo "  make audit-verify                              Verify HMAC audit hash chain and anchors"
 	@echo "  make audit-tail [N=20] [WS=<ws>]               Show most recent audit events"
 	@echo "  make audit-feedback [N=20] [WS=<ws>]           Show rejected answers and reviewer reasons"
-	@echo "  make audit-anchor                              Record signed audit head hash anchor"
+	@echo "  make audit-anchor                              Record signed audit head hash anchor (+ AUDIT_ANCHOR_COPY_DIR copy)"
 	@echo "  make audit-export [OUT=audit-export.jsonl]     Export decrypted audit trail as JSONL"
 	@echo "  make retention [DAYS=183]                      Prune expired audit records and idle checkpoints"
 	@echo "  make backup                                    Create checksummed snapshot in backups/"
@@ -189,7 +189,8 @@ audit-verify:
 audit-tail:
 	./venv/bin/python -m rag_lab.security.audit tail -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
 
-# 15. Anchor the audit head hash. Run on a schedule and copy data/audit_anchors.jsonl off the host.
+# 15. Anchor the audit head hash. Run on a schedule. With AUDIT_ANCHOR_COPY_DIR the anchors are also written to a
+# second location (another disk or share); the command exits non-zero when that copy cannot be updated.
 audit-anchor:
 	./venv/bin/python -m rag_lab.security.audit anchor
 

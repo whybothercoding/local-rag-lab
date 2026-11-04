@@ -285,7 +285,10 @@ make audit-tail N=50 WS=accounting
 make audit-feedback
 make audit-feedback N=20 WS=accounting
 
-# Anchor the audit head hash (run periodically to detect truncation)
+# Anchor the audit head hash (run periodically to detect truncation). Set AUDIT_ANCHOR_COPY_DIR to a second
+# location (another disk, a mounted share): every anchor is written to both, `make audit-verify` checks both and
+# compares them, so deleting or rewinding the anchor file on this host is detected. If the copy cannot be
+# updated (an unmounted drive), the command exits non-zero; the primary anchor is still recorded.
 make audit-anchor
 
 # Export decrypted audit trail as JSONL (to stdout or OUT=<file>)
