@@ -111,7 +111,7 @@ def postgres_uri() -> str:
     """
     from urllib.parse import urlsplit
 
-    from rag_lab.config import POSTGRES_DB_URI
+    from rag_lab.config import postgres_uri_from_env
 
     def unavailable(reason: str):
         if os.getenv("REQUIRE_POSTGRES") == "1":
@@ -119,7 +119,9 @@ def postgres_uri() -> str:
         pytest.skip(reason)
 
     # Without an explicit server, use the docker-compose one (`make up`) when it is running.
-    uri = POSTGRES_TEST_URI or POSTGRES_DB_URI
+    uri = POSTGRES_TEST_URI or postgres_uri_from_env()
+    if not uri:
+        unavailable("no PostgreSQL credentials: set POSTGRES_TEST_URI, or POSTGRES_PASSWORD in .env ('make up' creates it)")
     if os.getenv("RAG_OFFLINE") == "1" and urlsplit(uri).hostname not in ("localhost", "127.0.0.1", "::1"):
         pytest.skip("the offline run only uses a PostgreSQL server on this machine")
     if not _postgres_reachable(uri):

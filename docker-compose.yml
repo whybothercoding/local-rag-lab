@@ -1,18 +1,23 @@
+# Optional PostgreSQL checkpoint store (`make up`). Credentials come from .env, never from this file:
+# `make up` creates .env with a random password the first time, and compose reads it through ${VAR}.
+# There is no default password: without POSTGRES_PASSWORD, compose refuses to start.
 services:
   postgres:
     image: postgres:16-alpine
     container_name: local-rag-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: rag_checkpoints
-      POSTGRES_USER: rag_user
-      POSTGRES_PASSWORD: rag_password
+      POSTGRES_DB: ${POSTGRES_DB:-rag_checkpoints}
+      POSTGRES_USER: ${POSTGRES_USER:-rag_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (run 'make up', which creates .env, or copy .env.example)}
     ports:
-      - "5432:5432"
+      # Loopback only: the database is not offered to the LAN. Put a TLS proxy or a managed service in front of
+      # anything that must be reached from another machine.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_checkpoints"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5

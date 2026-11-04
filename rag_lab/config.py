@@ -23,7 +23,22 @@ load_dotenv(ROOT / ".env")
 # Fixed values: not configuration, so they stay plain constants.
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"
-POSTGRES_DB_URI = "postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints"
+
+
+def postgres_uri_from_env() -> str:
+    """The URI of the docker-compose PostgreSQL server, built from POSTGRES_USER / POSTGRES_PASSWORD (.env).
+
+    Empty when they are not set: there is no default password anywhere in the code.
+    """
+    from urllib.parse import quote
+
+    user, password = os.getenv("POSTGRES_USER", "rag_user"), os.getenv("POSTGRES_PASSWORD", "")
+    if not password:
+        return ""
+    database, port = os.getenv("POSTGRES_DB", "rag_checkpoints"), os.getenv("POSTGRES_PORT", "5432")
+    return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@localhost:{port}/{quote(database, safe='')}"
+
+
 # Chosen by `make eval-llm` (eval/README.md): multilingual, Apache 2.0, about 5 GB in memory.
 DEFAULT_CHAT_MODEL = "qwen3:8b"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"

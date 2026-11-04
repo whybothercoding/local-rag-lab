@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset db-password migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -12,7 +12,8 @@ help:
 	@echo "  make calibrate-models [PROFILE=...]            Suggest the profile's thresholds from the eval calibration split"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
 	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
-	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker)"
+	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
+	@echo "  make db-password                               Give an existing PostgreSQL volume the password in .env (once, after upgrading)"
 	@echo "  make status                                    Check models, accelerator, LLM, keys, workspaces, and audit health"
 	@echo "  make migrate-keys [REVERSE=1]                  Move the keys into the OS keychain (REVERSE=1: back into their files)"
 	@echo ""
@@ -119,7 +120,14 @@ calibrate-models:
 up:
 	@command -v docker >/dev/null 2>&1 || { echo "Error: Docker is not installed. (Note: Docker is optional; SQLite is used by default with zero setup)."; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
+	@./venv/bin/python -m rag_lab.ops.init_env
 	docker compose up -d
+
+# Rotate the database role's password to the one in .env. POSTGRES_PASSWORD only applies when the volume is
+# first created, so a volume from an earlier version keeps its old password until this runs. It connects over
+# the container's local socket (no old password needed) and the password never appears on the host.
+db-password:
+	@docker compose exec -T postgres sh -c 'printf "ALTER USER \"%s\" PASSWORD '"'"'%s'"'"';\n" "$$POSTGRES_USER" "$$POSTGRES_PASSWORD" | psql -q -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' && echo "The database role now uses the password in .env."
 
 down:
 	@command -v docker >/dev/null 2>&1 || exit 0
