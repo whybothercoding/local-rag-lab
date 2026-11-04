@@ -1,7 +1,10 @@
 """Persistent, clearance-partitioned semantic and exact cache.
 
 Released answers are stored in a persistent SQLite database (CACHE_DB_PATH) with a thread-safe,
-bounded LRU in-memory L1 cache. Cached answers are bound to workspace, clearance level, index
+bounded LRU in-memory L1 cache. With CACHE_BACKEND=postgres the same table lives in a shared PostgreSQL database
+(CACHE_DB_URI) so several UI processes see one cache; L1 is then off, because another process's prune or delete
+could not evict it. The rows are sealed exactly the same way, so the database operator learns no question, answer,
+citation or vector. All processes must share the same data key and the same index (docs/scaling.md). Cached answers are bound to workspace, clearance level, index
 manifest version, and query to prevent stale answers after re-indexing or unauthorized
 cross-clearance leakage. Query, answer, citations, and query vector are sealed at rest
 (AES-256-GCM, vault.py) with the row identity as additional authenticated data; rows that are not
@@ -20,6 +23,7 @@ Two-stage retrieval:
 from __future__ import annotations
 
 import array
+import atexit
 import collections
 import collections.abc
 import functools
@@ -32,6 +36,7 @@ import math
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Generator
 
@@ -171,9 +176,130 @@ def _open_row(row: tuple) -> dict[str, Any] | None:
         return None
 
 
+def _shared() -> bool:
+    """True when the cache lives in PostgreSQL and is shared between processes."""
+    return settings.cache_backend == "postgres"
+
+
+# --- PostgreSQL backend ---------------------------------------------------------------------------------------
+# Every statement in this module is a fixed template written with SQLite's `?` placeholders. The two statements that
+# differ between the databases (the upsert and the schema) exist once per backend below; everything else is shared,
+# with only the placeholders swapped. The `rowid` column is a serial: a replaced row gets a new one, which is how the
+# in-memory index (cache_index.py) notices that a row was replaced.
+
+_PG_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS semantic_cache (
+        key TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        clearance TEXT NOT NULL,
+        index_version TEXT NOT NULL,
+        query TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        citations_json TEXT NOT NULL,
+        query_vector BYTEA,
+        created_at TEXT NOT NULL,
+        reviewed INTEGER NOT NULL DEFAULT 1,
+        approved_by TEXT NOT NULL DEFAULT '',
+        rowid BIGSERIAL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cache_ws_clr_ver ON semantic_cache (workspace_id, clearance, index_version)",
+    """
+    CREATE INDEX IF NOT EXISTS idx_cache_partition_sync
+    ON semantic_cache (workspace_id, clearance, index_version, created_at DESC, reviewed, key)
+    WHERE query_vector IS NOT NULL
+    """,
+)
+_UPSERT_SQLITE = f"INSERT OR REPLACE INTO semantic_cache ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+_UPSERT_PG = (
+    f"INSERT INTO semantic_cache ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT (key) DO UPDATE SET workspace_id = EXCLUDED.workspace_id, clearance = EXCLUDED.clearance, "
+    "index_version = EXCLUDED.index_version, query = EXCLUDED.query, generation = EXCLUDED.generation, "
+    "citations_json = EXCLUDED.citations_json, query_vector = EXCLUDED.query_vector, reviewed = EXCLUDED.reviewed, "
+    "approved_by = EXCLUDED.approved_by, created_at = EXCLUDED.created_at, "
+    "rowid = nextval(pg_get_serial_sequence('semantic_cache', 'rowid'))"
+)
+
+
+class _PgCursor:
+    """The part of a SQLite cursor this module uses. PostgreSQL returns BYTEA as memoryview; callers want bytes."""
+
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+
+    @property
+    def rowcount(self) -> int:
+        return int(self._cursor.rowcount)
+
+    @staticmethod
+    def _row(row: tuple | None) -> tuple | None:
+        return None if row is None else tuple(bytes(v) if isinstance(v, memoryview) else v for v in row)
+
+    def fetchone(self) -> tuple | None:
+        return self._row(self._cursor.fetchone())
+
+    def fetchall(self) -> list[tuple]:
+        return [self._row(r) for r in self._cursor.fetchall()]  # type: ignore[misc]
+
+
+class _PgConn:
+    """A PostgreSQL connection with the `execute` / `commit` surface of sqlite3.Connection that this module uses."""
+
+    def __init__(self, raw: Any) -> None:
+        self._raw = raw
+
+    def execute(self, statement: str, params: Any = ()) -> _PgCursor:
+        if "%" in statement:
+            raise ValueError("a literal % in a cache statement would be read as a PostgreSQL placeholder")
+        return _PgCursor(self._raw.execute(statement.replace("?", "%s"), params))
+
+    def commit(self) -> None:
+        self._raw.commit()
+
+
+_PG_POOLS: dict[str, Any] = {}
+_PG_READY: set[str] = set()
+_PG_LOCK = threading.Lock()
+
+
+def _pg_pool() -> Any:
+    from psycopg_pool import ConnectionPool
+
+    uri = settings.cache_db_uri
+    if not uri:
+        raise RuntimeError("CACHE_BACKEND=postgres needs CACHE_DB_URI (a PostgreSQL connection string).")
+    with _PG_LOCK:
+        pool = _PG_POOLS.get(uri)
+        if pool is None:
+            pool = ConnectionPool(conninfo=uri, min_size=1, max_size=max(2, settings.checkpoint_pool_size), open=True,
+                                  timeout=15, kwargs={"autocommit": False})
+            atexit.register(pool.close)  # its worker threads must be stopped before the interpreter finalises
+            _PG_POOLS[uri] = pool
+        if uri not in _PG_READY:
+            with pool.connection() as raw:
+                raw.execute("SELECT pg_advisory_xact_lock(727274)")  # two processes starting together create it once
+                for statement in _PG_DDL:
+                    raw.execute(statement)
+            _PG_READY.add(uri)
+        return pool
+
+
+def _db_identity(db_path: str | None) -> str:
+    """What names this database in the in-memory index: the resolved file, or the server and database (no password)."""
+    if _shared():
+        parts = urlsplit(settings.cache_db_uri)
+        return f"postgres://{parts.hostname}:{parts.port or 5432}{parts.path}"
+    return str(Path(db_path or settings.cache_db_path).resolve())
+
+
 @contextmanager
-def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, None]:
-    """Context manager guaranteeing connection termination and WAL-mode configuration."""
+def _open_db(db_path: str | None = None) -> Generator[Any, None, None]:
+    """A connection to the cache database: SQLite (the file `db_path`, default CACHE_DB_PATH) or the shared PostgreSQL."""
+    if _shared():
+        with _pg_pool().connection() as raw:
+            yield _PgConn(raw)
+        return
     target = db_path or settings.cache_db_path
     Path(target).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=10.0)
@@ -229,6 +355,8 @@ def _retention_cutoff() -> str:
 # --- L1 (LRU) ----------------------------------------------------------------
 
 def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = True) -> None:
+    if _shared():
+        return  # another process's prune or delete could not evict this copy
     with _L1_LOCK:
         if key in _L1_GENERATIONS:
             _L1_GENERATIONS.move_to_end(key)
@@ -243,6 +371,8 @@ def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = Tr
 
 
 def _l1_get(key: str) -> tuple[bool, str, list[str]]:
+    if _shared():
+        return False, "", []
     with _L1_LOCK:
         if key in _L1_GENERATIONS:
             _L1_GENERATIONS.move_to_end(key)
@@ -311,10 +441,7 @@ def store_cache(
         )
         with _open_db(db_path) as conn:
             conn.execute(
-                f"""
-                INSERT OR REPLACE INTO semantic_cache ({_COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
+                _UPSERT_PG if _shared() else _UPSERT_SQLITE,
                 (ckey, workspace_id, clearance, ver, sealed_query, sealed_gen, sealed_cites, sealed_vec,
                  1 if reviewed else 0, approved_by, now),
             )
@@ -390,7 +517,7 @@ def lookup_cache(
 
             # 2. Semantic vector similarity across the matching workspace and index version
             return _semantic_lookup(
-                conn, str(Path(db_path or settings.cache_db_path).resolve()), workspace_id, authorized, curr_version,
+                conn, _db_identity(db_path), workspace_id, authorized, curr_version,
                 cleaned_query, cutoff, sim_threshold, include_unreviewed,
             )
     except Exception as exc:
@@ -399,7 +526,7 @@ def lookup_cache(
 
 
 def _load_for_index(
-    conn: sqlite3.Connection, workspace_id: str, clearance: str, version: str, keys: list[str]
+    conn: Any, workspace_id: str, clearance: str, version: str, keys: list[str]
 ) -> dict[str, tuple[np.ndarray, Any]]:
     """Open the rows of one partition that the index has not seen. Rows that do not open are left out."""
     placeholders = ", ".join("?" for _ in keys)
@@ -420,7 +547,7 @@ def _load_for_index(
 
 
 def _semantic_lookup(
-    conn: sqlite3.Connection,
+    conn: Any,
     db_key: str,
     workspace_id: str,
     authorized: list[str],
@@ -546,12 +673,12 @@ def clear_cache(db_path: str | None = None) -> None:
 
 def cache_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve cache entry counts, workspace distribution, and on-disk size."""
-    target = db_path or settings.cache_db_path
-    path = Path(target)
-    if not path.is_file():
+    path = Path(db_path or settings.cache_db_path)
+    if not _shared() and not path.is_file():
         return {"total_entries": 0, "workspaces": {}, "bytes": 0}
 
     total = 0
+    size = 0
     workspaces: dict[str, int] = {}
     try:
         with _open_db(db_path) as conn:
@@ -561,17 +688,19 @@ def cache_stats(db_path: str | None = None) -> dict[str, Any]:
                 "SELECT workspace_id, COUNT(*) FROM semantic_cache GROUP BY workspace_id;"
             ).fetchall()
             workspaces = {r[0]: r[1] for r in ws_rows if r[0]}
+            if _shared():
+                size = int(conn.execute("SELECT pg_total_relation_size('semantic_cache');").fetchone()[0])  # type: ignore[index]
     except Exception as exc:
         logger.debug("Error fetching cache stats: %s", exc)
 
     return {
         "total_entries": total,
         "workspaces": workspaces,
-        "bytes": path.stat().st_size if path.exists() else 0,
+        "bytes": size if _shared() else (path.stat().st_size if path.exists() else 0),
     }
 
 
-def _fetch_entry(conn: sqlite3.Connection, key: str) -> dict[str, Any] | None:
+def _fetch_entry(conn: Any, key: str) -> dict[str, Any] | None:
     row = conn.execute(f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
     return _open_row(row) if row else None
 
@@ -600,7 +729,7 @@ class PersistentSemanticCache(collections.abc.MutableMapping):
             with _open_db() as conn:
                 now = datetime.now(UTC).isoformat(timespec="seconds")
                 conn.execute(
-                    f"INSERT OR REPLACE INTO semantic_cache ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                    _UPSERT_PG if _shared() else _UPSERT_SQLITE,
                     (key, "", "public", "", sealed_query, sealed_gen, sealed_cites, None, 1, "", now),
                 )
                 conn.commit()

@@ -86,6 +86,28 @@ def _fresh_accelerator_state():
     accel._state.update(calls=0, noted=False)
 
 
+@pytest.fixture(params=["sqlite", "postgres"])
+def cache_backend(request, monkeypatch):
+    """Run a test against the SQLite cache and against the shared PostgreSQL cache (CACHE_BACKEND=postgres).
+
+    The Postgres run uses the dedicated `<database>_pytest` database of the `postgres_uri` fixture, so it skips (or, with
+    REQUIRE_POSTGRES=1, fails) exactly like the checkpointer tests do. The shared table is emptied around every test.
+    """
+    from rag_lab.retrieval import cache_index
+    from rag_lab.retrieval import semantic_cache as sc
+
+    if request.param == "postgres":
+        uri = request.getfixturevalue("postgres_uri")
+        monkeypatch.setattr(settings, "cache_backend", "postgres")
+        monkeypatch.setattr(settings, "cache_db_uri", uri)
+        sc.clear_cache()
+    cache_index.forget()
+    yield request.param
+    if request.param == "postgres":
+        sc.clear_cache()
+    cache_index.forget()
+
+
 @pytest.fixture(autouse=True)
 def _clean_cache_each_test():
     from rag_lab.retrieval.semantic_cache import clear_cache

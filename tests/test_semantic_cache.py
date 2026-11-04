@@ -19,6 +19,10 @@ from rag_lab.retrieval.semantic_cache import (
 )
 
 
+# Every test here runs against the SQLite cache and against the shared PostgreSQL cache (conftest.cache_backend).
+pytestmark = pytest.mark.usefixtures("cache_backend")
+
+
 @pytest.fixture(autouse=True)
 def clean_cache():
     clear_cache()
@@ -246,7 +250,9 @@ def test_cache_stats_and_malformed_vector_handling(tmp_path: Path):
     assert st["bytes"] > 0
 
 
-def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path):
+def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path, cache_backend):
+    from rag_lab.retrieval.semantic_cache import _open_db
+
     db_file = str(tmp_path / "cache.db")
     secret_answer = "Project-Omega-Confidential-998811"
 
@@ -259,17 +265,24 @@ def test_cache_encryption_at_rest_and_row_aad_binding(tmp_path: Path):
         db_path=db_file,
     )
 
-    with closing(sqlite3.connect(db_file)) as conn, conn:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    raw_bytes = Path(db_file).read_bytes()
-    assert secret_answer.encode("utf-8") not in raw_bytes
-    assert b"What is the Omega code?" not in raw_bytes
+    with _open_db(db_file) as conn:  # every column, as the database holds it
+        stored = conn.execute("SELECT key, workspace_id, clearance, index_version, query, generation, citations_json, "
+                              "query_vector FROM semantic_cache").fetchall()
+    held = b"".join(v if isinstance(v, bytes) else str(v).encode() for row in stored for v in row if v is not None)
+    assert secret_answer.encode("utf-8") not in held and b"What is the Omega code?" not in held
+    assert b"omega.md" not in held, "citations are sealed too"
+    if cache_backend == "sqlite":  # and the file itself, WAL included
+        with closing(sqlite3.connect(db_file)) as conn, conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        raw_bytes = Path(db_file).read_bytes()
+        assert secret_answer.encode("utf-8") not in raw_bytes
+        assert b"What is the Omega code?" not in raw_bytes
 
     # Tamper with row clearance in SQLite directly (attempting to downgrade secret row to public):
     # AAD includes clearance, so decryption fails and the tampered row is refused!
     _L1_GENERATIONS.clear()
     _L1_CITATIONS.clear()
-    with closing(sqlite3.connect(db_file)) as conn, conn:
+    with _open_db(db_file) as conn:
         conn.execute("UPDATE semantic_cache SET clearance = 'public'")
         conn.commit()
 
