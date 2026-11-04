@@ -73,6 +73,10 @@ dev = [
 rust = [
     "maturin>=1.7.0",
 ]
+# Optional scaling options (docs/scaling.md). pgvector needs no extra: psycopg is already a dependency.
+qdrant = [
+    "qdrant-client>=1.9",
+]
 
 [project.scripts]
 local-rag = "rag_lab.storage.workspace_manager:main"

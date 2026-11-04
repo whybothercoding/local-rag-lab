@@ -82,18 +82,27 @@ def store(request, tmp_path, monkeypatch):
         else:
             url = os.getenv("QDRANT_TEST_URL")
             if not url:
-                _unavailable("QDRANT_TEST_URL is not set (start one with `make scale-up PROFILE=qdrant`)", "REQUIRE_QDRANT")
+                _unavailable("QDRANT_TEST_URL is not set (start one with `make scale-up SERVICE=qdrant`)", "REQUIRE_QDRANT")
             adapter = QdrantStore(url, os.getenv("QDRANT_TEST_API_KEY", ""), prefix)
+            try:
+                adapter._client.get_collections()
+            except Exception as exc:
+                _unavailable(f"Qdrant is not reachable at {url} ({type(exc).__name__})", "REQUIRE_QDRANT")
         yield adapter
         adapter.drop_namespace()
         return
-    uri = os.getenv("PGVECTOR_TEST_URI")
-    if not uri:
-        _unavailable("PGVECTOR_TEST_URI is not set (start one with `make scale-up PROFILE=pgvector`)", "REQUIRE_PGVECTOR")
+    from rag_lab.config import pgvector_uri_from_env
     from rag_lab.storage.pgvector_store import PgvectorStore
 
+    uri = os.getenv("PGVECTOR_TEST_URI") or pgvector_uri_from_env()
+    if not uri:
+        _unavailable("no pgvector server: set PGVECTOR_TEST_URI, or POSTGRES_PASSWORD in .env and "
+                     "`make scale-up SERVICE=pgvector`", "REQUIRE_PGVECTOR")
     schema = f"pytest_{uuid.uuid4().hex[:8]}"
-    adapter = PgvectorStore(uri, schema)
+    try:
+        adapter = PgvectorStore(uri, schema)
+    except VectorStoreError as exc:
+        _unavailable(str(exc), "REQUIRE_PGVECTOR")
     yield adapter
     adapter.drop_namespace()
 
@@ -145,6 +154,10 @@ def test_the_callers_clearance_limits_what_is_returned(store):
     query = vectors[secret_idx].tolist()  # identical to a secret chunk: it would rank first without the filter
     public = store.query("ops", query, len(ids), ["public"])
     assert public and all(h.metadata["clearance"] == "public" for h in public)
+    # The store itself filters, rather than the guard cleaning up afterwards: asking for 3 of the 3 readable chunks
+    # returns all 3 even though the nearest chunks overall belong to higher clearances.
+    only_public = [i for i, m in enumerate(metas) if m["clearance"] == "public"]
+    assert len(store.query("ops", query, len(only_public), ["public"])) == len(only_public)
     assert ids[secret_idx] not in {h.id for h in public}
     internal = store.query("ops", query, len(ids), ["public", "internal"])
     assert {h.metadata["clearance"] for h in internal} <= {"public", "internal"} and len(internal) > len(public)
@@ -208,6 +221,22 @@ def test_a_reused_vector_ranks_like_a_fresh_one(store):
     reread = dict(store.read_vectors("ops"))
     store.publish("ops", ids, docs, metas, [reread[d] for d in docs], FINGERPRINT)
     assert [h.id for h in store.query("ops", [1.0] * DIM, 6, CLEARANCES)] == before
+
+
+def test_results_match_chromas_own_output_not_only_numpy(store, chroma):
+    """Same corpus in Chroma and in the adapter under test: same chunks, same order, same similarity."""
+    if isinstance(store, ChromaStore):
+        pytest.skip("this is Chroma")
+    publish(store, "ops", n=30, seed=4)
+    publish(chroma, "ops", n=30, seed=4)
+    rng = np.random.default_rng(11)
+    for allowed in (["public"], ["public", "internal"], CLEARANCES):
+        for _ in range(5):
+            query = (rng.normal(size=DIM) * 5.0).tolist()
+            theirs, reference = store.query("ops", query, 5, allowed), chroma.query("ops", query, 5, allowed)
+            assert [h.id for h in theirs] == [h.id for h in reference]
+            assert all(abs(a.similarity - b.similarity) < 1e-4 for a, b in zip(theirs, reference))
+            assert [h.metadata["clearance"] for h in theirs] == [h.metadata["clearance"] for h in reference]
 
 
 # --- the guard belongs to the base class, not to the adapters ------------------------------------------------------------
@@ -289,3 +318,58 @@ def test_the_default_store_is_embedded_chroma_and_an_unknown_one_is_refused(monk
     monkeypatch.setattr(settings, "vector_store", "milvus")
     with pytest.raises(VectorStoreError, match="chroma, qdrant, pgvector"):
         get_vector_store()
+
+
+# --- configuration errors say what to do ----------------------------------------------------------------------------------
+
+def test_a_missing_qdrant_package_or_url_is_a_labelled_error(monkeypatch):
+    import sys
+
+    monkeypatch.setattr(settings, "vector_store", "qdrant")
+    monkeypatch.setattr(settings, "qdrant_url", "http://localhost:6333")
+    monkeypatch.setitem(sys.modules, "qdrant_client", None)  # as if it were not installed
+    monkeypatch.delitem(sys.modules, "rag_lab.storage.qdrant_store", raising=False)
+    vs._INSTANCES.clear()
+    with pytest.raises(VectorStoreError, match="qdrant-client"):
+        get_vector_store()
+
+
+def test_qdrant_without_a_url_and_pgvector_without_a_uri_are_labelled_errors():
+    pytest.importorskip("qdrant_client")
+    from rag_lab.storage.pgvector_store import PgvectorStore
+    from rag_lab.storage.qdrant_store import QdrantStore
+
+    with pytest.raises(VectorStoreError, match="QDRANT_URL"):
+        QdrantStore("", "", "")
+    with pytest.raises(VectorStoreError, match="PGVECTOR_URI"):
+        PgvectorStore("", "public")
+    with pytest.raises(VectorStoreError, match="PGVECTOR_SCHEMA"):
+        PgvectorStore("postgresql://u:p@localhost/db", "x; DROP TABLE y")
+
+
+def test_the_pgvector_pool_is_closed_at_exit_so_the_interpreter_finishes_cleanly():
+    """Python 3.14 raises PythonFinalizationError when a pool's worker threads are still running at shutdown."""
+    import subprocess
+    import sys
+
+    import psycopg
+    from psycopg import sql
+
+    from rag_lab.config import pgvector_uri_from_env
+
+    uri = os.getenv("PGVECTOR_TEST_URI") or pgvector_uri_from_env()
+    if not uri:
+        _unavailable("no pgvector server", "REQUIRE_PGVECTOR")
+    schema = f"pytest_exit_{uuid.uuid4().hex[:6]}"
+    code = (
+        "import sys\n"
+        "from rag_lab.storage.pgvector_store import PgvectorStore\n"
+        "PgvectorStore(sys.argv[1], sys.argv[2]).ensure('ws')\n"  # then the interpreter exits: atexit must close the pool
+    )
+    try:
+        done = subprocess.run([sys.executable, "-c", code, uri, schema], capture_output=True, text=True,
+                              env=os.environ | {"PGVECTOR_URI": ""})
+    finally:
+        with psycopg.connect(uri, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+    assert done.returncode == 0 and "PythonFinalizationError" not in done.stderr, done.stderr[-400:]

@@ -268,8 +268,13 @@ def get_vector_store() -> VectorStore:
     if kind == "qdrant":
         key: tuple = ("qdrant", settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
         if key not in _INSTANCES:
-            from rag_lab.storage.qdrant_store import QdrantStore
-
+            try:
+                from rag_lab.storage.qdrant_store import QdrantStore
+            except ImportError as exc:
+                raise VectorStoreError(
+                    "VECTOR_STORE=qdrant needs the optional qdrant-client package: pip install 'qdrant-client>=1.9' "
+                    "(or pip install -e '.[qdrant]')."
+                ) from exc
             _INSTANCES[key] = QdrantStore(settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
         return _INSTANCES[key]
     if kind == "pgvector":

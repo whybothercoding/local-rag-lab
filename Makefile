@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password scale-up scale-down lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -13,6 +13,8 @@ help:
 	@echo "  make rust-build                                Compile the native Rust accelerator (rag_accel) from source"
 	@echo "  make ollama-pull                               Pull the optional Ollama chat model"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
+	@echo "  make scale-up SERVICE=<qdrant|pgvector|vllm>   Start an optional scaling service (docs/scaling.md); make up never does"
+	@echo "  make scale-down SERVICE=<qdrant|pgvector|vllm> Stop it (its container and data volume are kept)"
 	@echo "  make lan-tls                                   Optional HTTPS for the UI on the LAN (Caddy profile, docs/lan-tls.md)"
 	@echo "  make lan-tls-down                              Stop the LAN TLS proxy"
 	@echo "  make lan-tls-ca                                Export Caddy's local root certificate for client devices"
@@ -128,6 +130,18 @@ up:
 	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
 	@$(if $(wildcard venv/bin/python),./venv/bin/python,python3) -m rag_lab.ops.init_env
 	docker compose up -d
+
+# Optional scaling services (compose profiles qdrant, pgvector, vllm). Nothing here is needed on one laptop. The
+# service only starts: turn it on in .env (VECTOR_STORE=qdrant, VECTOR_STORE=pgvector, LLM_PROVIDER=openai).
+scale-up:
+	@case "$(SERVICE)" in qdrant|pgvector|vllm) ;; *) echo "Usage: make scale-up SERVICE=qdrant|pgvector|vllm"; exit 1;; esac
+	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running."; exit 1; }
+	@$(if $(wildcard venv/bin/python),./venv/bin/python,python3) -m rag_lab.ops.init_env
+	docker compose --profile $(SERVICE) up -d $(SERVICE)
+
+scale-down:
+	@case "$(SERVICE)" in qdrant|pgvector|vllm) ;; *) echo "Usage: make scale-down SERVICE=qdrant|pgvector|vllm"; exit 1;; esac
+	docker compose --profile $(SERVICE) stop $(SERVICE)
 
 # Optional LAN TLS (compose profile "caddy"): Caddy terminates HTTPS with its own local CA and proxies to the
 # Streamlit UI on the host. Never started by `make up`. Set RAG_LAN_HOST and RAG_HTTPS_PORT in .env.
