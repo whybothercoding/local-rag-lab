@@ -21,7 +21,8 @@ chroma_data/
 chroma_db/
 bm25_indices/
 uploads/
-data/
+# Runtime data at the repository root only: rag_lab/lang/data/ holds source files and must be tracked.
+/data/
 *.db
 *.db-wal
 *.db-shm
