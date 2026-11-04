@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset db-password migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset db-password lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -13,6 +13,9 @@ help:
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
 	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
+	@echo "  make lan-tls                                   Optional HTTPS for the UI on the LAN (Caddy profile, docs/lan-tls.md)"
+	@echo "  make lan-tls-down                              Stop the LAN TLS proxy"
+	@echo "  make lan-tls-ca                                Export Caddy's local root certificate for client devices"
 	@echo "  make db-password                               Give an existing PostgreSQL volume the password in .env (once, after upgrading)"
 	@echo "  make status                                    Check models, accelerator, LLM, keys, workspaces, and audit health"
 	@echo "  make migrate-keys [REVERSE=1]                  Move the keys into the OS keychain (REVERSE=1: back into their files)"
@@ -122,6 +125,19 @@ up:
 	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
 	@./venv/bin/python -m rag_lab.ops.init_env
 	docker compose up -d
+
+# Optional LAN TLS (compose profile "caddy"): Caddy terminates HTTPS with its own local CA and proxies to the
+# Streamlit UI on the host. Never started by `make up`. Set RAG_LAN_HOST and RAG_HTTPS_PORT in .env.
+lan-tls:
+	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running."; exit 1; }
+	docker compose --profile caddy up -d caddy
+
+lan-tls-down:
+	docker compose --profile caddy rm -sf caddy
+
+# Copy Caddy's local root certificate out of the container, to install on the devices that open the UI.
+lan-tls-ca:
+	@mkdir -p data && docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt data/caddy-root.crt && echo "Wrote data/caddy-root.crt (public certificate; install it as a trusted root on your devices)."
 
 # Rotate the database role's password to the one in .env. POSTGRES_PASSWORD only applies when the volume is
 # first created, so a volume from an earlier version keeps its old password until this runs. It connects over

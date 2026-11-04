@@ -82,3 +82,18 @@ def test_the_postgres_tests_skip_without_credentials_and_fail_when_required(monk
 @pytest.mark.parametrize("name", ["POSTGRES_PASSWORD"])
 def test_the_gitignore_covers_env(name):
     assert ".env" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_the_lan_tls_proxy_is_a_profile_that_make_up_never_starts():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    caddy = compose["services"]["caddy"]
+    assert caddy["profiles"] == ["caddy"], "without the profile, `docker compose up` does not start it"
+    assert "profiles" not in compose["services"]["postgres"]
+    assert "./deploy/Caddyfile:/etc/caddy/Caddyfile:ro" in caddy["volumes"]
+    caddyfile = (ROOT / "deploy" / "Caddyfile").read_text()
+    assert "tls internal" in caddyfile and "local_certs" in caddyfile, "no public ACME, no internet"
+    assert "reverse_proxy" in caddyfile
+    makefile = (ROOT / "Makefile").read_text()
+    assert "docker compose --profile caddy up -d caddy" in makefile
+    up = makefile.split("\nup:")[1].split("\n\n")[0]
+    assert "caddy" not in up

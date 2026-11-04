@@ -22,5 +22,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # LAN TLS in front of the Streamlit UI. Not started by `make up`: only `make lan-tls` (profile "caddy").
+  caddy:
+    profiles: ["caddy"]
+    image: caddy:2-alpine
+    container_name: local-rag-caddy
+    restart: unless-stopped
+    environment:
+      RAG_LAN_HOST: ${RAG_LAN_HOST:-localhost}
+      RAG_UPSTREAM: ${RAG_UPSTREAM:-host.docker.internal:8501}
+    ports:
+      - "${RAG_HTTPS_PORT:-8443}:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
