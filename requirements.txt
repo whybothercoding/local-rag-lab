@@ -6,6 +6,7 @@ langchain-text-splitters>=0.3.0
 
 # Vector & Keyword Retrieval
 chromadb>=0.5.0
+numpy>=1.26
 fastembed>=0.9.0
 huggingface-hub>=0.25.0
 
