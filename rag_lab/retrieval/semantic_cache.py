@@ -269,19 +269,22 @@ def _pg_pool() -> Any:
     uri = settings.cache_db_uri
     if not uri:
         raise RuntimeError("CACHE_BACKEND=postgres needs CACHE_DB_URI (a PostgreSQL connection string).")
+    # Keyed by a digest, never by the URI: the URI carries the password, and a dict key is printed by tracebacks and by
+    # test assertion output.
+    key = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
     with _PG_LOCK:
-        pool = _PG_POOLS.get(uri)
+        pool = _PG_POOLS.get(key)
         if pool is None:
             pool = ConnectionPool(conninfo=uri, min_size=1, max_size=max(2, settings.checkpoint_pool_size), open=True,
                                   timeout=15, kwargs={"autocommit": False})
             atexit.register(pool.close)  # its worker threads must be stopped before the interpreter finalises
-            _PG_POOLS[uri] = pool
-        if uri not in _PG_READY:
+            _PG_POOLS[key] = pool
+        if key not in _PG_READY:
             with pool.connection() as raw:
                 raw.execute("SELECT pg_advisory_xact_lock(727274)")  # two processes starting together create it once
                 for statement in _PG_DDL:
                     raw.execute(statement)
-            _PG_READY.add(uri)
+            _PG_READY.add(key)
         return pool
 
 

@@ -375,3 +375,14 @@ def test_the_pgvector_pool_is_closed_at_exit_so_the_interpreter_finishes_cleanly
         with psycopg.connect(uri, autocommit=True) as conn:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
     assert done.returncode == 0 and "PythonFinalizationError" not in done.stderr, done.stderr[-400:]
+
+
+def test_the_instance_cache_never_holds_a_key_or_a_connection_string(monkeypatch):
+    """Its keys are printed by tracebacks and by pytest's assertion output."""
+    pytest.importorskip("qdrant_client")
+    monkeypatch.setattr(settings, "vector_store", "qdrant")
+    monkeypatch.setattr(settings, "qdrant_url", ":memory:")
+    monkeypatch.setattr(settings, "qdrant_api_key", "hunter2-not-a-real-key")
+    monkeypatch.setattr(vs, "_INSTANCES", {})
+    assert get_vector_store().name == "qdrant"
+    assert not any("hunter2" in str(part) for key in vs._INSTANCES for part in key)

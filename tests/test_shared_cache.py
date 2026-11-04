@@ -25,8 +25,38 @@ def test_sqlite_only_sql_stays_in_the_sqlite_constants():
     assert statements and not [s for s in statements if "%" in s], "a literal % would be read as a placeholder"
 
 
-def test_the_postgres_pool_is_not_created_unless_the_backend_is_selected():
-    assert settings.cache_backend == "sqlite" and not sc._PG_POOLS
+def test_the_postgres_pool_is_never_touched_while_the_backend_is_sqlite(tmp_path, monkeypatch):
+    def boom():
+        raise AssertionError("the SQLite backend must not open a PostgreSQL pool")
+
+    monkeypatch.setattr(sc, "_pg_pool", boom)
+    assert settings.cache_backend == "sqlite"
+    sc.store_cache("ops", "Where is the runbook?", "public", "in the wiki", db_path=str(tmp_path / "c.db"), compute_vector=False)
+    assert sc.lookup_cache("ops", "Where is the runbook?", "public", db_path=str(tmp_path / "c.db"))["hit"]
+
+
+def test_the_pool_registry_never_holds_a_connection_string(monkeypatch):
+    """A dict key is printed by tracebacks and by pytest's assertion output: it must not carry a password."""
+    uri = "postgresql://user:hunter2-not-a-real-password@localhost:5432/db"
+    monkeypatch.setattr(settings, "cache_backend", "postgres")
+    monkeypatch.setattr(settings, "cache_db_uri", uri)
+
+    class FakePool:
+        def __init__(self, **kw):
+            self.closed = False
+
+        def connection(self):
+            raise RuntimeError("never reached: the test only inspects the registry key")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("psycopg_pool.ConnectionPool", FakePool)
+    monkeypatch.setattr(sc, "_PG_POOLS", {})
+    monkeypatch.setattr(sc, "_PG_READY", set())
+    with pytest.raises(RuntimeError, match="never reached"):
+        sc._pg_pool()
+    assert sc._PG_POOLS and not any("hunter2" in k or "postgresql" in k for k in sc._PG_POOLS)
 
 
 def test_a_missing_uri_is_a_labelled_error(monkeypatch):

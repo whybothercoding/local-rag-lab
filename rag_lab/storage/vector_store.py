@@ -19,6 +19,7 @@ docs/scaling.md).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
@@ -260,13 +261,18 @@ class ChromaStore(VectorStore):
 _INSTANCES: dict[tuple, VectorStore] = {}
 
 
+def _digest(secret: str) -> str:
+    """Names a connection string or key in a dict key without containing it (tracebacks and test output print keys)."""
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
 def get_vector_store() -> VectorStore:
     """The store selected by VECTOR_STORE, read when called so a settings override applies."""
     kind = settings.vector_store
     if kind == "chroma":
         return ChromaStore()
     if kind == "qdrant":
-        key: tuple = ("qdrant", settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
+        key: tuple = ("qdrant", settings.qdrant_url, _digest(settings.qdrant_api_key), settings.qdrant_prefix)
         if key not in _INSTANCES:
             try:
                 from rag_lab.storage.qdrant_store import QdrantStore
@@ -278,7 +284,7 @@ def get_vector_store() -> VectorStore:
             _INSTANCES[key] = QdrantStore(settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
         return _INSTANCES[key]
     if kind == "pgvector":
-        key = ("pgvector", settings.pgvector_uri, settings.pgvector_schema)
+        key = ("pgvector", _digest(settings.pgvector_uri), settings.pgvector_schema)
         if key not in _INSTANCES:
             from rag_lab.storage.pgvector_store import PgvectorStore
 
