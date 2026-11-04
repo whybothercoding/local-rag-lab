@@ -11,7 +11,7 @@ help:
 	@echo "  make verify-models [PROFILE=...]               Verify cached ONNX model SHA-256 hashes offline"
 	@echo "  make calibrate-models [PROFILE=...]            Suggest the profile's thresholds from the eval calibration split"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
-	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
+	@echo "  make ollama-pull                               Pull the optional Ollama chat model"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
 	@echo "  make lan-tls                                   Optional HTTPS for the UI on the LAN (Caddy profile, docs/lan-tls.md)"
 	@echo "  make lan-tls-down                              Stop the LAN TLS proxy"
@@ -149,10 +149,9 @@ down:
 	@command -v docker >/dev/null 2>&1 || exit 0
 	docker compose down
 
-# 5. Optional: pull the Ollama chat and embedding models (names resolved by config.py, so .env applies)
+# 5. Optional: pull the Ollama chat model (name resolved by config.py, so .env applies). Embeddings are in-process ONNX.
 ollama-pull:
 	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.chat_model)')"
-	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.embed_model)')"
 
 # 6. Run the test suite
 test:

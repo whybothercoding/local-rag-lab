@@ -41,7 +41,6 @@ def postgres_uri_from_env() -> str:
 
 # Chosen by `make eval-llm` (eval/README.md): multilingual, Apache 2.0, about 5 GB in memory.
 DEFAULT_CHAT_MODEL = "qwen3:8b"
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
 
@@ -154,7 +153,6 @@ class Settings:
     ollama_base_url: str
     local_llm_url: str
     chat_model: str
-    embed_model: str
     # A hung model server must not hang the app: every chat request gives up after this many seconds.
     ollama_timeout_sec: float
     embedding_provider: str
@@ -227,7 +225,6 @@ class Settings:
             ollama_base_url=_env("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
             local_llm_url=_env("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL),
             chat_model=_env("OLLAMA_MODEL", DEFAULT_CHAT_MODEL),
-            embed_model=_env("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL),
             ollama_timeout_sec=float(_env("OLLAMA_TIMEOUT_SEC", "120")),
             embedding_provider=_env("EMBEDDING_PROVIDER", "fastembed"),
             model_profile=_env("MODEL_PROFILE", DEFAULT_MODEL_PROFILE),
