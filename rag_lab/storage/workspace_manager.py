@@ -13,7 +13,7 @@ from rag_lab.config import settings
 from rag_lab.storage.checkpointer import is_postgres_uri, get_sqlite_path
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index
-from rag_lab.storage.vector_store import WorkspaceNotIndexed, get_vector_store
+from rag_lab.storage.vector_store import WorkspaceNotIndexed, get_vector_store, vector_store_status
 
 
 logger = logging.getLogger("workspace_manager")
@@ -440,6 +440,11 @@ def print_status() -> int:
         print(f"[{marker}] Key storage          : {text}")
         ok = ok and marker != "!!"
 
+    # 3c. Where the vectors live, and whether that place answers
+    store_ok, store_line = vector_store_status()
+    print(f"[{'OK' if store_ok else '!!'}] Vector store        : {store_line}")
+    ok = ok and store_ok
+
     # 4. Workspaces
     workspaces = list_workspaces()
     if not workspaces:
@@ -489,11 +494,17 @@ def print_status() -> int:
             print("[--] Anchor copy         : none (set AUDIT_ANCHOR_COPY_DIR to a second location so a rewound "
                   "anchor file is detectable)")
 
-    # 7. Semantic cache
+    # 7. Semantic cache (SQLite file, or the shared PostgreSQL, which is asked rather than assumed)
     try:
-        from rag_lab.retrieval.semantic_cache import cache_stats
-        cs = cache_stats()
-        print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s)")
+        from rag_lab.retrieval.semantic_cache import cache_backend_status, cache_stats
+        healthy, where = cache_backend_status()
+        if not healthy:
+            print(f"[!!] Semantic cache      : {where}")
+            ok = False
+        else:
+            cs = cache_stats()
+            note = f" [{where}]" if settings.cache_backend != "sqlite" else ""
+            print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s){note}")
     except Exception as exc:
         print(f"[!!] Semantic cache error: {exc}")
         ok = False

@@ -364,13 +364,14 @@ def test_the_pgvector_pool_is_closed_at_exit_so_the_interpreter_finishes_cleanly
         _unavailable("no pgvector server", "REQUIRE_PGVECTOR")
     schema = f"pytest_exit_{uuid.uuid4().hex[:6]}"
     code = (
-        "import sys\n"
+        "import os, sys\n"
         "from rag_lab.storage.pgvector_store import PgvectorStore\n"
-        "PgvectorStore(sys.argv[1], sys.argv[2]).ensure('ws')\n"  # then the interpreter exits: atexit must close the pool
+        # The URI travels in the environment, never on argv: a failing assertion prints argv, and the URI has a password.
+        "PgvectorStore(os.environ['RAG_EXIT_TEST_URI'], sys.argv[1]).ensure('ws')\n"  # then the interpreter exits
     )
     try:
-        done = subprocess.run([sys.executable, "-c", code, uri, schema], capture_output=True, text=True,
-                              env=os.environ | {"PGVECTOR_URI": ""})
+        done = subprocess.run([sys.executable, "-c", code, schema], capture_output=True, text=True,
+                              env=os.environ | {"PGVECTOR_URI": "", "RAG_EXIT_TEST_URI": uri})
     finally:
         with psycopg.connect(uri, autocommit=True) as conn:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
@@ -386,3 +387,16 @@ def test_the_instance_cache_never_holds_a_key_or_a_connection_string(monkeypatch
     monkeypatch.setattr(vs, "_INSTANCES", {})
     assert get_vector_store().name == "qdrant"
     assert not any("hunter2" in str(part) for key in vs._INSTANCES for part in key)
+
+
+def test_factory_reset_purge_empties_a_real_store_of_this_installs_workspaces(store, monkeypatch):
+    """`make factory-reset` runs rag_lab.ops.purge_external; here against every adapter, real servers included."""
+    from rag_lab.ops import purge_external
+
+    publish(store, "alpha", seed=1)
+    publish(store, "beta", seed=2)
+    monkeypatch.setattr(settings, "vector_store", "qdrant")  # anything but chroma: the external branch
+    monkeypatch.setattr(vs, "get_vector_store", lambda: store)
+    lines, complete = purge_external.purge()
+    assert complete and lines[0].startswith("Purged 2 workspace(s) from ") and "hunter2" not in lines[0]
+    assert store.workspaces() == set() and not store.exists("alpha")

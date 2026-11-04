@@ -65,6 +65,23 @@ stores differ by single milliseconds. Choose one to **share an index**, not for 
 pgvector creates no ANN index: the column has no fixed dimension (the model can change) and HNSW needs one. The exact scan
 grows linearly; beyond a few hundred thousand chunks per workspace, add an HNSW index on the cast column yourself.
 
+### Trust boundary: the stores hold your documents in the clear
+
+**The chunks are not encrypted in Qdrant or pgvector.** The text of every chunk, at every clearance level, and its
+clearance tag sit in Qdrant's payloads or in pgvector's `document` column, readable by anyone who can read that server
+or its disk: a database administrator, a backup, another application with access. Role-based access control is enforced
+**by this application** (the clearance filter and the guard), not by the store. Embedded Chroma on the same host has the
+same property; what changes is that its files are local. The shared semantic cache is different: it is sealed, as above.
+
+So treat a Qdrant or pgvector server as holding your most sensitive documents: keep it on loopback or a private network,
+set `QDRANT_API_KEY` or a pgvector password, put TLS in front of anything that crosses a network, encrypt the disk and its
+backups, and give nobody who must not read `secret` documents access to it.
+
+`make factory-reset` empties the stores this install is configured for (every workspace of the Qdrant prefix or pgvector
+schema, and the shared cache table) before it deletes the local folders. If a server cannot be reached it prints
+`NOT PURGED` for it and says the documents are still there; it never reports a wipe that did not happen. Anything else on a
+shared server (other installs, other prefixes) is untouched.
+
 ## Chat model: vLLM or any OpenAI-compatible server
 
 `LLM_PROVIDER=openai` talks to any server that implements `POST /v1/chat/completions` (vLLM, LM Studio, llama.cpp).
@@ -76,9 +93,13 @@ grows linearly; beyond a few hundred thousand chunks per workspace, add an HNSW 
 | `LOCAL_LLM_API_KEY` | Sent as `Authorization: Bearer ...`. A secret: never printed, never in `repr()` |
 | `LOCAL_LLM_TEMPLATE_KWARGS` | JSON merged in as `chat_template_kwargs`. The default `{"enable_thinking": false}` turns off Qwen3's thinking, which vLLM leaves **on**. Set it empty for a server that rejects unknown fields |
 
-Any `<think>` block left in the text is removed (so is one that never closed), and a separate `reasoning` field is
+What a server does with that field varies, and only some of it has been checked: vLLM honours it according to its
+documentation, which I have not run live; **Ollama's `/v1` endpoint accepts it and ignores it** (checked live with
+`qwen3:8b`: it still thinks, about 650 characters for a one-line question, and returns the thinking in a separate
+`reasoning` field). That is why the provider ignores `reasoning` fields rather than trusting the setting: the answer
+stays clean either way. For Ollama, use `LLM_PROVIDER=ollama`, which turns thinking off natively. Any `<think>` block left in the text is removed (so is one that never closed), and a separate `reasoning` field is
 ignored: the graders and the reader see only the answer. `make status` probes `GET /v1/models` and says whether the server
-is unreachable, refused the key, or does not serve the model. If the server fails during a question, the answer falls
+is unreachable, refused the key, or does not serve the model; it also reports the vector store and the shared cache (name and location, never a credential) and exits 1 if either does not answer. If the server fails during a question, the answer falls
 back to the labelled extractive one, as with Ollama. Tested against a stub that speaks the vLLM API over a Unix socket
 (`tests/test_openai_server.py`).
 

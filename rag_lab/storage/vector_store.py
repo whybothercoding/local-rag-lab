@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from abc import ABC, abstractmethod
+from urllib.parse import urlsplit
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -69,8 +70,18 @@ def guard_hits(hits: Sequence[Hit], workspace: str, allowed_clearances: Sequence
     return kept
 
 
+def safe_location(uri: str) -> str:
+    """host:port/path of a URL, without any user or password."""
+    parts = urlsplit(uri)
+    return f"{parts.hostname or uri}{':' + str(parts.port) if parts.port else ''}{parts.path}"
+
+
 class VectorStore(ABC):
     name = ""
+
+    def describe(self) -> str:
+        """Where this store is, for status output. Never contains a credential."""
+        return self.name
 
     # --- what an adapter implements -----------------------------------------------------------------
     @abstractmethod
@@ -138,6 +149,10 @@ def _similarity(distance: float, space: str) -> float:
 class ChromaStore(VectorStore):
     name = "chroma"
     BATCH = 256
+
+    def describe(self) -> str:
+        return f"embedded Chroma at {settings.chroma_path}"
+
     # Cosine distance keeps similarity meaningful whichever embedding model produced the vectors.
     METADATA = {"hnsw:space": "cosine"}
 
@@ -254,6 +269,18 @@ class ChromaStore(VectorStore):
             Hit(id=cid, document=doc, metadata=dict(meta or {}), similarity=_similarity(float(distance), space))
             for doc, meta, cid, distance in zip(docs, metas, ids, distances)
         ]
+
+
+def vector_store_status() -> tuple[bool, str]:
+    """(healthy, one line) for `make status`: which store, where, and whether it answers."""
+    try:
+        store = get_vector_store()
+    except VectorStoreError as exc:
+        return False, f"{settings.vector_store}: {exc}"
+    try:
+        return True, f"{store.describe()}: {len(store.workspaces())} workspace(s)"
+    except Exception as exc:
+        return False, f"{store.describe()} is unreachable ({type(exc).__name__}): dense retrieval is unavailable"
 
 
 # --- The factory ---------------------------------------------------------------------------------------------------

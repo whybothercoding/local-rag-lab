@@ -88,7 +88,8 @@ def test_every_option_is_off_by_default():
 def test_the_eval_redirect_cannot_be_hijacked_by_an_env_file():
     source = (ROOT / "rag_lab" / "ops" / "eval.py").read_text(encoding="utf-8")
     assert 'os.environ["CACHE_BACKEND"] = "sqlite"' in source and 'os.environ["CACHE_DB_URI"] = ""' in source
-    assert 'os.environ.setdefault("QDRANT_PREFIX", "eval_")' in source and 'os.environ.setdefault("PGVECTOR_SCHEMA", "eval")' in source
+    assert 'os.environ["QDRANT_PREFIX"] = "eval_"' in source and 'os.environ["PGVECTOR_SCHEMA"] = "eval"' in source, \
+        "forced, not defaulted: an exported real prefix or schema must not receive the eval corpus"
 
 
 # --- documentation does not drift from the code ------------------------------------------------------------------------------

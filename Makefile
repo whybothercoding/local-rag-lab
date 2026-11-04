@@ -400,13 +400,14 @@ reset-users:
 # 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
 factory-reset:
 	@if [ "$(CONFIRM)" != "yes" ] && [ "$(YES)" != "1" ] && [ "$(YES)" != "yes" ]; then \
-		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, and indexed vectors.\nType 'yes' to proceed: "; \
+		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, and indexed vectors, including whatever the configured Qdrant, pgvector or shared-cache server holds for this install.\nType 'yes' to proceed: "; \
 		read ans; \
 		if [ "$$ans" != "yes" ]; then \
 			echo "Factory reset cancelled."; \
 			exit 1; \
 		fi; \
 	fi
+	./venv/bin/python -m rag_lab.ops.purge_external || echo "Warning: a configured external store was NOT purged (see above); the documents or cached answers are still on that server."
 	./venv/bin/python -m rag_lab.security.keystore forget || echo "Warning: keychain entries could not be removed; delete the local-rag-lab entries in your keychain app by hand."
 	rm -f access_policy.json access_policy.json.*.bak access_policy.json.lock
 	rm -rf data

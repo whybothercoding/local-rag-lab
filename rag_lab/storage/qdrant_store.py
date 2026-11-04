@@ -39,9 +39,16 @@ class QdrantStore(VectorStore):
         if not url:
             raise VectorStoreError("VECTOR_STORE=qdrant needs QDRANT_URL (the compose profile listens on http://localhost:6333).")
         self._prefix = prefix
+        self._url = url
         self._client = QdrantClient(location=":memory:") if url == ":memory:" else QdrantClient(
             url=url, api_key=api_key or None, timeout=30
         )
+
+    def describe(self) -> str:
+        from rag_lab.storage.vector_store import safe_location
+
+        where = "in-process memory" if self._url == ":memory:" else safe_location(self._url)
+        return f"Qdrant at {where}" + (f" (prefix '{self._prefix}')" if self._prefix else "")
 
     # --- naming ------------------------------------------------------------------------------------------------
     def _alias(self, workspace: str) -> str:

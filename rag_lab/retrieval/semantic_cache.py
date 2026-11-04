@@ -674,6 +674,19 @@ def clear_cache(db_path: str | None = None) -> None:
         logger.debug("Error clearing cache: %s", exc)
 
 
+def cache_backend_status() -> tuple[bool, str]:
+    """(healthy, where) for `make status`. The shared backend is actually asked; cache_stats() would answer 0 entries."""
+    if not _shared():
+        return True, f"SQLite {settings.cache_db_path}"
+    where = f"shared PostgreSQL {_db_identity(None).removeprefix('postgres://')}"
+    try:
+        with _open_db() as conn:
+            conn.execute("SELECT 1")
+    except Exception as exc:
+        return False, f"{where} is unreachable ({type(exc).__name__}): nothing is cached or served from it"
+    return True, where
+
+
 def cache_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve cache entry counts, workspace distribution, and on-disk size."""
     path = Path(db_path or settings.cache_db_path)

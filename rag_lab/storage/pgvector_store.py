@@ -54,6 +54,7 @@ class PgvectorStore(VectorStore):
         if not _SCHEMA.fullmatch(schema):
             raise VectorStoreError(f"PGVECTOR_SCHEMA must be a plain lowercase identifier; got '{schema}'.")
         self._schema = schema
+        self._where = uri
         self._pool = ConnectionPool(conninfo=uri, min_size=1, max_size=max(2, settings.checkpoint_pool_size), open=True,
                                     timeout=15, kwargs={"autocommit": False})
         # The pool's worker threads must be stopped before the interpreter finalises (Python 3.14 raises otherwise).
@@ -67,6 +68,11 @@ class PgvectorStore(VectorStore):
                 f"Could not prepare pgvector in {uri.split('@')[-1]} ({type(exc).__name__}: {exc}). The server needs the "
                 "pgvector extension: use the `pgvector` compose profile (image pgvector/pgvector), not plain postgres."
             ) from exc
+
+    def describe(self) -> str:
+        from rag_lab.storage.vector_store import safe_location
+
+        return f"pgvector at {safe_location(self._where)} (schema {self._schema})"
 
     def close(self) -> None:
         self._pool.close()
