@@ -67,10 +67,11 @@ An offline evaluation suite (`rag_lab/ops/eval.py`, `rag_lab/ops/eval_metrics.py
 * **Workspace Isolation**: Workspaces (e.g., `accounting`, `legal`, `engineering`) are partitioned into isolated vector collections (`ws_<workspace_id>`) and independent SQLite FTS5 indices, preventing cross-tenant data leakage.
 * **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter or headers (unrecognized tags fail closed during ingestion). Vector search (`ChromaDB where` + post-query guard) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
-### 14. Model Weight Pinning, Optional Rust Acceleration & Graceful Degradation
+### 14. Model Weight Pinning, Native Rust Acceleration & Graceful Degradation
 * Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`rag_lab/security/model_integrity.py`).
-* **Optional Native Rust Accelerator (`crates/rag_accel`)**: Compiles via PyO3/Maturin (`make rust-build`) to accelerate indirect prompt-injection scanning (`RegexSet` single-pass automaton) and document chunking (`split_text`) with 100% parity and automatic zero-config fallback to pure Python.
+* **Native Rust Accelerator (`crates/rag_accel`)**: the prompt-injection scan (`RegexSet` single-pass automaton, 24x faster than the Python regexes on 1,000 chunks: 0.87 ms against 21.2 ms) with verdict and reason parity, from the same pattern file as the Python scanner. It is the default, with a fallback that is never quiet: `RAG_ACCEL=preferred` (default) uses it when installed and otherwise falls back to the pure-Python scanner with one warning on stderr, and `make status` shows `[!!] DEGRADED`; `RAG_ACCEL=required` refuses to start without it. `make setup` installs it for you, in order: a prebuilt wheel from `wheelhouse/`, a build from source when `cargo` exists, else the fallback. The `wheels` GitHub workflow builds one abi3 wheel per platform (macOS arm64 and x86_64, Linux x86_64 and aarch64) that serves Python 3.11 and later; download the artifact for your platform into `wheelhouse/` and run `make setup`. There is no native chunker: chunking was 0.05 s of a 91 s ingest.
 * If the primary LLM, cross-encoder, or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
+* **Measured performance** (Apple M-series, 150 documents / 4,055 chunks, idle machine, before to after). Ingest: a full sync 79.6 s to 69.9 s; a re-sync with nothing changed 7.97 s to 0.02 s; a re-sync after editing one file 78.8 s to 3.7 s. Re-syncs embed only chunks whose text is new and reuse the stored vector of every other chunk (same workspace, same model, same prefix; `FORCE=1` recomputes everything), and plain-text files are decoded in-process instead of in a sandboxed child (the sandbox stays for every other format). Embedding is over 80% of a full sync and runs at about 55 to 60 chunks/s however it is batched: one batch size, thread count or worker-process setting after another was no faster. Query: a question that misses a cache of 2,000 answers spent 217 ms in the cache before and 5 ms now (57.5 ms to 4.1 ms at 500), so such a query takes 243 ms instead of 476 ms; with an empty cache nothing changes. The semantic cache searches one matrix per (workspace, clearance, index version) partition, only the clearances the caller may read, and re-reads and re-verifies the winning row before it answers.
 
 ---
 
@@ -114,7 +115,7 @@ The generated topology is [`docs/architecture.mmd`](docs/architecture.mmd) (`mak
 
 * **Python**: `>= 3.11` (tested up to 3.14)
 * **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB); embeddings run in-process, no Ollama needed
-* **Rust Toolchain** (optional, for compiling the native `rag_accel` PyO3 extension)
+* **Rust Toolchain** (optional: only to build the native `rag_accel` extension when no prebuilt wheel fits your platform)
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
 ```bash
@@ -130,7 +131,8 @@ make models
 # 3. Verify cached model weights offline
 make verify-models
 
-# 4. (Optional) Compile native Rust accelerator for high-throughput context scanning & chunking
+# 4. (Optional) Build the native Rust accelerator from source. 'make setup' already installed a prebuilt wheel
+#    from wheelhouse/ or built it when cargo exists; 'make status' says which, or that it is degraded.
 make rust-build
 
 # 5. Inspect full system status (models, accelerator, LLM, RBAC, workspaces, audit health)
@@ -512,7 +514,7 @@ local-rag-lab/
 │   ├── storage/             # Checkpointer, workspaces, backups, retention
 │   ├── ops/                 # approve (HITL CLI), eval + metrics, graph export, model download
 │   └── ui/                  # Streamlit page
-├── crates/rag_accel/        # Optional native Rust PyO3 accelerator (context scanning & chunking)
+├── crates/rag_accel/        # Native Rust PyO3 accelerator (prompt-injection scan), built as one abi3 wheel per platform
 ├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows
 ├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints
 ├── eval/                    # Golden test dataset and benchmark corpus
