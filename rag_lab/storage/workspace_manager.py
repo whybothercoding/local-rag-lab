@@ -425,6 +425,14 @@ def print_status() -> int:
         print(f"[!!] RBAC policy error   : {exc}")
         ok = False
 
+    # 3b. Keys: the OS keychain, or key files (advisory where no keychain exists, a fault if a pointer is broken)
+    from rag_lab.security.keystore import key_storage_report
+    for marker, text in key_storage_report(
+        {"access": Path(settings.access_key_path), "data": Path(settings.data_key_path)}
+    ):
+        print(f"[{marker}] Key storage          : {text}")
+        ok = ok and marker != "!!"
+
     # 4. Workspaces
     workspaces = list_workspaces()
     if not workspaces:

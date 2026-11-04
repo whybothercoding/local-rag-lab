@@ -29,6 +29,15 @@ os.environ["ACCESS_POLICY_PATH"] = os.path.join(_scratch_dir, "access_policy.jso
 os.environ["ACCESS_KEY_PATH"] = os.path.join(_scratch_dir, "access.key")
 os.environ["DATA_KEY_PATH"] = os.path.join(_scratch_dir, "data.key")
 os.environ["ANCHOR_PATH"] = os.path.join(_scratch_dir, "audit_anchors.jsonl")
+# Keys stay in files under the scratch directory: no test may write to the real OS keychain. The keyring
+# library itself is also pointed at its inert backend, so a stray call raises instead of reaching the
+# keychain. Tests that exercise the keychain path install an in-memory backend (see tests/test_keystore.py).
+os.environ["KEY_STORE"] = "file"
+os.environ["KEY_ENVELOPE"] = ""
+os.environ["KEY_SERVICE"] = "local-rag-lab-pytest"
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+# A .env file may set these for real use; tests get no second anchor location unless they ask for one.
+os.environ["AUDIT_ANCHOR_COPY_DIR"] = ""
 os.environ["BACKUP_DIR"] = os.path.join(_scratch_dir, "backups")
 os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')}"
 # Indexes and uploads too: no test may write to the repository's chroma_data/, bm25_indices/, or uploads/.
@@ -47,6 +56,8 @@ for _field in ("audit_db_path", "cache_db_path", "access_policy_path", "access_k
                "anchor_path", "backup_dir", "chroma_path", "bm25_dir", "uploads_dir"):
     if not str(getattr(settings, _field)).startswith(_scratch_dir):
         raise RuntimeError(f"settings.{_field} was built before the test redirect: {getattr(settings, _field)}")
+if settings.key_store != "file" or settings.key_envelope or settings.audit_anchor_copy_dir:
+    raise RuntimeError("key storage or the anchor copy directory was built before the test redirect")
 if not settings.db_uri.startswith(f"sqlite:///{_scratch_dir}"):
     raise RuntimeError(f"settings.db_uri was built before the test redirect: {settings.db_uri}")
 

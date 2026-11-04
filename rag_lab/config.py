@@ -116,6 +116,16 @@ class Settings:
     # Encrypts audit payloads and checkpoint state. Keep its backup custody separate from the backups themselves.
     data_key_path: str
     anchor_path: str
+    # A second place for audit anchors (another disk, a mount, a synced folder). Empty means none.
+    audit_anchor_copy_dir: str
+    # Where the two keys above live: "auto" (OS keychain when one is usable, else the key files), "file",
+    # or "keyring" (required; an unusable keychain is an error). Existing key files stay files until
+    # `make migrate-keys`. See rag_lab/security/keystore.py.
+    key_store: str
+    # Service name for keychain entries; each key gets its own random account name, stored in its key file.
+    key_service: str
+    # Name of a registered envelope-encryption provider (Vault/KMS) that wraps newly created keys. Empty: none.
+    key_envelope: str
     backup_dir: str
     # Audit records and idle checkpoint threads older than this are deleted. Six months.
     retention_days: int
@@ -190,6 +200,10 @@ class Settings:
             access_key_path=_env("ACCESS_KEY_PATH", str(ROOT / "data" / "access.key")),
             data_key_path=_env("DATA_KEY_PATH", str(ROOT / "data" / "data.key")),
             anchor_path=_env("ANCHOR_PATH", str(ROOT / "data" / "audit_anchors.jsonl")),
+            audit_anchor_copy_dir=_env("AUDIT_ANCHOR_COPY_DIR", ""),
+            key_store=_env("KEY_STORE", "auto").strip().lower(),
+            key_service=_env("KEY_SERVICE", "local-rag-lab"),
+            key_envelope=_env("KEY_ENVELOPE", "").strip(),
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),

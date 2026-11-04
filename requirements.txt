@@ -19,6 +19,10 @@ openpyxl>=3.1.0
 # Encryption at rest (AES-256-GCM for audit payloads and checkpoint state)
 cryptography>=43.0.0
 
+# Keys in the OS keychain (macOS Keychain, Windows Credential Locker, Secret Service/KWallet) and TOTP second factor
+keyring>=25.0.0
+pyotp>=2.9.0
+
 # Database & Checkpointing
 langgraph-checkpoint-sqlite>=3.1.0
 langgraph-checkpoint-postgres>=2.0.0

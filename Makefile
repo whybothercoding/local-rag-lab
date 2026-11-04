@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset migrate-keys eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -13,7 +13,8 @@ help:
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
 	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker)"
-	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
+	@echo "  make status                                    Check models, accelerator, LLM, keys, workspaces, and audit health"
+	@echo "  make migrate-keys [REVERSE=1]                  Move the keys into the OS keychain (REVERSE=1: back into their files)"
 	@echo ""
 	@echo "RBAC & User Management (Admin-Only after first admin is created):"
 	@echo "  Roles: owner, admin (+administration) | reviewer (query,review) | trusted (query,auto_approve) | member (query) | none"
@@ -201,6 +202,11 @@ backup-verify:
 	@test -n "$(DIR)" || (echo "Set DIR=<backup directory>" && exit 1)
 	./venv/bin/python -m rag_lab.storage.backup verify $(DIR)
 
+# 11b. Keys: move the access and data keys into the OS keychain, or back into their owner-only files.
+# Keys in the keychain are not covered by `make backup`: keep a copy in custody (REVERSE=1 restores the files).
+migrate-keys:
+	./venv/bin/python -m rag_lab.security.keystore migrate $(if $(REVERSE),--reverse,)
+
 # 12. Account & Role-Based Access Control (RBAC) Management
 users:
 	./venv/bin/python -m rag_lab.security.access list
@@ -339,6 +345,7 @@ factory-reset:
 			exit 1; \
 		fi; \
 	fi
+	./venv/bin/python -m rag_lab.security.keystore forget || echo "Warning: keychain entries could not be removed; delete the local-rag-lab entries in your keychain app by hand."
 	rm -f access_policy.json access_policy.json.*.bak access_policy.json.lock
 	rm -rf data
 	rm -rf chroma_data
