@@ -30,6 +30,7 @@ postgres_data/
 
 # Security keys & access policy (runtime generated & sensitive)
 access_policy.json
+access_policy.json.*.bak
 *.key
 
 # Backups & exports (governance data)
