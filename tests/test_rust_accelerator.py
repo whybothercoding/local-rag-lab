@@ -118,8 +118,14 @@ def test_performance_benchmark():
 
 
 def test_native_failure_falls_back_to_the_python_scan(monkeypatch):
-    """If the extension raises, scan_chunk answers from the pure-Python patterns instead of failing open."""
+    """If the extension raises, scan_chunk answers from the pure-Python patterns instead of failing open.
+
+    That is RAG_ACCEL=preferred; under `required` the same failure is an error (tests/test_accel.py).
+    """
     import rag_accel
+    from rag_lab.config import settings
+
+    monkeypatch.setattr(settings, "rag_accel", "preferred")
 
     def broken(text):
         raise RuntimeError("extension crashed")

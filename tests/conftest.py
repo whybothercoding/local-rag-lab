@@ -65,6 +65,16 @@ TEST_PASSWORD = "correct-horse-battery"
 
 
 @pytest.fixture(autouse=True)
+def _fresh_accelerator_state():
+    """A test that makes the native scanner fail must not leave the process looking degraded for the next one."""
+    from rag_lab import accel
+
+    accel._state.update(calls=0, noted=False)
+    yield
+    accel._state.update(calls=0, noted=False)
+
+
+@pytest.fixture(autouse=True)
 def _clean_cache_each_test():
     from rag_lab.retrieval.semantic_cache import clear_cache
 
