@@ -24,7 +24,7 @@ import yaml
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import rag_lab.storage.workspace_manager as workspace_manager
-from rag_lab.security.access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, sign_in
+from rag_lab.security.access import CLEARANCE_LEVELS, DEFAULT_CLEARANCE, is_admin, prompt_second_factor, sign_in
 from rag_lab.security.audit import record as audit_record
 from rag_lab.config import settings
 from rag_lab.security.context_sanitizer import scan_chunk
@@ -521,7 +521,7 @@ def ingest_workspace(
 def authenticate_admin(account: str) -> str:
     """Sign an administrator in with their password. Indexing is an administrative action."""
     password = getpass.getpass(f"Password for admin account '{account}': ")
-    result = sign_in(account, password)
+    result = sign_in(account, password, code_prompt=prompt_second_factor)
     if not result.ok:
         raise SystemExit(f"{result.describe()} Indexing refused.")
     if not is_admin(result.username):

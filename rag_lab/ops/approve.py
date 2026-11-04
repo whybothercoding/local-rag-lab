@@ -11,6 +11,7 @@ from rag_lab.security.access import (
     clearance_covers,
     get_user_clearance,
     issue_token,
+    prompt_second_factor,
     sign_in,
     verify_token,
 )
@@ -141,7 +142,7 @@ def confirm_reviewer(state, preset: str | None) -> str:
             sys.exit("Account name is required. No decision recorded.")
         for attempt in range(1, MAX_SIGN_IN_ATTEMPTS + 1):
             password = getpass.getpass(f"Password for '{name}': ")
-            result = sign_in(name, password)
+            result = sign_in(name, password, code_prompt=prompt_second_factor)
             if result.ok:
                 break
             if result.reason == "locked":

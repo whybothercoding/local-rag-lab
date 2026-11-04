@@ -22,6 +22,7 @@ ADMIN_PANELS = {
     "User Grants & Auto-Approval (Admin)",
     "Add User Account (Admin)",
     "Groups (Admin)",
+    "Two-factor sign-in (Admin)",
 }
 
 

@@ -47,6 +47,9 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+import pyotp
+from cryptography.exceptions import InvalidTag
+
 try:  # advisory file locking for the policy file (POSIX)
     import fcntl
 except ImportError:  # pragma: no cover - Windows
@@ -55,7 +58,7 @@ except ImportError:  # pragma: no cover - Windows
 from rag_lab.security.audit import count_events_since
 from rag_lab.security.audit import record as audit_record
 from rag_lab.config import settings
-from rag_lab.security.vault import load_or_create_key
+from rag_lab.security.vault import load_or_create_key, open_text, seal_text
 from rag_lab.storage.workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review", "auto_approve")
@@ -83,6 +86,9 @@ LOCKOUT_MAX_FAILURES = 5
 LOCKOUT_WINDOW_SECONDS = 15 * 60
 TOKEN_TTL_SECONDS = 8 * 60 * 60
 IDLE_TIMEOUT_SECONDS = 30 * 60
+TOTP_ISSUER = "Local RAG Lab"
+TOTP_WINDOW = 1  # accept the code of the previous and the next 30-second step as well, for clock drift
+RECOVERY_CODE_COUNT = 10
 
 _USERNAME = re.compile(r"[a-z0-9][a-z0-9_.-]{1,63}")
 _WORKSPACE_ID = re.compile(r"[a-z0-9_]{1,48}")
@@ -114,6 +120,10 @@ class SignInResult:
                 f"Too many failed sign-ins for '{self.username}'. "
                 f"Try again in about {self.retry_after_minutes} minutes."
             )
+        if self.reason == "totp_required":
+            return "Two-factor sign-in is on for this account: enter the code from your authenticator app, or a recovery code."
+        if self.reason == "invalid_code":
+            return "Sign-in failed: the authentication code is wrong or was already used."
         return "Sign-in failed: the account name or password is wrong."
 
 
@@ -479,9 +489,14 @@ def sign_in(
     password: str,
     path: str | None = None,
     audit_path: str | None = None,
+    code: str | None = None,
+    code_prompt: Callable[[], str] | None = None,
 ) -> SignInResult:
-    """Check a password, apply the failed-attempt lockout, and issue a session token on success.
+    """Check a password (and the second factor, when the account has one), apply the lockout, issue a token.
 
+    An enrolled account needs an authentication code or a recovery code. It is asked for only after the
+    password verifies: with no `code`, `code_prompt()` supplies one (a CLI), else the result says
+    "totp_required" and nothing is counted. A wrong code is a failed sign-in and counts toward the lockout.
     Failed attempts are written to the audit log; the lockout count is read back from it.
     """
     name = (username or "").strip().lower()[:64]
@@ -500,6 +515,20 @@ def sign_in(
                      subject=name, path=audit_path)
         return SignInResult(ok=False, username=name, reason="invalid")
 
+    user = load_policy(path)["users"][name]
+    if user.get("totp"):  # enforced for as long as the enrolment exists, whatever the account's role is now
+        supplied = code if code else (code_prompt() if code_prompt else "")
+        if not supplied.strip():
+            return SignInResult(ok=False, username=name, reason="totp_required")
+        method, remaining = _consume_second_factor(name, supplied, path)
+        if not method:
+            audit_record("sign_in_failed", workspace_id="", session_id="",
+                         data={"username": name, "stage": "second_factor"}, subject=name, path=audit_path)
+            return SignInResult(ok=False, username=name, reason="invalid_code")
+        if method == "recovery":
+            audit_record("recovery_code_used", workspace_id="", session_id="",
+                         data={"username": name, "remaining": remaining}, subject=name, path=audit_path)
+
     if needs_rehash(load_policy(path)["users"][name]["password_hash"]):
         def upgrade(policy: dict[str, Any]) -> None:
             policy["users"][name]["password_hash"] = hash_password(password)
@@ -509,6 +538,220 @@ def sign_in(
     audit_record("sign_in_succeeded", workspace_id="", session_id="", data={"username": name},
                  subject=name, path=audit_path)
     return SignInResult(ok=True, username=name, token=issue_token(name, path=path))
+
+
+# --- Two-factor sign-in (TOTP) ----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TotpEnrollment:
+    secret: str
+    uri: str
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _match_totp_step(secret: str, code: str) -> int | None:
+    """The 30-second step a code belongs to, within the drift window, or None.
+
+    pyotp's TOTP.verify() says only yes or no; replay protection needs the step, to refuse any step that is
+    not newer than the last one accepted. Every step in the window is compared, so timing does not reveal
+    which one matched.
+    """
+    totp = pyotp.TOTP(secret)
+    current = int(_now() // totp.interval)
+    supplied = code.encode("utf-8")
+    matched: int | None = None
+    for step in range(current - TOTP_WINDOW, current + TOTP_WINDOW + 1):
+        if hmac.compare_digest(supplied, totp.generate_otp(step).encode("ascii")):
+            matched = step
+    return matched
+
+
+def _totp_aad(name: str, user: dict[str, Any]) -> bytes:
+    """Binds a sealed secret to its account, so it cannot be copied into another account's record."""
+    return f"totp:{user.get('uid', '')}:{name}".encode("utf-8")
+
+
+def _recovery_tag(code: str) -> str:
+    cleaned = re.sub(r"[^0-9a-z]", "", code.lower())
+    return hmac.new(_signing_key(), b"recovery:" + cleaned.encode("ascii", "ignore"), hashlib.sha256).hexdigest()
+
+
+def _new_recovery_codes() -> list[str]:
+    codes = []
+    for _ in range(RECOVERY_CODE_COUNT):
+        raw = secrets.token_hex(6)
+        codes.append("-".join(raw[i:i + 4] for i in range(0, 12, 4)))
+    return codes
+
+
+def totp_enabled(username: str, path: str | None = None) -> bool:
+    user = load_policy(path)["users"].get(username)
+    return bool(user and user.get("totp"))
+
+
+def recovery_codes_left(username: str, path: str | None = None) -> int:
+    user = load_policy(path)["users"].get(username) or {}
+    return len((user.get("totp") or {}).get("recovery", []))
+
+
+def _consume_second_factor(name: str, code: str, path: str | None) -> tuple[str, int]:
+    """Check a code and spend it, all under the policy lock so two sign-ins cannot both use one code.
+
+    A TOTP code is accepted once: its time step must be newer than the last accepted one. A recovery code
+    is removed when used. Returns ("totp" | "recovery" | "", recovery codes left).
+    """
+    cleaned = code.strip()
+
+    def mutate(policy: dict[str, Any]) -> tuple[str, int]:
+        user = policy["users"][name]
+        enrolment = user["totp"]
+        try:
+            secret = open_text(enrolment["secret"], _totp_aad(name, user), allow_plaintext=False)
+        except InvalidTag:
+            raise PolicyIntegrityError(
+                f"The two-factor secret of '{name}' cannot be opened (the data key changed, or the policy was "
+                "edited). Restore the data key from custody; an owner can reset the account's two-factor sign-in."
+            ) from None
+        step = _match_totp_step(secret, cleaned.replace(" ", ""))
+        if step is not None and step > int(enrolment.get("last_step", 0)):
+            enrolment["last_step"] = int(step)
+            return "totp", len(enrolment.get("recovery", []))
+        tag = _recovery_tag(cleaned)
+        for stored in list(enrolment.get("recovery", [])):
+            if hmac.compare_digest(stored, tag):
+                enrolment["recovery"].remove(stored)
+                return "recovery", len(enrolment["recovery"])
+        return "", len(enrolment.get("recovery", []))
+
+    return _update(path, mutate)
+
+
+def begin_totp_enrollment(username: str, path: str | None = None, actor: str | None = None) -> TotpEnrollment:
+    """Start two-factor enrolment for the signed-in owner or administrator themselves.
+
+    The secret is kept sealed as pending until confirm_totp_enrollment() sees a valid code from it, so a
+    secret that was never loaded into an authenticator cannot lock the account out.
+    """
+    name = _normalize_username(username)
+    if actor is None or _normalize_username(actor) != name:
+        raise PermissionError("Two-factor sign-in is enrolled by the account itself, never on its behalf.")
+    secret = pyotp.random_base32()
+
+    def mutate(policy: dict[str, Any]) -> None:
+        user = _existing(policy, name)
+        if role_of(user) not in ADMIN_ROLES:
+            raise PermissionError("Two-factor sign-in is for owners and administrators.")
+        if user.get("totp"):
+            raise ValueError("Two-factor sign-in is already on. Turn it off first to enrol a new device.")
+        user["totp_pending"] = seal_text(secret, _totp_aad(name, user))
+
+    _update(path, mutate)
+    _audit("totp_enrolment_started", name, {"username": name})
+    return TotpEnrollment(secret, pyotp.TOTP(secret).provisioning_uri(name=name, issuer_name=TOTP_ISSUER))
+
+
+def confirm_totp_enrollment(
+    username: str, code: str, path: str | None = None, actor: str | None = None
+) -> list[str]:
+    """Turn two-factor sign-in on once a code from the pending secret checks out. Returns the recovery codes (shown once)."""
+    name = _normalize_username(username)
+    if actor is None or _normalize_username(actor) != name:
+        raise PermissionError("Two-factor sign-in is enrolled by the account itself, never on its behalf.")
+    codes = _new_recovery_codes()
+
+    def mutate(policy: dict[str, Any]) -> None:
+        user = _existing(policy, name)
+        pending = user.get("totp_pending")
+        if not pending:
+            raise ValueError("No enrolment is in progress. Start one first.")
+        try:
+            secret = open_text(pending, _totp_aad(name, user), allow_plaintext=False)
+        except InvalidTag:
+            raise ValueError("The pending enrolment cannot be opened. Start it again.") from None
+        step = _match_totp_step(secret, code.strip().replace(" ", ""))
+        if step is None:
+            raise ValueError("That code is not valid. Check the device clock and try again.")
+        del user["totp_pending"]
+        user["totp"] = {
+            "secret": pending,
+            "last_step": int(step),
+            "recovery": [_recovery_tag(c) for c in codes],
+            "enrolled_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+
+    _update(path, mutate)
+    _audit("totp_enrolled", name, {"username": name, "recovery_codes": len(codes)})
+    return codes
+
+
+def regenerate_recovery_codes(
+    username: str, code: str, path: str | None = None, actor: str | None = None, verified: bool = False
+) -> list[str]:
+    """Replace the account's recovery codes. Needs a current authentication code (a recovery code works too).
+
+    `verified` is for a command that has just signed the account in with its second factor (the CLI): that
+    code is already spent for this time step, and asking again would only force a 30-second wait.
+    """
+    name = _normalize_username(username)
+    if actor is None or _normalize_username(actor) != name:
+        raise PermissionError("Recovery codes are regenerated by the account itself.")
+    if not totp_enabled(name, path):
+        raise ValueError("Two-factor sign-in is not on for this account.")
+    if not verified and not _consume_second_factor(name, code, path)[0]:
+        raise ValueError("That code is not valid.")
+    codes = _new_recovery_codes()
+
+    def mutate(policy: dict[str, Any]) -> None:
+        policy["users"][name]["totp"]["recovery"] = [_recovery_tag(c) for c in codes]
+
+    _update(path, mutate)
+    _audit("recovery_codes_regenerated", name, {"username": name})
+    return codes
+
+
+def disable_totp(
+    username: str,
+    code: str | None = None,
+    path: str | None = None,
+    actor: str | None = None,
+    verified: bool = False,
+) -> None:
+    """Turn two-factor sign-in off (`verified`: see regenerate_recovery_codes).
+
+    The account turns it off for itself with a current code (or a recovery code). Anyone else is reset by an
+    owner only, which also signs the account out everywhere; it is how a lost device is recovered from.
+    """
+    name = _normalize_username(username)
+    if actor is None:
+        raise PermissionError("Turning off two-factor sign-in needs a signed-in account.")
+    who = _normalize_username(actor)
+    if who == name:
+        if not totp_enabled(name, path):
+            raise ValueError("Two-factor sign-in is not on for this account.")
+        if not verified and (not code or not _consume_second_factor(name, code, path)[0]):
+            raise ValueError("Turning off two-factor sign-in needs a valid authentication or recovery code.")
+    elif not is_owner(who, path):
+        raise PermissionError("Only an owner can reset another account's two-factor sign-in.")
+
+    def mutate(policy: dict[str, Any]) -> None:
+        user = _existing(policy, name)
+        if not user.get("totp") and not user.get("totp_pending"):
+            raise ValueError("Two-factor sign-in is not on for this account.")
+        user.pop("totp", None)
+        user.pop("totp_pending", None)
+        if who != name:
+            user["token_version"] = int(user.get("token_version", 0)) + 1
+
+    _update(path, mutate)
+    _audit("totp_disabled" if who == name else "totp_reset", who, {"username": name})
+
+
+def prompt_second_factor() -> str:
+    """Ask for an authentication or recovery code on a terminal."""
+    return getpass.getpass("Authentication code (or a recovery code): ")
 
 
 def _normalize_workspace(workspace: str) -> str:
@@ -1262,6 +1505,7 @@ def list_users(path: str | None = None) -> list[dict[str, Any]]:
             "admin": role_of(info) in ADMIN_ROLES,
             "clearance": str(info.get("clearance", DEFAULT_CLEARANCE)),
             "groups": list(info.get("groups") or []),
+            "totp": bool(info.get("totp")),
             "grants": info.get("grants", {}),
             "default_permissions": info.get("default_permissions"),
         }
@@ -1277,7 +1521,7 @@ def authenticate_admin(
 ) -> str:
     """Sign an administrator in (prompting for the password when none is given). Returns the account name."""
     secret = password if password is not None else getpass.getpass(f"Password for admin account '{account}': ")
-    result = sign_in(account, secret, path, audit_path)
+    result = sign_in(account, secret, path, audit_path, code_prompt=prompt_second_factor)
     if not result.ok:
         raise PermissionError(f"{result.describe()} Administrator sign-in refused.")
     if not is_admin(result.username, path):
@@ -1381,6 +1625,14 @@ def build_parser() -> argparse.ArgumentParser:
     role_p.add_argument("username")
     role_p.add_argument("role", choices=[*ROLES, "default"])
 
+    sub.add_parser("totp-enroll", parents=[signer_parent],
+                   help="Turn on two-factor sign-in for the --as account itself (owners and administrators)")
+    sub.add_parser("totp-recovery", parents=[signer_parent],
+                   help="Replace your recovery codes (needs a current authentication code)")
+    totp_off = sub.add_parser("totp-disable", parents=[signer_parent],
+                              help="Turn off two-factor sign-in: your own (needs a code), or another account's (owner only)")
+    totp_off.add_argument("username", nargs="?", help="Account to reset (default: the --as account)")
+
     sub.add_parser("groups", help="List groups, their members, and their workspace roles")
     cg = sub.add_parser("create-group", parents=[signer_parent], help="Create a group")
     cg.add_argument("group")
@@ -1462,6 +1714,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"They hold {', '.join(perms) or 'no permissions'} on every workspace without a grant of its own.")
             for gap in review_mode_report(_workspace_ids()).gaps:
                 print(f"Warning: {gap}")
+        elif args.command == "totp-enroll":
+            _totp_enroll(actor)
+        elif args.command == "totp-recovery":
+            _print_recovery_codes(regenerate_recovery_codes(actor or "", "", actor=actor, verified=True))
+        elif args.command == "totp-disable":
+            target = args.username or actor or ""
+            own = target.strip().lower() == (actor or "")
+            disable_totp(target, None, actor=actor, verified=own)  # --as just signed in with the code
+            print(f"Two-factor sign-in is off for '{target.lower()}'." + ("" if own else " Their sessions were revoked."))
         elif args.command == "set-role":
             set_role(args.username, args.role, actor=actor)
             print(f"'{args.username.lower()}' now has role '{args.role}'.")
@@ -1539,6 +1800,8 @@ def main(argv: list[str] | None = None) -> int:
                 flag = f" {user['role']}" if user["role"] else ""
                 if user["groups"]:
                     flag += f" groups={','.join(user['groups'])}"
+                if user["totp"]:
+                    flag += " 2fa"
                 grants = ", ".join(f"{ws}({'/'.join(p) or 'denied'})" for ws, p in user["grants"].items())
                 own = user["default_permissions"]
                 extras = []
@@ -1556,6 +1819,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _print_recovery_codes(codes: list[str]) -> None:
+    print("Recovery codes (each works once; keep them somewhere safe, they are not shown again):")
+    for code in codes:
+        print(f"  {code}")
+
+
+def _totp_enroll(actor: str | None) -> None:
+    if not actor:
+        raise PermissionError("Sign in as the account to protect: --as <account> (make targets: ADMIN=<account>).")
+    enrolment = begin_totp_enrollment(actor, actor=actor)
+    print(f"Add this account to your authenticator app, then enter a code from it.\n  Secret: {enrolment.secret}\n  URI:    {enrolment.uri}")
+    codes = confirm_totp_enrollment(actor, input("Code from the app: "), actor=actor)
+    print(f"Two-factor sign-in is now on for '{actor}'.")
+    _print_recovery_codes(codes)
 
 
 def _grant(args: argparse.Namespace, actor: str | None) -> None:
