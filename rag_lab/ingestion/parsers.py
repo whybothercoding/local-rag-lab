@@ -24,6 +24,9 @@ PARSE_TIMEOUT_SEC = int(os.getenv("PARSE_TIMEOUT_SEC", "60"))
 PARSER_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
 MAX_PDF_PAGES = 1000
 ZIP_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx", ".xlsm", ".odt", ".epub"})
+# Formats whose whole "parser" is a decode: there is no structure to exploit, so no sandbox is needed. Each used
+# to cost a Python start-up (about 43 ms) in a child process, which dominated re-syncs of unchanged workspaces.
+PLAIN_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".rst", ".log", ".text"})
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100
 
@@ -309,15 +312,41 @@ def _limit_child_resources() -> None:
             pass
 
 
+def _extract_plain_bounded(file_path: Path, limit: int) -> str:
+    """Read a plain-text file in this process: the same text the child would return, bounded by `limit`."""
+    try:
+        with open(file_path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read(limit + 1)
+    except OSError as exc:
+        raise ParseError(str(exc) or type(exc).__name__) from exc
+    if len(text) > limit:
+        raise ParseError(f"larger than {limit} bytes")
+    return text.strip()
+
+
 def extract_text_from_file(file_path: Path) -> str:
     """Extract plain text from a supported file. Unknown types return an empty string.
 
-    Parsing runs in a child process with a time limit and resource caps, so a hostile
-    file cannot hang the server or exhaust its memory. Failures raise ParseError.
+    Everything but plain text is parsed in a child process with a time limit and resource caps, so a hostile
+    file cannot hang the server or exhaust its memory. Plain-text files (PLAIN_SUFFIXES) within the size limit
+    are decoded in this process, with identical output. Failures raise ParseError.
     """
     file_path = Path(file_path)
     if file_path.suffix.lower() not in PARSERS:
         return ""
+    from rag_lab.config import settings
+
+    if file_path.suffix.lower() in PLAIN_SUFFIXES:
+        try:
+            small = file_path.stat().st_size <= settings.max_source_bytes
+        except OSError as exc:
+            raise ParseError(str(exc) or type(exc).__name__) from exc
+        if small:
+            return _extract_plain_bounded(file_path, settings.max_source_bytes)
+    return _extract_in_child(file_path)
+
+
+def _extract_in_child(file_path: Path) -> str:
     # The worker runs as a module, so the child imports the package from the directory holding it.
     package_parent = str(Path(__file__).resolve().parents[2])
     try:
