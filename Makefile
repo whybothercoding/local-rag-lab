@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -16,13 +16,22 @@ help:
 	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
 	@echo ""
 	@echo "RBAC & User Management (Admin-Only after first admin is created):"
-	@echo "  make users                                     List accounts, clearance levels, defaults, and grants"
-	@echo "  make add-user ACCOUNT=<u> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [CLEARANCE=public|internal|confidential|secret]"
+	@echo "  Roles: owner, admin (+administration) | reviewer (query,review) | trusted (query,auto_approve) | member (query) | none"
+	@echo "  Resolution: account grant > group grants (any denial wins) > account role > default role"
+	@echo "  make users                                     List accounts, roles, groups, clearance levels, and grants"
+	@echo "  make add-user ACCOUNT=<u> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [ROLE=<role>] [CLEARANCE=public|internal|confidential|secret]"
+	@echo "  make set-role ACCOUNT=<u> ROLE=<role|default> ADMIN=<admin>  Only an owner assigns or removes 'owner'"
 	@echo "  make set-clearance ACCOUNT=<u> CLEARANCE=<lvl> ADMIN=<admin>"
-	@echo "  make set-admin ACCOUNT=<u> ADMIN=<admin> [REVOKE=1]"
-	@echo "  make set-default PERMS=query,auto_approve ADMIN=<admin>"
-	@echo "  make team-mode ADMIN=<admin>                   Require human review by default (needs a reviewer)"
-	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>"
+	@echo "  make set-admin ACCOUNT=<u> ADMIN=<admin> [REVOKE=1]  Shortcut for ROLE=admin / ROLE=default"
+	@echo "  make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>  (or PERMS=<list>)"
+	@echo "  make team-mode ADMIN=<admin>                   Default role trusted -> member (needs a reviewer)"
+	@echo "  make groups                                    List groups, members, and workspace roles"
+	@echo "  make create-group GROUP=<g> ADMIN=<admin>"
+	@echo "  make delete-group GROUP=<g> ADMIN=<admin>      Members keep their own access"
+	@echo "  make add-to-group ACCOUNT=<u> GROUP=<g> ADMIN=<admin>"
+	@echo "  make remove-from-group ACCOUNT=<u> GROUP=<g> ADMIN=<admin>"
+	@echo "  make grant-group GROUP=<g> WS=<ws|w1,w2|all> ROLE=<reviewer|trusted|member|none|default> ADMIN=<admin>"
+	@echo "  make grant ACCOUNT=<u> WS=<ws|w1,w2|all> [PERMS=query,review,auto_approve | ROLE=<role>] ADMIN=<admin>"
 	@echo "  make revoke ACCOUNT=<u> WS=<ws|w1,w2|all> ADMIN=<admin>"
 	@echo "  make set-password ACCOUNT=<u> ADMIN=<admin>    Reset a user's password and revoke active tokens"
 	@echo "  make revoke-sessions ACCOUNT=<u> ADMIN=<admin> Sign a user out everywhere"
@@ -80,7 +89,7 @@ setup:
 	@echo "  1. 'make models' (one-time download; requires network)"
 	@echo "  2. (Optional) 'make rust-build' to compile high-throughput Rust accelerator"
 	@echo "  3. 'make add-user ACCOUNT=<name> ADMIN=1' to create your admin account"
-	@echo "  4. 'make grant ACCOUNT=<name> WS=all PERMS=query,review' to assign workspace access"
+	@echo "  4. (optional) 'make add-user ACCOUNT=<colleague> ADMIN=<name>' adds accounts; you choose a role for each"
 	@echo "  5. 'make sync ADMIN=<name>' to index knowledge_base/ workspaces"
 	@echo "  6. 'make ui' to launch the application"
 
@@ -199,14 +208,14 @@ users:
 add-user:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make add-user ACCOUNT=<username> [ADMIN=1|<admin>] [MAKE_ADMIN=1] [CLEARANCE=public|internal|confidential|secret]" && exit 1)
 	@if [ "$(ADMIN)" = "1" ] || [ "$(ADMIN)" = "true" ] || [ "$(ADMIN)" = "yes" ]; then \
-		./venv/bin/python -m rag_lab.security.access $(if $(AS),--as $(AS),) add-user $(or $(ACCOUNT),$(USERNAME)) --admin $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+		./venv/bin/python -m rag_lab.security.access $(if $(AS),--as $(AS),) add-user $(or $(ACCOUNT),$(USERNAME)) --admin $(if $(ROLE),--role $(ROLE),) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
 	else \
-		./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(MAKE_ADMIN),$(IS_ADMIN)),--admin,) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
+		./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) add-user $(or $(ACCOUNT),$(USERNAME)) $(if $(or $(MAKE_ADMIN),$(IS_ADMIN)),--admin,) $(if $(ROLE),--role $(ROLE),) $(if $(CLEARANCE),--clearance $(CLEARANCE),); \
 	fi
 
 grant:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make grant ACCOUNT=<username> WS=<workspace|ws1,ws2|all> [PERMS=query,review,auto_approve] ADMIN=<admin>" && exit 1)
-	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) grant $(or $(ACCOUNT),$(USERNAME)) $(WS) $(if $(PERMS),--perms $(PERMS),) $(if $(ROLE),--role $(ROLE),)
 
 revoke:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(WS)" || (echo "Usage: make revoke ACCOUNT=<username> WS=<workspace|ws1,ws2|all> ADMIN=<admin>" && exit 1)
@@ -220,9 +229,36 @@ set-admin:
 	@test -n "$(or $(ACCOUNT),$(USERNAME))" || (echo "Usage: make set-admin ACCOUNT=<username> ADMIN=<admin> [REVOKE=1]" && exit 1)
 	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-admin $(or $(ACCOUNT),$(USERNAME)) $(if $(REVOKE),--revoke,)
 
+set-role:
+	@test -n "$(or $(ACCOUNT),$(USERNAME))" && test -n "$(ROLE)" || (echo "Usage: make set-role ACCOUNT=<username> ROLE=<owner|admin|reviewer|trusted|member|none|default> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-role $(or $(ACCOUNT),$(USERNAME)) $(ROLE)
+
 set-default:
-	@test -n "$(PERMS)" || (echo "Usage: make set-default PERMS=query,auto_approve ADMIN=<admin>" && exit 1)
-	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-default --perms $(PERMS)
+	@test -n "$(or $(ROLE),$(PERMS))" || (echo "Usage: make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>  (or PERMS=query,auto_approve)" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-default $(if $(ROLE),--role $(ROLE),--perms $(PERMS))
+
+groups:
+	./venv/bin/python -m rag_lab.security.access groups
+
+create-group:
+	@test -n "$(GROUP)" || (echo "Usage: make create-group GROUP=<group> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) create-group $(GROUP)
+
+delete-group:
+	@test -n "$(GROUP)" || (echo "Usage: make delete-group GROUP=<group> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) delete-group $(GROUP)
+
+add-to-group:
+	@test -n "$(ACCOUNT)" && test -n "$(GROUP)" || (echo "Usage: make add-to-group ACCOUNT=<username> GROUP=<group> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) add-to-group $(ACCOUNT) $(GROUP)
+
+remove-from-group:
+	@test -n "$(ACCOUNT)" && test -n "$(GROUP)" || (echo "Usage: make remove-from-group ACCOUNT=<username> GROUP=<group> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) remove-from-group $(ACCOUNT) $(GROUP)
+
+grant-group:
+	@test -n "$(GROUP)" && test -n "$(WS)" && test -n "$(ROLE)" || (echo "Usage: make grant-group GROUP=<group> WS=<ws|w1,w2|all> ROLE=<reviewer|trusted|member|none|default> ADMIN=<admin>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) grant-group $(GROUP) $(WS) --role $(ROLE)
 
 team-mode:
 	@test -n "$(ADMIN)" || (echo "Usage: make team-mode ADMIN=<admin>" && exit 1)
@@ -303,7 +339,7 @@ factory-reset:
 			exit 1; \
 		fi; \
 	fi
-	rm -f access_policy.json
+	rm -f access_policy.json access_policy.json.*.bak access_policy.json.lock
 	rm -rf data
 	rm -rf chroma_data
 	rm -rf bm25_indices

@@ -143,36 +143,47 @@ make status
 
 Nothing is reachable without a signed-in account. Passwords are hashed with **scrypt** with automatic hash upgrades.
 
-**Review modes.** A fresh install runs in **open** mode: the global defaults are `query` + `auto_approve`, so every account can chat on every workspace and answers that pass every automated check are released without a person reading them. Answers that fail a check still pause for review. For team use, appoint at least one reviewer and run `make team-mode ADMIN=<admin>`: it removes only `auto_approve` from the defaults, so answers wait for a reviewer unless an account holds `auto_approve` through its own grants. `make status`, `make users` and the admin panel show the current mode, and flag workspaces where a paused answer could not be decided (no reviewer, only the requester as reviewer, or no reviewer cleared as high as the requester), and warn when a shared install in open mode has confidential or secret documents indexed.
+**Roles.** Every account has a role, a named bundle of permissions: `owner` and `admin` (all permissions plus administration of accounts, groups, grants and workspaces), `reviewer` (query, review), `trusted` (query, auto_approve), `member` (query) and `none`. The first administrator is the `owner`; only an owner can assign or remove the owner role, and the last owner cannot be removed. An account without a role of its own follows the **default role**. Clearance is separate from roles.
+
+**Groups** hold a role per workspace (or on `all` workspaces, including future ones), and accounts belong to groups. Permissions on a workspace resolve from the most specific source: the account's own grant on that workspace, then its own grant on all workspaces, then its groups' grants (combined, but any group's `none` denies), then its role, then the default role.
+
+**Review modes.** A fresh install runs in **open** mode: the default role is `trusted` (`query` + `auto_approve`), so every account can chat on every workspace and answers that pass every automated check are released without a person reading them. Answers that fail a check still pause for review. For team use, appoint at least one reviewer and run `make team-mode ADMIN=<admin>`: it moves the default role from `trusted` to `member`, so answers wait for a reviewer unless an account holds `auto_approve` through its role, groups or grants. `make status`, `make users` and the admin panel show the current mode, and flag workspaces where a paused answer could not be decided (no reviewer, only the requester as reviewer, or no reviewer cleared as high as the requester), and warn when a shared install in open mode has confidential or secret documents indexed. Adding an account (from the second one on, you are asked for its role) prints the same warning when it leaves answers nobody can approve. As the team grows, `make status` suggests the next step (team mode, groups, a second owner); it never changes anything itself.
+
+**Upgrading.** A policy file from an earlier version is migrated on first load, after its signature verifies: administrators become `owner` (the first alphabetically) or `admin`, the old defaults become the default role (or stay a custom permission set), and nobody's effective access changes. Where an administrator's new role would grant more than they held, their old access is pinned as an explicit grant on all workspaces. The old file is kept beside the new one as `access_policy.json.v2-<timestamp>.bak`, and the migration is written to the audit log. A file that fails its signature is refused and left untouched.
 
 All operations can be managed directly via `make` commands without activating the virtual environment:
 
 ```bash
-# Create an administrator account (required for indexing and sync)
+# Create an administrator account (the owner; required for indexing and sync)
 make add-user ACCOUNT=alice ADMIN=1
 
-# Create standard analyst accounts with clearance levels (public, internal, confidential, secret)
-make add-user ACCOUNT=bob CLEARANCE=internal
-make add-user ACCOUNT=charlie CLEARANCE=public
+# Create accounts with a role and clearance level (public, internal, confidential, secret)
+make add-user ACCOUNT=bob ROLE=reviewer CLEARANCE=internal ADMIN=alice
+make add-user ACCOUNT=charlie ROLE=member CLEARANCE=public ADMIN=alice
 
-# Update a user's clearance level
-make set-clearance ACCOUNT=bob CLEARANCE=confidential
+# Change a role ('default' follows the default role) or a clearance level
+make set-role ACCOUNT=charlie ROLE=trusted ADMIN=alice
+make set-clearance ACCOUNT=bob CLEARANCE=confidential ADMIN=alice
 
-# Grant workspace-specific permissions ('query', 'review', or both)
+# Groups: a role per workspace for everyone in the group
+make create-group GROUP=finance-team ADMIN=alice
+make add-to-group ACCOUNT=charlie GROUP=finance-team ADMIN=alice
+make grant-group GROUP=finance-team WS=accounting ROLE=reviewer ADMIN=alice
+make groups
+
+# Per-account overrides on workspaces ('query', 'review', 'auto_approve', or a ROLE=)
 # Accepts a single workspace, comma-separated list, or 'all'
-make grant ACCOUNT=bob WS=accounting PERMS=query,review
-make grant ACCOUNT=bob WS=accounting,strategy PERMS=query,review
-make grant ACCOUNT=charlie WS=all PERMS=query
+make grant ACCOUNT=bob WS=accounting,strategy PERMS=query,review ADMIN=alice
+make grant ACCOUNT=charlie WS=all ROLE=member ADMIN=alice
 
 # Revoke access to workspaces (accepts a single workspace, comma-separated list, or 'all')
-make revoke ACCOUNT=charlie WS=accounting
-make revoke ACCOUNT=bob WS=all
+make revoke ACCOUNT=charlie WS=accounting ADMIN=alice
+make revoke ACCOUNT=bob WS=all ADMIN=alice
 
-# List accounts, clearance, and assigned permissions (never displays hashes)
+# List accounts, roles, groups, clearance, and overrides (never displays hashes)
 make users
 
 # Require human review by default once a reviewer is appointed
-make grant ACCOUNT=bob WS=all PERMS=query,review ADMIN=alice
 make team-mode ADMIN=alice
 
 # Reset an account password (prompts securely)

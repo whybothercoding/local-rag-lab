@@ -124,21 +124,22 @@ def seed_policy() -> None:
     from rag_lab.security.access import save_policy
 
     save_policy({
-        "version": 2,
-        "defaults": {"permissions": []},
+        "version": 3,
+        "defaults": {"role": "none"},
+        "groups": {},
         "users": {
             "eval": {
-                "password_hash": "", "admin": False, "clearance": "public",
+                "password_hash": "", "clearance": "public",
                 "uid": "eval0001", "token_version": 0,
                 "grants": {ws: ["query", "auto_approve"] for ws in WORKSPACES},
             },
             "eval-secret": {
-                "password_hash": "", "admin": False, "clearance": "secret",
+                "password_hash": "", "clearance": "secret",
                 "uid": "eval0002", "token_version": 0,
                 "grants": {"engineering": ["query", "auto_approve"], "zurich": ["query", "auto_approve"]},
             },
             "eval-outsider": {
-                "password_hash": "", "admin": False, "clearance": "public",
+                "password_hash": "", "clearance": "public",
                 "uid": "eval0003", "token_version": 0,
                 "grants": {},
             },

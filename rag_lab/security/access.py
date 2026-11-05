@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Local identity, sign-in, and workspace access control.
+"""Local identity, sign-in, roles, groups, and workspace access control.
 
-Users, scrypt password hashes, per-workspace grants, and the global default permissions live in
-one JSON file (ACCESS_POLICY_PATH). The file carries an HMAC tag made with a local signing key
+Users, scrypt password hashes, roles, groups, per-workspace grants, and the default role live in one
+JSON file (ACCESS_POLICY_PATH). The file carries an HMAC tag made with a local signing key
 (ACCESS_KEY_PATH); if it is edited outside this module, every check fails closed.
 
-Permissions resolve in three layers, most specific first:
-  1. an explicit per-workspace grant for the account (an empty list is an explicit denial),
-  2. the account's own default permissions (set with `grant <user> all`),
-  3. the global defaults (DEFAULT_PERMISSIONS on a fresh install: "query" and "auto_approve").
-So out of the box every account can chat on every workspace, current and future, without review. An
-administrator narrows or widens that per account, per workspace, or globally. "review" is never a
-default: reviewers are appointed. "admin" is a separate flag for user, grant, workspace, and indexing
-management. Only administrators may change accounts, grants, defaults, or clearances.
+A role is a named bundle of the workspace permissions (ROLE_PERMISSIONS); "owner" and "admin" also carry
+administration (users, grants, groups, workspaces, indexing). Permissions on one workspace resolve in
+this order, most specific first:
+  1. the account's explicit grant on that workspace, then its explicit grant on all workspaces
+     (`grant <user> all`); an empty list is an explicit denial,
+  2. the grants of the account's groups on that workspace (union; any group denial wins),
+  3. the account's own role,
+  4. the policy's default role ("trusted" on a fresh install: query + auto_approve).
+So out of the box every account can chat on every workspace without review. "review" is never part of
+the default role: reviewers are appointed. Clearance is separate from roles. Only administrators may
+change accounts, roles, groups, grants, defaults, or clearances; only an owner may assign or remove the
+owner role, and the last owner stays.
+
+Policy files from version 1 and 2 are migrated to version 3 on first load, after their old tag verifies,
+with a backup of the old file and no change to anyone's effective access.
 
 Identity crosses into the pipeline as an HMAC-signed session token, never as a bare name.
 """
@@ -29,7 +36,9 @@ import os
 import re
 import secrets
 import sys
+import shutil
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -50,9 +59,23 @@ from rag_lab.security.vault import load_or_create_key
 from rag_lab.storage.workspace_manager import sanitize_workspace_id
 
 PERMISSIONS = ("query", "review", "auto_approve")
+# Roles are named bundles of the workspace permissions. "owner" and "admin" also administer the system.
+ROLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "owner": ("auto_approve", "query", "review"),
+    "admin": ("auto_approve", "query", "review"),
+    "reviewer": ("query", "review"),
+    "trusted": ("auto_approve", "query"),
+    "member": ("query",),
+    "none": (),
+}
+ROLES = tuple(ROLE_PERMISSIONS)
+ADMIN_ROLES = ("owner", "admin")
+# Roles a group grant or the policy default may hold: never administration.
+WORKSPACE_ROLES = ("reviewer", "trusted", "member", "none")
+DEFAULT_ROLE = "trusted"
 # What every account holds on every workspace until an administrator says otherwise.
-DEFAULT_PERMISSIONS = ("query", "auto_approve")
-POLICY_VERSION = 2
+DEFAULT_PERMISSIONS = ROLE_PERMISSIONS[DEFAULT_ROLE]
+POLICY_VERSION = 3
 CLEARANCE_LEVELS = ("public", "internal", "confidential", "secret")
 DEFAULT_CLEARANCE = "public"
 MIN_PASSWORD_LENGTH = 12
@@ -158,15 +181,37 @@ def _signing_key(path: str | None = None) -> bytes:
     return load_or_create_key(path or settings.access_key_path)
 
 
+def _role_for(permissions: list[str] | tuple[str, ...], choices: tuple[str, ...] = WORKSPACE_ROLES) -> str | None:
+    """The role whose bundle is exactly these permissions, if one exists among `choices`."""
+    wanted = sorted(set(permissions))
+    return next((r for r in choices if sorted(ROLE_PERMISSIONS[r]) == wanted), None)
+
+
 def _canonical_defaults(defaults: Any) -> dict[str, Any]:
-    perms = defaults.get("permissions") if isinstance(defaults, dict) else None
+    """The policy default as {"role": r}, or {"permissions": [...]} for a custom set no role matches."""
+    if isinstance(defaults, dict) and set(defaults) == {"role"}:
+        if defaults["role"] not in WORKSPACE_ROLES:
+            raise PolicyIntegrityError("Access policy default role is malformed. Access is refused until it is restored.")
+        return {"role": defaults["role"]}
+    perms = defaults.get("permissions") if isinstance(defaults, dict) and set(defaults) == {"permissions"} else None
     if not isinstance(perms, list) or any(p not in PERMISSIONS for p in perms):
         raise PolicyIntegrityError("Access policy defaults are malformed. Access is refused until it is restored.")
-    return {"permissions": sorted(set(perms))}
+    role = _role_for(perms)
+    return {"role": role} if role else {"permissions": sorted(set(perms))}
 
 
-def _policy_mac(users: dict[str, Any], defaults: dict[str, Any] | None = None) -> str:
-    """HMAC over the users, and over the defaults when the policy has them (policy version 2)."""
+def _canonical_groups(groups: Any) -> dict[str, Any]:
+    if not isinstance(groups, dict):
+        raise PolicyIntegrityError("Access policy groups are malformed. Access is refused until it is restored.")
+    for info in groups.values():
+        grants = info.get("grants") if isinstance(info, dict) else None
+        if not isinstance(grants, dict) or any(r not in WORKSPACE_ROLES for r in grants.values()):
+            raise PolicyIntegrityError("Access policy groups are malformed. Access is refused until it is restored.")
+    return groups
+
+
+def _legacy_mac(users: dict[str, Any], defaults: dict[str, Any] | None) -> str:
+    """The tag of policy versions 1 (users only) and 2 (users and permission defaults). Read only to migrate."""
     if defaults is None:
         body = json.dumps(users, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hmac.new(_signing_key(), b"policy:" + body, hashlib.sha256).hexdigest()
@@ -174,15 +219,54 @@ def _policy_mac(users: dict[str, Any], defaults: dict[str, Any] | None = None) -
     return hmac.new(_signing_key(), b"policy2:" + body, hashlib.sha256).hexdigest()
 
 
+def _policy_mac(users: dict[str, Any], defaults: dict[str, Any], groups: dict[str, Any]) -> str:
+    """HMAC over users, groups, and the default (policy version 3), in its own domain."""
+    body = json.dumps(
+        {"users": users, "defaults": defaults, "groups": groups}, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hmac.new(_signing_key(), b"policy3:" + body, hashlib.sha256).hexdigest()
+
+
 def new_policy() -> dict[str, Any]:
-    """The policy of a fresh install: no accounts, and the out-of-the-box default permissions."""
-    return {"version": POLICY_VERSION, "users": {}, "defaults": {"permissions": sorted(DEFAULT_PERMISSIONS)}}
+    """The policy of a fresh install: no accounts, no groups, and the out-of-the-box default role."""
+    return {"version": POLICY_VERSION, "users": {}, "groups": {}, "defaults": {"role": DEFAULT_ROLE}}
 
 
-def load_policy(path: str | None = None) -> dict[str, Any]:
-    target = Path(path or settings.access_policy_path)
-    if not target.is_file():
-        return new_policy()
+def default_permissions_of(policy: dict[str, Any]) -> list[str]:
+    defaults = policy.get("defaults") or {}
+    if "role" in defaults:
+        return sorted(ROLE_PERMISSIONS[defaults["role"]])
+    return sorted(defaults.get("permissions", []))
+
+
+def migrate_policy(policy: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Convert a verified version 1 or 2 policy to version 3 without changing anyone's effective access.
+
+    Admins become role "owner" (the first, alphabetically) or "admin". Where that role's bundle differs
+    from what the account held through the old defaults, the old access is pinned as the account's
+    explicit grant on all workspaces. Returns the new policy and one note per pinned account.
+    """
+    legacy = policy.get("defaults")
+    # A version 1 file predates defaults and kept its strict meaning: no access beyond explicit grants.
+    defaults = _canonical_defaults(legacy) if legacy is not None else {"role": "none"}
+    old_defaults = default_permissions_of({"defaults": defaults})
+    admins = sorted(name for name, info in policy["users"].items() if info.get("admin"))
+    users: dict[str, Any] = {}
+    notes: list[str] = []
+    for name, info in policy["users"].items():
+        user = {k: v for k, v in info.items() if k != "admin"}
+        if name in admins:
+            user["role"] = "owner" if name == admins[0] else "admin"
+            if "default_permissions" not in user and old_defaults != sorted(ROLE_PERMISSIONS[user["role"]]):
+                user["default_permissions"] = list(old_defaults)
+                notes.append(
+                    f"{name} ({user['role']}): access pinned to {'/'.join(old_defaults) or 'none'} on all workspaces"
+                )
+        users[name] = user
+    return {"version": POLICY_VERSION, "users": users, "groups": {}, "defaults": defaults}, notes
+
+
+def _read_policy_file(target: Path) -> dict[str, Any]:
     try:
         with open(target, encoding="utf-8") as handle:
             policy = json.load(handle)
@@ -194,29 +278,74 @@ def load_policy(path: str | None = None) -> dict[str, Any]:
         raise PolicyIntegrityError(
             f"Access policy {target} is malformed. Access is refused until it is restored."
         )
-    users = policy["users"]
-    defaults = policy.get("defaults")
-    if defaults is not None:
-        defaults = _canonical_defaults(defaults)
-    if not hmac.compare_digest(str(policy.get("integrity", "")), _policy_mac(users, defaults)):
-        raise PolicyIntegrityError(
-            f"Access policy {target} failed its integrity check. Access is refused until it is restored."
-        )
-    if defaults is None:
-        # A policy written before defaults existed keeps its strict meaning: no access beyond explicit
-        # grants, until an administrator runs `set-default`. Upgrading never widens anyone's access.
-        policy["defaults"] = {"permissions": []}
     return policy
 
 
+def _verified(policy: dict[str, Any], target: Path) -> dict[str, Any]:
+    """Check the tag of a version 3 policy, or of a legacy one, and return it with canonical fields."""
+    failed = PolicyIntegrityError(
+        f"Access policy {target} failed its integrity check. Access is refused until it is restored."
+    )
+    version = policy.get("version", 1)
+    users = policy["users"]
+    if version == POLICY_VERSION:
+        defaults = _canonical_defaults(policy.get("defaults"))
+        groups = _canonical_groups(policy.get("groups", {}))
+        if not hmac.compare_digest(str(policy.get("integrity", "")), _policy_mac(users, defaults, groups)):
+            raise failed
+        return {**policy, "defaults": defaults, "groups": groups}
+    if version not in (1, 2):
+        raise PolicyIntegrityError(
+            f"Access policy {target} has unknown version {version!r}. Access is refused until it is restored."
+        )
+    legacy = policy.get("defaults")
+    if legacy is not None:
+        perms = legacy.get("permissions") if isinstance(legacy, dict) else None
+        if not isinstance(perms, list) or any(p not in PERMISSIONS for p in perms):
+            raise PolicyIntegrityError("Access policy defaults are malformed. Access is refused until it is restored.")
+        legacy = {"permissions": sorted(set(perms))}
+    if not hmac.compare_digest(str(policy.get("integrity", "")), _legacy_mac(users, legacy)):
+        raise failed
+    return policy
+
+
+def load_policy(path: str | None = None) -> dict[str, Any]:
+    target = Path(path or settings.access_policy_path)
+    if not target.is_file():
+        return new_policy()
+    policy = _verified(_read_policy_file(target), target)
+    if policy.get("version") == POLICY_VERSION:
+        return policy
+    with _policy_lock(path):  # another process may have migrated it meanwhile: re-read under the lock
+        policy = _verified(_read_policy_file(target), target)
+        if policy.get("version") == POLICY_VERSION:
+            return policy
+        old_version = policy.get("version", 1)
+        backup = target.with_name(f"{target.name}.v{old_version}-{datetime.now(UTC):%Y%m%dT%H%M%S%f}.bak")
+        shutil.copy2(target, backup)
+        os.chmod(backup, 0o600)
+        migrated, notes = migrate_policy(policy)
+        save_policy(migrated, path)
+    audit_record("policy_migrated", workspace_id="", session_id="",
+                 data={"from": old_version, "to": POLICY_VERSION, "backup": backup.name, "pinned": notes})
+    print(f"Access policy migrated from version {old_version} to {POLICY_VERSION}; backup at {backup}.",
+          file=sys.stderr)
+    for note in notes:
+        print(f"  {note}", file=sys.stderr)
+    return load_policy(path)
+
+
 def save_policy(policy: dict[str, Any], path: str | None = None) -> None:
+    """Sign and atomically write a policy. A version 1 or 2 dict (older seed code) is migrated first."""
     target = Path(path or settings.access_policy_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    defaults = policy.get("defaults")
-    if defaults is not None:
-        defaults = _canonical_defaults(defaults)
-        policy = {**policy, "defaults": defaults, "version": POLICY_VERSION}
-    policy = {**policy, "integrity": _policy_mac(policy.get("users", {}), defaults)}
+    if policy.get("version", 1) != POLICY_VERSION:
+        policy, _ = migrate_policy(policy)
+    defaults = _canonical_defaults(policy.get("defaults", {"role": DEFAULT_ROLE}))
+    groups = _canonical_groups(policy.get("groups", {}))
+    users = policy.get("users", {})
+    policy = {**policy, "version": POLICY_VERSION, "defaults": defaults, "groups": groups,
+              "integrity": _policy_mac(users, defaults, groups)}
     fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".access-", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(policy, handle, indent=2, sort_keys=True)
@@ -226,21 +355,31 @@ def save_policy(policy: dict[str, Any], path: str | None = None) -> None:
     os.replace(temporary, target)
 
 
+_LOCKS_HELD = threading.local()
+
+
 @contextlib.contextmanager
 def _policy_lock(path: str | None = None):
-    """Serialize read-modify-write cycles on the policy file across threads and processes."""
+    """Serialize read-modify-write cycles on the policy file across threads and processes.
+
+    Re-entrant within a thread, so a load that migrates the file can run inside an update.
+    """
     target = Path(path or settings.access_policy_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if fcntl is None:  # pragma: no cover - Windows
+    held: set[str] = _LOCKS_HELD.__dict__.setdefault("paths", set())
+    key = str(target.resolve())
+    if fcntl is None or key in held:  # Windows has no flock; a held lock is re-entered
         yield
         return
     lock_path = target.with_name(target.name + ".lock")
     with open(lock_path, "a") as handle:
         os.chmod(lock_path, 0o600)
         fcntl.flock(handle, fcntl.LOCK_EX)
+        held.add(key)
         try:
             yield
         finally:
+            held.discard(key)
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
@@ -389,14 +528,39 @@ def _normalize_permissions(permissions: list[str]) -> list[str]:
     return sorted(set(cleaned))
 
 
+def _group_permissions(policy: dict[str, Any], user: dict[str, Any], workspace_id: str) -> list[str] | None:
+    """Union of the account's group grants on a workspace; any group's denial wins. None when no group applies.
+
+    Within one group a grant on the workspace beats that group's grant on all workspaces.
+    """
+    groups = policy.get("groups") or {}
+    found = False
+    perms: set[str] = set()
+    for name in user.get("groups") or []:
+        grants = (groups.get(name) or {}).get("grants") or {}
+        role = grants.get(workspace_id, grants.get("*"))
+        if role is None:
+            continue
+        if role == "none":
+            return []
+        found = True
+        perms |= set(ROLE_PERMISSIONS[role])
+    return sorted(perms) if found else None
+
+
 def effective_permissions(policy: dict[str, Any], user: dict[str, Any], workspace_id: str) -> list[str]:
-    """Resolve what an account may do on one workspace: explicit grant, then account default, then global default."""
+    """Resolve what an account may do on one workspace (see the module docstring for the order)."""
     grants = user.get("grants") or {}
     if workspace_id in grants:
         return list(grants[workspace_id])
     if "default_permissions" in user:
         return list(user["default_permissions"])
-    return list((policy.get("defaults") or {}).get("permissions", []))
+    from_groups = _group_permissions(policy, user, workspace_id)
+    if from_groups is not None:
+        return from_groups
+    if user.get("role") in ROLE_PERMISSIONS:
+        return sorted(ROLE_PERMISSIONS[user["role"]])
+    return default_permissions_of(policy)
 
 
 def authorize(username: str, workspace_id: str, permission: str, path: str | None = None) -> bool:
@@ -411,14 +575,25 @@ def authorize(username: str, workspace_id: str, permission: str, path: str | Non
     return permission in effective_permissions(policy, user, workspace_id)
 
 
+def role_of(user: dict[str, Any] | None) -> str | None:
+    """The account's own role, or None when it follows the policy's default role."""
+    role = (user or {}).get("role")
+    return role if role in ROLE_PERMISSIONS else None
+
+
 def is_admin(username: str, path: str | None = None) -> bool:
     user = load_policy(path)["users"].get(username) if username else None
-    return bool(user and user.get("admin"))
+    return role_of(user) in ADMIN_ROLES
+
+
+def is_owner(username: str, path: str | None = None) -> bool:
+    user = load_policy(path)["users"].get(username) if username else None
+    return role_of(user) == "owner"
 
 
 def has_admin(path: str | None = None) -> bool:
     """True once at least one administrator account exists."""
-    return any(info.get("admin") for info in load_policy(path)["users"].values())
+    return any(role_of(info) in ADMIN_ROLES for info in load_policy(path)["users"].values())
 
 
 def require_admin(actor: str, path: str | None = None) -> str:
@@ -496,8 +671,26 @@ def _existing(policy: dict[str, Any], name: str) -> dict[str, Any]:
     return user
 
 
-def _admin_count(policy: dict[str, Any]) -> int:
-    return sum(1 for info in policy["users"].values() if info.get("admin"))
+def _owner_count(policy: dict[str, Any]) -> int:
+    return sum(1 for info in policy["users"].values() if role_of(info) == "owner")
+
+
+def _normalize_role(role: str, choices: tuple[str, ...] = ROLES) -> str:
+    clean = role.strip().lower()
+    if clean not in choices:
+        raise ValueError(f"Unknown role '{role}'. Choose from {', '.join(choices)}.")
+    return clean
+
+
+def _check_role_change(policy: dict[str, Any], actor: str | None, name: str, new_role: str | None) -> None:
+    """Only an owner assigns or removes the owner role, and the last owner keeps it."""
+    current = role_of(policy["users"][name])
+    if "owner" not in (current, new_role) or current == new_role:
+        return
+    if actor is not None and role_of(policy["users"].get(actor)) != "owner":
+        raise PermissionError("Only an owner may assign or remove the owner role.")
+    if current == "owner" and _owner_count(policy) <= 1:
+        raise ValueError("Cannot remove the last owner (the last administrator who can manage owners).")
 
 
 def add_user(
@@ -507,29 +700,43 @@ def add_user(
     clearance: str = DEFAULT_CLEARANCE,
     path: str | None = None,
     actor: str | None = None,
-) -> None:
-    """Create an account. It starts with the global default permissions on every workspace."""
+    role: str | None = None,
+) -> str | None:
+    """Create an account and return its role.
+
+    Without a role it follows the policy's default role. `admin=True` without a role makes the first
+    administrator the owner and later ones admins.
+    """
     name = _normalize_username(username)
     check_password_strength(password, name)
     clean_clearance = _normalize_clearance(clearance)
+    clean_role = _normalize_role(role) if role else None
     who = _authorize_change(actor, path)
 
-    def mutate(policy: dict[str, Any]) -> None:
+    def mutate(policy: dict[str, Any]) -> str | None:
         if name in policy["users"]:
             raise ValueError(
                 f"User '{name}' already exists. To reset the password, run: make set-password ACCOUNT={name}"
             )
-        policy["users"][name] = {
+        chosen = clean_role or (("admin" if _owner_count(policy) else "owner") if admin else None)
+        if chosen == "owner" and _owner_count(policy) and actor is not None \
+                and role_of(policy["users"].get(actor)) != "owner":
+            raise PermissionError("Only an owner may assign or remove the owner role.")
+        user: dict[str, Any] = {
             "password_hash": hash_password(password),
-            "admin": bool(admin),
             "clearance": clean_clearance,
             "grants": {},
             "uid": secrets.token_hex(8),
             "token_version": 0,
         }
+        if chosen:
+            user["role"] = chosen
+        policy["users"][name] = user
+        return chosen
 
-    _update(path, mutate)
-    _audit("user_created", who, {"username": name, "admin": bool(admin), "clearance": clean_clearance})
+    chosen = _update(path, mutate)
+    _audit("user_created", who, {"username": name, "role": chosen or "default", "clearance": clean_clearance})
+    return chosen
 
 
 def set_password(username: str, password: str, path: str | None = None, actor: str | None = None) -> None:
@@ -579,38 +786,77 @@ def set_user_clearance(username: str, clearance: str, path: str | None = None, a
     _audit("clearance_changed", who, {"username": name, "from": previous, "to": clean_clearance})
 
 
-def set_admin(username: str, admin: bool, path: str | None = None, actor: str | None = None) -> None:
-    """Grant or remove administrator status. The last administrator cannot be removed."""
+def set_role(username: str, role: str | None, path: str | None = None, actor: str | None = None) -> None:
+    """Set an account's role, or clear it (None or "default") so it follows the policy's default role."""
     name = _normalize_username(username)
+    clean = None if role is None or role.strip().lower() == "default" else _normalize_role(role)
     who = _authorize_change(actor, path)
 
-    def mutate(policy: dict[str, Any]) -> None:
+    def mutate(policy: dict[str, Any]) -> str | None:
         user = _existing(policy, name)
-        if user.get("admin") and not admin and _admin_count(policy) <= 1:
-            raise ValueError("Cannot remove the last administrator.")
-        user["admin"] = bool(admin)
-
-    _update(path, mutate)
-    _audit("admin_changed", who, {"username": name, "admin": bool(admin)})
-
-
-def set_default_permissions(permissions: list[str], path: str | None = None, actor: str | None = None) -> list[str]:
-    """Set the global default permissions every account holds on every workspace (e.g. query + auto_approve)."""
-    perms = _normalize_permissions(permissions)
-    who = _authorize_change(actor, path)
-
-    def mutate(policy: dict[str, Any]) -> list[str]:
-        previous = list((policy.get("defaults") or {}).get("permissions", []))
-        policy["defaults"] = {"permissions": perms}
+        _check_role_change(policy, actor, name, clean)
+        previous = role_of(user)
+        if clean:
+            user["role"] = clean
+        else:
+            user.pop("role", None)
         return previous
 
     previous = _update(path, mutate)
-    _audit("defaults_changed", who, {"from": previous, "to": perms})
+    _audit("role_changed", who, {"username": name, "from": previous or "default", "to": clean or "default"})
+
+
+def set_admin(username: str, admin: bool, path: str | None = None, actor: str | None = None) -> None:
+    """Make an account an administrator (role "admin") or remove that (it then follows the default role)."""
+    name = _normalize_username(username)
+    current = role_of(load_policy(path)["users"].get(name))
+    if admin and current in ADMIN_ROLES:
+        _authorize_change(actor, path)
+        return
+    if not admin and current not in ADMIN_ROLES:
+        _authorize_change(actor, path)
+        return
+    owners = _owner_count(load_policy(path))
+    set_role(name, ("admin" if owners else "owner") if admin else None, path=path, actor=actor)
+
+
+def set_default_role(role: str, path: str | None = None, actor: str | None = None) -> str:
+    """Set the role every account without a role of its own holds on every workspace."""
+    clean = _normalize_role(role, WORKSPACE_ROLES)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> dict[str, Any]:
+        previous = dict(policy.get("defaults") or {})
+        policy["defaults"] = {"role": clean}
+        return previous
+
+    previous = _update(path, mutate)
+    _audit("defaults_changed", who, {"from": previous, "to": {"role": clean}})
+    return clean
+
+
+def set_default_permissions(permissions: list[str], path: str | None = None, actor: str | None = None) -> list[str]:
+    """Set the default as a permission list. It is stored as the matching role, or as a custom set."""
+    perms = _normalize_permissions(permissions)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> dict[str, Any]:
+        previous = dict(policy.get("defaults") or {})
+        policy["defaults"] = _canonical_defaults({"permissions": perms})
+        return previous
+
+    previous = _update(path, mutate)
+    _audit("defaults_changed", who, {"from": previous, "to": {"permissions": perms}})
     return perms
 
 
 def get_default_permissions(path: str | None = None) -> list[str]:
-    return list(load_policy(path)["defaults"]["permissions"])
+    return default_permissions_of(load_policy(path))
+
+
+def get_default_role(path: str | None = None) -> str | None:
+    """The default role, or None when the default is a custom permission set."""
+    return (load_policy(path).get("defaults") or {}).get("role")
 
 
 @dataclass
@@ -629,6 +875,8 @@ class ReviewReport:
     warnings: list[str] = field(default_factory=list)
     reviewers: dict[str, list[str]] = field(default_factory=dict)
     auto_approve_holdouts: list[str] = field(default_factory=list)
+    # The subset of warnings where a paused answer would wait with nobody able to decide it.
+    gaps: list[str] = field(default_factory=list)
 
 
 def review_mode_report(workspace_ids: list[str], path: str | None = None) -> ReviewReport:
@@ -639,7 +887,7 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
     """
     policy = load_policy(path)
     users = policy["users"]
-    defaults = list((policy.get("defaults") or {}).get("permissions", []))
+    defaults = default_permissions_of(policy)
     report = ReviewReport(
         mode="open" if "auto_approve" in defaults else "team",
         defaults=defaults,
@@ -681,16 +929,17 @@ def review_mode_report(workspace_ids: list[str], path: str | None = None) -> Rev
                 "answers are released to cleared accounts without review."
             )
     if without_reviewer:
-        report.warnings.append(
+        report.gaps.append(
             f"no reviewer on: {', '.join(without_reviewer)}. Answers that fail an automated check, or come from "
             "accounts without auto_approve, wait there until someone holds review "
-            "('make grant ACCOUNT=<u> WS=<ws> PERMS=query,review ADMIN=<admin>')."
+            "('make set-role ACCOUNT=<u> ROLE=reviewer ADMIN=<admin>')."
         )
     for ws, names in sorted(uncovered.items()):
-        report.warnings.append(
+        report.gaps.append(
             f"workspace '{ws}': no reviewer other than the requester is cleared high enough to release answers "
             f"for {', '.join(sorted(names))}."
         )
+    report.warnings.extend(report.gaps)
     report.auto_approve_holdouts = sorted(holdouts)
     return report
 
@@ -713,11 +962,48 @@ def enable_team_mode(workspace_ids: list[str], path: str | None = None, actor: s
             "No account holds review on any workspace, so every paused answer would wait with nobody able to "
             "decide. Appoint a reviewer first: make grant ACCOUNT=<u> WS=all PERMS=query,review ADMIN=<admin>"
         )
-    if before.mode == "open":
+    if before.mode == "open" and get_default_role(path) == "trusted":
+        set_default_role("member", path=path, actor=actor)
+    elif before.mode == "open":
         set_default_permissions([p for p in before.defaults if p != "auto_approve"], path=path, actor=actor)
     else:
         _authorize_change(actor, path)
     return review_mode_report(workspace_ids, path)
+
+
+TEAM_MODE_SUGGESTION_USERS = 3
+GROUPS_SUGGESTION_USERS = 6
+
+
+def growth_suggestions(workspace_ids: list[str], path: str | None = None) -> list[str]:
+    """Next steps as the team grows. Suggestions only: nothing here changes the policy."""
+    policy = load_policy(path)
+    users = policy["users"]
+    defaults = policy.get("defaults") or {}
+    suggestions: list[str] = []
+    if len(users) > TEAM_MODE_SUGGESTION_USERS and "auto_approve" in default_permissions_of(policy):
+        suggestions.append(
+            f"{len(users)} accounts and a default role that releases answers without review "
+            f"({defaults.get('role', 'custom')}): consider 'make team-mode ADMIN=<admin>' "
+            "after appointing a reviewer."
+        )
+    if len(users) >= GROUPS_SUGGESTION_USERS and not policy.get("groups"):
+        suggestions.append(
+            f"{len(users)} accounts and no groups: consider groups to grant roles per team "
+            "('make create-group GROUP=<g> ADMIN=<admin>')."
+        )
+    owners = [n for n, info in users.items() if role_of(info) == "owner"]
+    if len(users) > TEAM_MODE_SUGGESTION_USERS and len(owners) == 1:
+        suggestions.append(
+            f"one owner ({owners[0]}): consider a second owner so the policy is not locked to one person "
+            "('make set-role ACCOUNT=<u> ROLE=owner ADMIN=<owner>')."
+        )
+    if "permissions" in defaults:
+        suggestions.append(
+            f"the default is a custom permission set ({'/'.join(defaults['permissions']) or 'none'}), not a role: "
+            "consider 'make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>'."
+        )
+    return suggestions
 
 
 def describe_review_mode(report: ReviewReport) -> list[str]:
@@ -809,12 +1095,128 @@ def clear_user_permissions_override(username: str, path: str | None = None, acto
     _audit("grant_reset", who, {"username": name, "scope": "all workspaces"})
 
 
+# --- Groups -----------------------------------------------------------------
+
+def _normalize_group(raw: str) -> str:
+    name = raw.strip().lower()
+    if not _USERNAME.fullmatch(name):
+        raise ValueError("Group names are 2-64 characters: lowercase letters, digits, '.', '-', '_'.")
+    return name
+
+
+def _existing_group(policy: dict[str, Any], name: str) -> dict[str, Any]:
+    groups = policy.setdefault("groups", {})
+    if name not in groups:
+        raise ValueError(f"Group '{name}' does not exist. Create it with: make create-group GROUP={name}")
+    group: dict[str, Any] = groups[name]
+    return group
+
+
+def create_group(group: str, path: str | None = None, actor: str | None = None) -> None:
+    name = _normalize_group(group)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> None:
+        groups = policy.setdefault("groups", {})
+        if name in groups:
+            raise ValueError(f"Group '{name}' already exists.")
+        groups[name] = {"grants": {}}
+
+    _update(path, mutate)
+    _audit("group_created", who, {"group": name})
+
+
+def delete_group(group: str, path: str | None = None, actor: str | None = None) -> None:
+    """Delete a group and remove it from every member."""
+    name = _normalize_group(group)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> None:
+        _existing_group(policy, name)
+        del policy["groups"][name]
+        for info in policy["users"].values():
+            if name in (info.get("groups") or []):
+                info["groups"] = [g for g in info["groups"] if g != name]
+
+    _update(path, mutate)
+    _audit("group_deleted", who, {"group": name})
+
+
+def add_to_group(username: str, group: str, path: str | None = None, actor: str | None = None) -> None:
+    name = _normalize_username(username)
+    gname = _normalize_group(group)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> None:
+        user = _existing(policy, name)
+        _existing_group(policy, gname)
+        user["groups"] = sorted(set(user.get("groups") or []) | {gname})
+
+    _update(path, mutate)
+    _audit("group_member_added", who, {"group": gname, "username": name})
+
+
+def remove_from_group(username: str, group: str, path: str | None = None, actor: str | None = None) -> None:
+    name = _normalize_username(username)
+    gname = _normalize_group(group)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> None:
+        user = _existing(policy, name)
+        if gname not in (user.get("groups") or []):
+            raise ValueError(f"'{name}' is not in group '{gname}'.")
+        user["groups"] = [g for g in user["groups"] if g != gname]
+
+    _update(path, mutate)
+    _audit("group_member_removed", who, {"group": gname, "username": name})
+
+
+def grant_group(
+    group: str,
+    workspace: str,
+    role: str | None,
+    path: str | None = None,
+    actor: str | None = None,
+) -> None:
+    """Give a group a role on one workspace, or on all ("all", including future ones).
+
+    Role "none" is an explicit denial that beats every other group's grant; None or "default" removes the grant.
+    """
+    gname = _normalize_group(group)
+    ws_key = "*" if _is_all(workspace) else _normalize_workspace(workspace)
+    clean = None if role is None or role.strip().lower() == "default" else _normalize_role(role, WORKSPACE_ROLES)
+    who = _authorize_change(actor, path)
+
+    def mutate(policy: dict[str, Any]) -> None:
+        grants = _existing_group(policy, gname).setdefault("grants", {})
+        if clean is None:
+            grants.pop(ws_key, None)
+        else:
+            grants[ws_key] = clean
+
+    _update(path, mutate)
+    _audit("group_grant_changed", who, {"group": gname, "role": clean or "default"},
+           workspace_id="" if ws_key == "*" else ws_key)
+
+
+def list_groups(path: str | None = None) -> list[dict[str, Any]]:
+    policy = load_policy(path)
+    members: dict[str, list[str]] = {}
+    for user, info in policy["users"].items():
+        for g in info.get("groups") or []:
+            members.setdefault(g, []).append(user)
+    return [
+        {"group": name, "members": sorted(members.get(name, [])), "grants": dict(info.get("grants") or {})}
+        for name, info in sorted((policy.get("groups") or {}).items())
+    ]
+
+
 def remove_workspace_grants(workspace_id: str, path: str | None = None) -> int:
     """Forget every account's override for a deleted workspace. Returns how many accounts changed."""
 
     def mutate(policy: dict[str, Any]) -> int:
         changed = 0
-        for info in policy["users"].values():
+        for info in [*policy["users"].values(), *(policy.get("groups") or {}).values()]:
             if workspace_id in (info.get("grants") or {}):
                 del info["grants"][workspace_id]
                 changed += 1
@@ -829,9 +1231,8 @@ def delete_user(username: str, path: str | None = None, actor: str | None = None
     who = _authorize_change(actor, path)
 
     def mutate(policy: dict[str, Any]) -> None:
-        user = _existing(policy, name)
-        if user.get("admin") and _admin_count(policy) <= 1:
-            raise ValueError("Cannot delete the last administrator.")
+        _existing(policy, name)
+        _check_role_change(policy, actor, name, None)
         del policy["users"][name]
 
     _update(path, mutate)
@@ -845,6 +1246,7 @@ def reset_users(path: str | None = None, actor: str | None = None) -> None:
     def mutate(policy: dict[str, Any]) -> int:
         count = len(policy["users"])
         policy["users"] = {}
+        policy["groups"] = {}
         return count
 
     removed = _update(path, mutate)
@@ -856,8 +1258,10 @@ def list_users(path: str | None = None) -> list[dict[str, Any]]:
     return [
         {
             "username": name,
-            "admin": bool(info.get("admin")),
+            "role": role_of(info),
+            "admin": role_of(info) in ADMIN_ROLES,
             "clearance": str(info.get("clearance", DEFAULT_CLEARANCE)),
+            "groups": list(info.get("groups") or []),
             "grants": info.get("grants", {}),
             "default_permissions": info.get("default_permissions"),
         }
@@ -879,6 +1283,20 @@ def authenticate_admin(
     if not is_admin(result.username, path):
         raise PermissionError(f"'{result.username}' is not an administrator. Only administrators may change accounts and permissions.")
     return result.username
+
+
+def _prompt_role(username: str) -> str:
+    """Ask for the role of a new account, on a terminal. Elsewhere it follows the default role."""
+    if not sys.stdin.isatty():
+        return "default"
+    default = get_default_role() or "custom"
+    print(f"Role for '{username.strip().lower()}':")
+    for role in ("member", "trusted", "reviewer", "admin"):
+        print(f"  {role:9} {', '.join(ROLE_PERMISSIONS[role])}{' + administration' if role in ADMIN_ROLES else ''}")
+    answer = input(f"Role [{default} = the default role]: ").strip().lower()
+    if not answer:
+        return "default"
+    return _normalize_role(answer)
 
 
 def _prompt_new_password(username: str) -> str:
@@ -919,6 +1337,9 @@ def build_parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add-user", parents=[signer_parent], help="Create an account (prompts for a password)")
     add.add_argument("username")
     add.add_argument("--admin", action="store_true", help="Make the new account an administrator")
+    add.add_argument("--role", choices=[*ROLES, "default"], default=None,
+                     help="Role of the new account (prompted for from the second account on; 'default' follows "
+                          "the policy's default role)")
     add.add_argument(
         "--clearance",
         default=DEFAULT_CLEARANCE,
@@ -943,13 +1364,39 @@ def build_parser() -> argparse.ArgumentParser:
     grant.add_argument("workspaces", help="Workspace name, comma-separated list, or 'all'")
     grant.add_argument("--perms", default="query",
                        help="Comma-separated: query,review,auto_approve. 'none' denies; 'default' falls back to the defaults")
+    grant.add_argument("--role", choices=WORKSPACE_ROLES, default=None,
+                       help="Grant a role's permissions instead of --perms")
 
     revoke = sub.add_parser("revoke", parents=[signer_parent], help="Deny an account on workspaces (or 'all')")
     revoke.add_argument("username")
     revoke.add_argument("workspaces", help="Workspace name, comma-separated list, or 'all'")
 
-    default = sub.add_parser("set-default", parents=[signer_parent], help="Set the permissions every account holds by default")
-    default.add_argument("--perms", required=True, help="Comma-separated: query,review,auto_approve, or 'none'")
+    default = sub.add_parser("set-default", parents=[signer_parent],
+                             help="Set the default role (or permission set) of accounts without a role of their own")
+    chosen = default.add_mutually_exclusive_group(required=True)
+    chosen.add_argument("--role", choices=WORKSPACE_ROLES)
+    chosen.add_argument("--perms", help="Comma-separated: query,review,auto_approve, or 'none'")
+
+    role_p = sub.add_parser("set-role", parents=[signer_parent], help="Set an account's role ('default' to follow the default role)")
+    role_p.add_argument("username")
+    role_p.add_argument("role", choices=[*ROLES, "default"])
+
+    sub.add_parser("groups", help="List groups, their members, and their workspace roles")
+    cg = sub.add_parser("create-group", parents=[signer_parent], help="Create a group")
+    cg.add_argument("group")
+    dg = sub.add_parser("delete-group", parents=[signer_parent], help="Delete a group (members keep their own access)")
+    dg.add_argument("group")
+    atg = sub.add_parser("add-to-group", parents=[signer_parent], help="Add an account to a group")
+    atg.add_argument("username")
+    atg.add_argument("group")
+    rfg = sub.add_parser("remove-from-group", parents=[signer_parent], help="Remove an account from a group")
+    rfg.add_argument("username")
+    rfg.add_argument("group")
+    gg = sub.add_parser("grant-group", parents=[signer_parent],
+                        help="Give a group a role on workspaces (or 'all'); 'none' denies, 'default' removes the grant")
+    gg.add_argument("group")
+    gg.add_argument("workspaces", help="Workspace name, comma-separated list, or 'all'")
+    gg.add_argument("--role", required=True, choices=[*WORKSPACE_ROLES, "default"])
 
     reset = sub.add_parser("set-password", parents=[signer_parent], help="Set or reset an account's password (prompts)")
     reset.add_argument("username")
@@ -985,7 +1432,7 @@ def _confirm(prompt: str) -> bool:
 
 def _resolve_actor(args: argparse.Namespace) -> str | None:
     """Sign the acting administrator in. The first administrator can be created without one."""
-    if args.command == "list":
+    if args.command in ("list", "groups"):
         return None
     if not has_admin() and args.command == "add-user" and args.admin:
         return None
@@ -1002,15 +1449,47 @@ def main(argv: list[str] | None = None) -> int:
     try:
         actor = _resolve_actor(args)
         if args.command == "add-user":
-            add_user(
-                args.username,
-                _prompt_new_password(args.username),
-                admin=args.admin,
-                clearance=args.clearance,
-                actor=actor,
-            )
-            print(f"Created user '{args.username.lower()}'{' (admin)' if args.admin else ''} [{args.clearance}].")
-            print(f"They start with the default permissions ({', '.join(get_default_permissions()) or 'none'}) on every workspace.")
+            role = args.role
+            if role is None and not args.admin and load_policy()["users"]:
+                role = _prompt_role(args.username)
+            role = None if role == "default" else role
+            password = _prompt_new_password(args.username)
+            chosen = add_user(args.username, password, admin=args.admin, clearance=args.clearance,
+                              actor=actor, role=role)
+            label = chosen or f"default role: {get_default_role() or 'custom'}"
+            print(f"Created user '{args.username.lower()}' ({label}) [{args.clearance}].")
+            perms = effective_permissions(load_policy(), load_policy()["users"][args.username.lower()], "*")
+            print(f"They hold {', '.join(perms) or 'no permissions'} on every workspace without a grant of its own.")
+            for gap in review_mode_report(_workspace_ids()).gaps:
+                print(f"Warning: {gap}")
+        elif args.command == "set-role":
+            set_role(args.username, args.role, actor=actor)
+            print(f"'{args.username.lower()}' now has role '{args.role}'.")
+            for gap in review_mode_report(_workspace_ids()).gaps:
+                print(f"Warning: {gap}")
+        elif args.command == "groups":
+            for g in list_groups():
+                grants = ", ".join(f"{'all' if ws == '*' else ws}({r})" for ws, r in sorted(g["grants"].items()))
+                print(f"{g['group']}: members {', '.join(g['members']) or '-'}; grants {grants or '-'}")
+        elif args.command == "create-group":
+            create_group(args.group, actor=actor)
+            print(f"Created group '{args.group.lower()}'.")
+        elif args.command == "delete-group":
+            delete_group(args.group, actor=actor)
+            print(f"Deleted group '{args.group.lower()}'.")
+        elif args.command == "add-to-group":
+            add_to_group(args.username, args.group, actor=actor)
+            print(f"Added '{args.username.lower()}' to '{args.group.lower()}'.")
+        elif args.command == "remove-from-group":
+            remove_from_group(args.username, args.group, actor=actor)
+            print(f"Removed '{args.username.lower()}' from '{args.group.lower()}'.")
+        elif args.command == "grant-group":
+            targets = ["all"] if _is_all(args.workspaces) else _split(args.workspaces)
+            for ws in targets:
+                grant_group(args.group, ws, args.role, actor=actor)
+            print(f"Group '{args.group.lower()}' has role '{args.role}' on {', '.join(targets)}.")
+            for gap in review_mode_report(_workspace_ids()).gaps:
+                print(f"Warning: {gap}")
         elif args.command == "set-clearance":
             set_user_clearance(args.username, args.clearance, actor=actor)
             print(f"Clearance for '{args.username.lower()}' updated to '{args.clearance}'.")
@@ -1036,8 +1515,13 @@ def main(argv: list[str] | None = None) -> int:
             reset_users(actor=actor)
             print("All user accounts have been reset. Create a new administrator with: make add-user ACCOUNT=<name> MAKE_ADMIN=1")
         elif args.command == "set-default":
-            perms = set_default_permissions(_split(args.perms), actor=actor)
-            print(f"Default permissions for every account are now: {', '.join(perms) or 'none'}.")
+            if args.role:
+                set_default_role(args.role, actor=actor)
+            else:
+                set_default_permissions(_split(args.perms), actor=actor)
+            role = get_default_role()
+            listed = ", ".join(get_default_permissions()) or "none"
+            print(f"Default for accounts without a role: {role or 'custom set'} ({listed}).")
         elif args.command == "grant":
             _grant(args, actor)
         elif args.command == "revoke":
@@ -1050,9 +1534,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Warning: {warning}")
         else:
             defaults = ", ".join(get_default_permissions()) or "none"
-            print(f"Defaults (every account, every workspace): {defaults}")
+            print(f"Default role (accounts without a role, every workspace): {get_default_role() or 'custom'} ({defaults})")
             for user in list_users():
-                flag = " admin" if user["admin"] else ""
+                flag = f" {user['role']}" if user["role"] else ""
+                if user["groups"]:
+                    flag += f" groups={','.join(user['groups'])}"
                 grants = ", ".join(f"{ws}({'/'.join(p) or 'denied'})" for ws, p in user["grants"].items())
                 own = user["default_permissions"]
                 extras = []
@@ -1085,7 +1571,7 @@ def _grant(args: argparse.Namespace, actor: str | None) -> None:
                 reset_grant(name, ws, actor=actor)
             print(f"'{name}' follows the default permissions on {args.workspaces}.")
         return
-    perms = _split(args.perms)
+    perms = list(ROLE_PERMISSIONS[args.role]) if args.role else _split(args.perms)
     if _is_all(args.workspaces):
         set_user_permissions_everywhere(name, perms, actor=actor)
         print(f"Set {', '.join(perms) or 'no permissions'} for '{name}' on every workspace, including future ones.")
