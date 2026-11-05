@@ -8,7 +8,7 @@ Verifies:
 """
 
 from rag_lab.config import settings
-from rag_lab.security.model_integrity import verify_model
+from rag_lab.security.model_integrity import PINNED_MODELS, verify_model
 from rag_lab.retrieval.reranker import rerank_documents, score_pairs
 
 
@@ -16,7 +16,10 @@ def test_reranker_pinned_model_integrity():
     """Verify that the reranker model weights match pinned SHA-256 hashes offline."""
     path = verify_model(settings.reranker_model, settings.models_dir)
     assert path.is_dir()
-    assert (path / "onnx" / "model.onnx").is_file()
+    # The weights file is whichever the profile pins (model_int8.onnx by default): a fixed name only passed on machines
+    # that also held another profile's reranker.
+    weights = [name for name in PINNED_MODELS[settings.reranker_model]["files"] if name.endswith(".onnx")]
+    assert weights and all((path / name).is_file() for name in weights)
 
 
 def test_reranker_reorders_by_relevance():

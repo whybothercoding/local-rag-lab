@@ -89,15 +89,18 @@ PINNED_MODELS: dict[str, dict] = {
             "onnx/model.onnx_data": "f009aa6c6cf21986fd7e0021fa66b20ccce27abc6900a57c7109c8496811bcbe",
         },
     },
-    "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli": {
-        "repo": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
-        "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+    # Full-precision weights on purpose. The int8 file of this model family returned scores that depend on the CPU
+    # (the same true sentence: 0.93 on Apple silicon, 0.12 on x86 Linux), so a verdict could differ per machine;
+    # fp32 gave identical scores on both. tests/test_nli.py refuses a quantized NLI file.
+    "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7": {
+        "repo": "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+        "revision": "b5113eb38ab63efdd7f280f8c144ea8b13f978ce",
         "files": {
-            "config.json": "4e4430c95100d613df80fa01276f231931e1b535557cf62fbb3cc50323e50cca",
-            "special_tokens_map.json": "9463f61e1b109a8eb4688b829260d7c6b1e6dff04c98ff7269bb89e2b92369b9",
-            "tokenizer.json": "3aca3ce69a0a35aeb144a52c4f1d41c4246b8785f8f398315cc8fb6b24057810",
-            "tokenizer_config.json": "df9fd3a4482cc4a866788244824573fab8e74dadd1609d4f0e5997f9e96921dc",
-            "onnx/model_quantized.onnx": "27c39e884c14b03cf46cfc5485971b6db70ff330220d93dfe729c63fde43af0e",
+            "config.json": "bc7b85f164a17c1b007d87fb99d3676f4a4d2e6511d2288dd3f5334dc0f34e6b",
+            "special_tokens_map.json": "311de3f4eed9d76a43bf0d71f10e62e086ca65ccce9f15d5da0d2098bf519ecc",
+            "tokenizer.json": "e23095eb61ba944c7be3a5d3e8ec19e37ce7ced0daa03550bde03e83c21b3f8a",
+            "tokenizer_config.json": "25e9f84c6b43da7bff43a0aee8eeee2c8a39d246823d8464b9275ef704eab42f",
+            "onnx/model.onnx": "e9238a33e07411eae1d1cef1d5f22e5f556717ce586c827581bb59598a45fe37",
         },
     },
 }

@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: models
-          key: embedding-model-${{ hashFiles('model_integrity.py') }}
+          key: embedding-model-${{ hashFiles('rag_lab/security/model_integrity.py') }}
 
       - name: Fetch and verify pinned model weights
         run: python -m rag_lab.ops.fetch_models
