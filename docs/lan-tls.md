@@ -22,12 +22,13 @@ Then open `https://<RAG_LAN_HOST>:<RAG_HTTPS_PORT>/`.
 
 The container reaches the host as `host.docker.internal` (`RAG_UPSTREAM`, default `host.docker.internal:8501`).
 
-* **macOS / Windows (Docker Desktop)**: works with Streamlit bound to loopback. Set
-  `STREAMLIT_SERVER_ADDRESS=127.0.0.1` so the plain-HTTP port is not also offered to the LAN. Checked on macOS
+* **macOS / Windows (Docker Desktop)**: works with Streamlit bound to loopback. `make ui` binds to
+  `127.0.0.1` by default, so the plain-HTTP port is not offered to the LAN. Checked on macOS
   with Docker Desktop: HTTPS, HTTP/2, a local-CA certificate, and a WebSocket upgrade through the proxy.
 * **Linux**: `host.docker.internal` resolves to the Docker bridge gateway, so Streamlit must listen on an address the
-  container can reach. Either run Streamlit on `0.0.0.0` and block port 8501 from the LAN with the host firewall, or
-  run Caddy with host networking and set `RAG_UPSTREAM=127.0.0.1:8501`. This path is not tested here.
+  container can reach. Either run Streamlit with `LAN=1` (listening on `0.0.0.0`) and block port 8501 from the LAN with
+  the host firewall, or run Caddy with host networking and set `RAG_UPSTREAM=127.0.0.1:8501`. This path is not tested
+  here.
 
 ## What it does not do
 

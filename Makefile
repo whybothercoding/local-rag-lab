@@ -208,10 +208,10 @@ sync:
 
 ingest: sync
 
-# 9. Sync, then launch the UI. A failed sync is reported but does not block the UI.
+# 9. Sync, then launch the UI. Binds to 127.0.0.1 by default; use LAN=1 to expose to the network.
 ui:
 	@if [ -n "$(ADMIN)" ]; then ./venv/bin/python -m rag_lab.ingestion.ingest --all --as $(ADMIN) || echo "Indexing failed; launching the UI anyway."; else echo "Skipping workspace sync. To index knowledge_base/ on launch: make ui ADMIN=<admin account>"; fi
-	./venv/bin/streamlit run ui.py
+	STREAMLIT_SERVER_ADDRESS=$${STREAMLIT_SERVER_ADDRESS:-$(if $(filter 1 true yes,$(LAN)),0.0.0.0,127.0.0.1)} ./venv/bin/streamlit run ui.py
 
 # 10. Verify the audit hash chain (exits non-zero if any record was altered or removed)
 audit-verify:
