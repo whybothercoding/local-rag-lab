@@ -7,12 +7,20 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from rag_lab.lang import detect_language
 from rag_lab.pipeline import llm_provider
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
 
+
+LANGUAGE_NAMES: dict[str, str] = {
+    "el": "Greek (Ελληνικά)",
+    "de": "German (Deutsch)",
+    "fr": "French (Français)",
+    "en": "English",
+}
 
 SYSTEM_PROMPT = (
     "You answer questions from internal policy documents.\n"
@@ -33,18 +41,38 @@ def _escape(chunk: str) -> str:
     return _TAG_LIKE.sub(lambda m: f"&lt;{m.group(1)}{m.group(2)}", chunk)
 
 
-def _generation_prompt(documents: list[str], question: str, feedback: str) -> str:
+def _generation_prompt(
+    documents: list[str],
+    question: str,
+    feedback: str,
+    lang: str | None = None,
+) -> str:
     """The user message. Grader feedback goes after the instruction, so the extractive synthesizer, which
     parses the Context and Question sections, reads the same question either way."""
     blocks = "\n".join(f'<document index="{i}">\n{_escape(doc)}\n</document>' for i, doc in enumerate(documents, 1))
-    prompt = f"Context:\n<documents>\n{blocks}\n</documents>\n\nQuestion: {question}\n\nAnswer based strictly on the documents:"
+    if lang is None:
+        lang = detect_language(question)
+    target_lang = LANGUAGE_NAMES.get(lang)
+    if target_lang:
+        instruction = f"Answer strictly in {target_lang} based on the documents:"
+    else:
+        instruction = "Answer based strictly on the documents in the language of the question:"
+    prompt = f"Context:\n<documents>\n{blocks}\n</documents>\n\nQuestion: {question}\n\n{instruction}"
     if feedback:
         prompt += f"\n\nYour previous answer was rejected because {feedback} Write a corrected answer."
     return prompt
 
 
-def _generation_messages(documents: list[str], question: str, feedback: str) -> list[BaseMessage]:
-    return [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=_generation_prompt(documents, question, feedback))]
+def _generation_messages(
+    documents: list[str],
+    question: str,
+    feedback: str,
+    lang: str | None = None,
+) -> list[BaseMessage]:
+    return [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=_generation_prompt(documents, question, feedback, lang=lang)),
+    ]
 
 
 def _clean_output(text: str) -> str:
@@ -75,7 +103,13 @@ def generate_node(state: StateInput) -> dict[str, Any]:
     feedback = str(state.get("grader_feedback") or "")
     telemetry["abstained"] = False
     telemetry["generation_feedback_applied"] = bool(feedback)
-    messages = _generation_messages(docs, search_q, feedback)
+
+    # Detect user inquiry language (from the user's raw question, falling back to original_q)
+    user_q = state.get("asked_question") or original_q
+    lang = detect_language(user_q)
+    telemetry["generation_language"] = lang
+
+    messages = _generation_messages(docs, search_q, feedback, lang=lang)
     try:
         llm = llm_provider.get_chat_llm()
         if llm_provider.llm_is_fallback(llm):
@@ -85,13 +119,13 @@ def generate_node(state: StateInput) -> dict[str, Any]:
         deterministic = isinstance(llm, DeterministicContextLLM)
         telemetry["generator_deterministic"] = deterministic
         if not deterministic:
-            messages = _generation_messages(docs, original_q, feedback)
+            messages = _generation_messages(docs, original_q, feedback, lang=lang)
         response = llm.invoke(messages)
         gen_content = _clean_output(str(response.content))
     except Exception as exc:
         # The model failed. Answer extractively from the same context and flag it for the reviewer.
         gen_content = str(
-            DeterministicContextLLM().invoke(_generation_messages(docs, search_q, feedback)).content
+            DeterministicContextLLM().invoke(_generation_messages(docs, search_q, feedback, lang=lang)).content
         ).strip()
         degraded.append(f"generation_fallback: {type(exc).__name__}; the answer is extractive, not model-written")
         telemetry["generation_fallback"] = True

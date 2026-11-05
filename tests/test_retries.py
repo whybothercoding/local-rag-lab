@@ -326,3 +326,58 @@ def test_extractive_synthesizer_quotes_sentences_without_tags_or_headings():
     docs = ["# Deployment Policy\nStandard deployments run on Tuesday and Thursday between 02:00 and 04:00 UTC."]
     answer = DeterministicContextLLM().invoke(_generation_prompt(docs, "When do deployments run?", "")).content
     assert answer == "Standard deployments run on Tuesday and Thursday between 02:00 and 04:00 UTC."
+
+
+def test_generation_prompt_is_explicit_for_detected_languages(monkeypatch):
+    model = ScriptedModel(lambda prompt, n: "Ok.")
+    _use_model(monkeypatch, model)
+
+    # Greek question
+    res_el = generate_node({
+        "documents": DOCS,
+        "original_question": "Ποιο είναι το SLA επαναφοράς;",
+    })
+    assert "Answer strictly in Greek (Ελληνικά) based on the documents:" in model.prompts[-1]
+    assert res_el["telemetry"]["generation_language"] == "el"
+
+    # German question
+    res_de = generate_node({
+        "documents": DOCS,
+        "original_question": "Was ist das Rollback-SLA für die Produktion?",
+    })
+    assert "Answer strictly in German (Deutsch) based on the documents:" in model.prompts[-1]
+    assert res_de["telemetry"]["generation_language"] == "de"
+
+    # French question
+    res_fr = generate_node({
+        "documents": DOCS,
+        "original_question": "Quel est le SLA de restauration pour la production ?",
+    })
+    assert "Answer strictly in French (Français) based on the documents:" in model.prompts[-1]
+    assert res_fr["telemetry"]["generation_language"] == "fr"
+
+    # English question
+    res_en = generate_node({
+        "documents": DOCS,
+        "original_question": "What is the rollback SLA?",
+    })
+    assert "Answer strictly in English based on the documents:" in model.prompts[-1]
+    assert res_en["telemetry"]["generation_language"] == "en"
+
+    # Undetermined question falls back to generic instruction
+    res_und = generate_node({
+        "documents": DOCS,
+        "original_question": "123 456?",
+    })
+    assert "Answer based strictly on the documents in the language of the question:" in model.prompts[-1]
+    assert res_und["telemetry"]["generation_language"] == "und"
+
+    # Follow-up using asked_question detects the inquiry language even if original_question is English
+    res_followup = generate_node({
+        "documents": DOCS,
+        "original_question": "What is the rollback SLA?",
+        "asked_question": "Και για το staging ποιο είναι;",
+    })
+    assert "Answer strictly in Greek (Ελληνικά) based on the documents:" in model.prompts[-1]
+    assert res_followup["telemetry"]["generation_language"] == "el"
+
