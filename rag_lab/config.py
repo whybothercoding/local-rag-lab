@@ -208,7 +208,7 @@ class Settings:
             embedding_passage_prefix=_env("EMBEDDING_PASSAGE_PREFIX", profile["embedding_passage_prefix"]),
             enable_reranker=_flag("ENABLE_RERANKER", "true"),
             groundedness_method=_env("GROUNDEDNESS_METHOD", "nli"),
-            nli_model=_env("NLI_MODEL", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"),
+            nli_model=_env("NLI_MODEL", "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"),
             groundedness_min_entailment=float(_env("GROUNDEDNESS_MIN_ENTAILMENT", "0.7")),
             nli_pair_min_overlap=float(_env("NLI_PAIR_MIN_OVERLAP", "0.25")),
             models_dir=_env("MODELS_DIR", str(ROOT / "models")),
