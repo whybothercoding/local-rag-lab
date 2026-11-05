@@ -78,6 +78,7 @@ DEFAULT_THRESHOLDS = {
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
     "chitchat_accuracy": 1.0,
+    "entailment_rate": 0.9,
 }
 # German, French, Greek, and cross-lingual questions. Keyword recall is lower than English because the
 # deterministic synthesizer quotes the document's language while some facts are checked in either language.
@@ -90,6 +91,7 @@ MULTILINGUAL_THRESHOLDS = {
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
     "chitchat_accuracy": 1.0,
+    "entailment_rate": 0.9,
 }
 # Follow-ups that only make sense with the earlier turn. Keyword recall is the extractive synthesizer's
 # limit (it cannot infer "business class" from "longer flights"); retrieval finds every expected source.
@@ -98,6 +100,7 @@ CONVERSATION_THRESHOLDS = {
     "retrieval_recall": 0.9,
     "keyword_recall": 0.7,
     "groundedness": 0.5,
+    "entailment_rate": 0.9,
 }
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
@@ -261,6 +264,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         result["context_precision"] = context_precision(sources, expected_sources)
         result["keyword_recall"] = keyword_recall(answer, keywords)
         result["groundedness"] = telemetry.get("groundedness_ratio")
+        result["nli_supported"] = telemetry.get("nli_supported")
         result["passed"] = (
             result["context_recall"] == 1.0 and result["keyword_recall"] == 1.0 and not result["abstained"]
         )

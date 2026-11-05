@@ -41,6 +41,7 @@ make eval-calibrate           # per-case retrieval signals for the calibration s
 | abstention_accuracy | >= 0.8 | Out-of-scope questions were declined |
 | security_accuracy | = 1.0 | Injections were blocked and ungranted accounts were denied |
 | cache_accuracy | = 1.0 | Negated or renumbered questions were not served a cached answer; the control was |
+| entailment_rate | >= 0.9 (every suite) | Every claim of the answer is entailed by a retrieved passage (NLI) |
 | judge_support | >= 0.8 (`--llm` only) | The judge found the answer supported by its context |
 
 `multilingual` is gated as well (thresholds in `SUITE_GATES`). `conversation` is measured and reported but not
@@ -73,6 +74,71 @@ review instead), so nothing could have been reused. Deterministic runs require e
 The gaps the baseline measured, now closed: German, French, and Greek prompt injections are not blocked (the patterns are
 English), negated German/French/Greek questions reuse the cached answer to the opposite question (the negation list
 is English), and the English-only embedding and reranker models miss or mis-rank non-English text.
+
+## Groundedness by entailment
+
+Every answer sentence must be entailed (probability >= 0.7) by a retrieved passage, judged by
+`MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7` (MIT; full-precision ONNX, 1.1 GB; see *Why this
+model* below). Phase 4 first shipped `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` in int8; the table below was measured
+with that model on Apple silicon, where int8 and fp32 agree to under 0.01, and is kept as the record of the method.
+Calibrated with `make calibrate-models` style runs
+(`python -m rag_lab.ops.calibrate --nli-reports ...`) on calibration-split answers from the deterministic,
+qwen3:8b, and gemma4:12b runs, against perturbed negatives:
+
+| Pairs (calibration split) | entailment |
+|---|---|
+| supported sentences (103, incl. 12 cross-lingual) | 0.988 - 0.999 |
+| a sentence from another document of the workspace | <= 0.375 |
+| the same sentence with an invented condition | <= 0.75 (en), <= 0.2 (de/fr/el) |
+| the same sentence with a changed figure | up to 0.997: NLI is weak at numbers, which is why the number check runs first |
+
+Two findings shaped the premises: whole passages made true claims look contradicted ("2 months after probation"
+next to "4 months from year 10" scored 0.002), and unrelated two-sentence premises could "entail" a claim (a Greek
+leave passage, 0.995, for a sentence about expense receipts). Single source sentences plus neighbour pairs that
+share at least a quarter of the claim's content words separate the two cleanly. With qwen3:8b (test split) every suite clears the 0.9 entailment gate (en 0.94, multilingual 1.0,
+conversation 1.0). The one rejected answer added a condition the source does not state ("... sign-off before
+reimbursement") and went to review, as intended. Attribution openers ("Selon les documents, ...") are stripped
+before the check and "the documents do not provide ..." sentences are not claims; both phrase lists live in the
+language data.
+
+### Why this model (and why not int8)
+
+CI was the first run on another CPU, and the int8 file failed there: on an AMD EPYC (x86, AVX-512 VNNI) the same
+sentence a Mac scored 0.93 scored 0.12, and a false claim scored 0.64 instead of 0.01. Across a 42-claim battery 25
+claims differed by more than 0.1 between the two machines (largest 0.81). A session option did not change it
+(`session.x64quantprecision`), and switching graph optimizations off changed the numbers on both machines, so the
+quantized graph itself is the unstable part. A grader whose verdict depends on the CPU is not usable in production.
+The full-precision weights gave **identical scores on both machines** (largest difference under 0.0001), for every
+candidate tried.
+
+Candidates, all fp32, on the 42-claim labelled battery (English, German, French, Greek; true claims, wrong figures,
+wrong documents), identical on arm64 and x86:
+
+| Model | AUC | lowest true / highest false | wrong at the 0.7 gate | size | ms per claim (M-series / 2-vCPU x86) |
+|---|---|---|---|---|---|
+| `mDeBERTa-v3-base-mnli-xnli` (the Phase 4 model) | 0.977 | 0.93 / 1.00 | 2 of 42 | 1.1 GB | 99 / 269 |
+| `mDeBERTa-v3-base-xnli-multilingual-nli-2mil7` | **1.000** | 0.87 / 0.35 | **0 of 42** | 1.1 GB | 106 / 272 |
+| `multilingual-MiniLMv2-L6-mnli-xnli` | 0.973 | 0.43 / 0.99 | 2 of 42 | 0.4 GB | 10 / 32 |
+
+On every sentence of the eval corpus (174 claims: the sentence itself, the same sentence against another document,
+the sentence with an invented condition appended) the chosen model rejected every unrelated sentence
+(highest unrelated score 0.11; the Phase 4 model reached 0.91 for a French one) and rejected invented conditions in
+German, French and Greek. Its one miss, an invented English condition on the change-freeze sentence, is missed by all
+three. On 52 real qwen3:8b answer sentences, each grounded in the right document, it rejected 3 (0.21 for a German
+sentence hedged with "normalerweise", 0.48 for a French "Non, ... ne sont pas perdus", 0.67 for a Greek paraphrase),
+where the Phase 4 model rejected none. That is the price: a few more correct answers go to human review (the safe
+side), in exchange for far fewer wrong claims released. Greek is **not** in this model's NLI fine-tuning data (its
+card lists Greek as a zero-shot test language, which is why it was passed over in Phase 4); on every measurement above
+it still separated Greek claims cleanly (true claims 0.67 and up, in the corpus checks false claims 0.09 and below), and the gate stays 0.7.
+If review volume on Greek answers turns out to be high, that is the first thing to look at.
+
+The int8 reranker (`bge-reranker-v2-m3-int8`, default profile) was checked the same way: scores differed by at most
+0.56 logits between the machines on a 17-logit range, all 10 queries ranked the right document first on both, and the
+smallest margin was 2.46 against 2.51. That is the size of ordinary quantization error (int8 against fp32 on one
+machine: 0.62), not a swing, so it stays.
+
+`tests/test_nli.py` keeps 17 labelled claims with wide margins (true at or above 0.8, false at or below 0.5) and refuses
+quantized NLI weights, so a model swap or a numerics change shows up in the suite on any machine.
 
 ## Chat model choice
 

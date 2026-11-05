@@ -19,7 +19,7 @@ Uses **LangGraph** to model the RAG pipeline as a directed state graph (`GraphSt
 ### 3. Self-Reflective RAG (Self-RAG)
 Implements dynamic self-assessment loops to verify output quality before answers are finalized:
 * **Document Relevance Grading (`grade_docs`)**: Evaluates whether retrieved chunks contain sufficient relevant information to answer the question.
-* **Hallucination Detection (`grade_hallucination`)**: Validates that generated statements are factually grounded in the retrieved citations.
+* **Hallucination Detection (`grade_hallucination`)**: Rejects figures the sources do not contain, then checks each answer sentence with a local multilingual entailment (NLI) model: a sentence passes only if a source sentence states it, in any of English, German, French, or Greek, including across languages. A rejected answer is regenerated with the unsupported sentence named.
 * **Answer Relevance Grading (`grade_relevance`)**: Assesses whether the final answer directly addresses the original user prompt.
 
 ### 4. Corrective RAG (CRAG) & Adaptive Query Rewriting

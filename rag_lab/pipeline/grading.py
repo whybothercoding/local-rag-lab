@@ -8,8 +8,10 @@ from rag_lab.retrieval.reranker import score_pairs
 from rag_lab.security.audit import record as audit_record
 
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
-from rag_lab.lang import fold, words
-from rag_lab.pipeline.text import STOPWORDS, _unsupported_numbers
+import re
+
+from rag_lab.lang import fold, is_no_info_sentence, strip_attribution, words
+from rag_lab.pipeline.text import STOPWORDS, _unsupported_numbers, split_sentences
 
 
 _FEEDBACK_UNSUPPORTED = (
@@ -33,6 +35,31 @@ def _generation_failure(state: StateInput, telemetry: dict[str, Any], feedback: 
     if retries >= settings.max_generation_retries:
         return "circuit_break", {}
     return "retry", {"generation_retry_count": retries + 1, "grader_feedback": feedback}
+
+
+_EXTRACTIVE_PREFIX = re.compile(r"^Based on available documentation:\s*")
+
+
+def _lexical_ratio(gen: str, docs: list[str]) -> float | None:
+    doc_words = set(words(" ".join(docs)))
+    gen_words = [w for w in words(gen) if len(w) > 3]
+    return sum(1 for w in gen_words if w in doc_words) / len(gen_words) if gen_words else None
+
+
+def _nli_verdict(gen: str, docs: list[str], telemetry: dict[str, Any]) -> list[str] | None:
+    """Unsupported answer sentences ([] when every claim is entailed), or None when NLI is unavailable."""
+    from rag_lab.retrieval.nli import NLIUnavailableError, sentence_support
+
+    claims = [strip_attribution(s) for s in split_sentences(_EXTRACTIVE_PREFIX.sub("", gen)) if not is_no_info_sentence(s)]
+    try:
+        scores = [(sentence_support(s, docs), s) for s in claims]
+    except NLIUnavailableError:
+        return None
+    telemetry["nli_min_support"] = round(min((v for v, _ in scores), default=1.0), 4)
+    telemetry["nli_claims"] = len(scores)
+    unsupported = [s for v, s in scores if v < settings.groundedness_min_entailment]
+    telemetry["nli_supported"] = not unsupported
+    return unsupported
 
 
 def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
@@ -67,7 +94,20 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
             "Use only figures that appear in the context."
         )
         status, update = _generation_failure(state, telemetry, feedback)
+    elif docs and settings.groundedness_method == "nli" and (verdict := _nli_verdict(gen, docs, telemetry)) is not None:
+        # Every claim must be stated by a source passage; the word-overlap ratio is kept as telemetry.
+        grader_method = "nli"
+        ratio = _lexical_ratio(gen, docs)
+        if verdict:
+            sentence = verdict[0]
+            telemetry["unsupported_sentence"] = sentence[:200]
+            feedback = (f'it stated something the context does not support: "{sentence[:160]}". '
+                        "State only what the context says.")
+            grader_method = "nli_rejected"
+            status, update = _generation_failure(state, telemetry, feedback)
     elif docs:
+        if settings.groundedness_method == "nli":
+            telemetry["groundedness_fallback"] = "NLI model unavailable; lexical check used"
         doc_words = set(words(" ".join(docs)))
         gen_words = [w for w in words(gen) if len(w) > 3]
         if gen_words:

@@ -45,6 +45,8 @@ def main() -> int:
 
     try:
         models_to_check = [settings.fastembed_model, settings.reranker_model]
+        if settings.groundedness_method == "nli":
+            models_to_check.append(settings.nli_model)
         if args.verify_only:
             for m in models_to_check:
                 path = verify_model(m, settings.models_dir)

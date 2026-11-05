@@ -81,7 +81,9 @@ def test_grade_documents_routes_to_rewrite_on_retry():
     assert result["retry_count"] == 1
 
 
-def test_grade_hallucination_detects_fabrications():
+def test_grade_hallucination_detects_fabrications(monkeypatch):
+    # The lexical + cross-encoder path is the fallback when the NLI model is unavailable.
+    monkeypatch.setattr(settings, "groundedness_method", "lexical")
     state = {
         "documents": ["The capital of France is Paris. Population is approximately 2 million."],
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
@@ -255,7 +257,9 @@ def test_semantic_cache_preserves_citations_on_hit(mocker):
     assert hit["citations"] == ["[CHUNK-001] docs/company_policy.md"]
 
 
-def test_grade_hallucination_lexical_fast_path():
+def test_grade_hallucination_lexical_fast_path(monkeypatch):
+    # The lexical + cross-encoder path is the fallback when the NLI model is unavailable.
+    monkeypatch.setattr(settings, "groundedness_method", "lexical")
     state = {
         "documents": ["Rollback SLA is strictly under 5 minutes."],
         "generation": "Rollback SLA is under 5 minutes.",
@@ -266,7 +270,9 @@ def test_grade_hallucination_lexical_fast_path():
     assert result["telemetry"]["groundedness_grader"] == "lexical_pass"
 
 
-def test_grade_hallucination_hybrid_semantic_pass_for_paraphrase():
+def test_grade_hallucination_hybrid_semantic_pass_for_paraphrase(monkeypatch):
+    # The lexical + cross-encoder path is the fallback when the NLI model is unavailable.
+    monkeypatch.setattr(settings, "groundedness_method", "lexical")
     # Zero literal word overlap of >3 char words, but semantically fully grounded:
     # doc words: employees, submit, expense, claims, within, days
     # gen words: staff, members, file, reimbursement, requests, month
@@ -283,6 +289,7 @@ def test_grade_hallucination_hybrid_semantic_pass_for_paraphrase():
 
 
 def test_grade_hallucination_hybrid_semantic_rejection_and_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "groundedness_method", "lexical")
     state = {
         "documents": ["Employees can submit expense claims within 30 days."],
         "generation": "Bananas grow abundantly on Mars in solar-powered greenhouses.",
