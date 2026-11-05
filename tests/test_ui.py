@@ -125,3 +125,34 @@ def test_every_screen_shows_the_one_rejection_notice():
     source = (Path(UI).parent / "rag_lab" / "ui" / "streamlit_app.py").read_text(encoding="utf-8")
     assert "REJECTION_NOTICE" in source
     assert "rejected by" not in source.lower(), "a rejection text is written inline instead of using REJECTION_NOTICE"
+
+
+def test_session_restores_on_reload_via_query_params():
+    """When a signed session token is present in query params, reload bypasses login and restores user state."""
+    set_grant("alice", "strategy", ["query", "review"])
+    try:
+        app = _signed_in("alice")
+        token = app.query_params.get("session")
+        assert token, "login must record session token in query params"
+
+        # Simulate browser reload with clean session state but preserved URL query params
+        reloaded = AppTest.from_file(UI, default_timeout=120)
+        reloaded.query_params["session"] = token
+        reloaded.query_params["ws"] = "strategy"
+        reloaded.run()
+        assert not reloaded.exception, reloaded.exception
+        assert reloaded.session_state.get("user") == "alice"
+        assert reloaded.sidebar.selectbox[0].value == "strategy"
+    finally:
+        set_grant("alice", "strategy", [])
+
+
+def test_sign_out_clears_session_and_query_params():
+    """Sign out revokes session and clears query params so reload stays on login."""
+    app = _signed_in("alice")
+    assert app.query_params.get("session")
+    sign_out_btn = [b for b in app.sidebar.button if b.label == "Sign out"][0]
+    sign_out_btn.click().run()
+    assert not app.exception, app.exception
+    assert not app.session_state.get("user")
+    assert not app.query_params.get("session")

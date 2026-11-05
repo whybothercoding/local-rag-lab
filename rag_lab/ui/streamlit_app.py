@@ -94,19 +94,25 @@ def _sign_out(notice: str = "", revoke: bool = False) -> None:
             pass
     for key in ("user", "token", "last_seen", "messages", "thread_id", "current_ws", "queue_pick"):
         st.session_state.pop(key, None)
+    st.query_params.clear()
     if notice:
         st.session_state.notice = notice
 
 
 def login_gate() -> None:
     """Stops the script until a user holds a valid, unexpired session."""
-    if st.session_state.get("user"):
-        if not verify_token(st.session_state.get("token", "")):
+    token = st.session_state.get("token") or st.query_params.get("session", "")
+    if token:
+        username = verify_token(token)
+        if not username:
             _sign_out("Your session has expired. Please sign in again.")
-        elif is_idle_expired(st.session_state.last_seen, time.time()):
+        elif "last_seen" in st.session_state and is_idle_expired(st.session_state.last_seen, time.time()):
             _sign_out("You were signed out after 30 minutes of inactivity.")
         else:
+            st.session_state.user = username
+            st.session_state.token = token
             st.session_state.last_seen = time.time()
+            st.query_params["session"] = token
             return
 
     st.title("Local Enterprise Knowledge Hub")
@@ -132,6 +138,7 @@ def login_gate() -> None:
             st.session_state.user = result.username
             st.session_state.token = result.token
             st.session_state.last_seen = time.time()
+            st.query_params["session"] = result.token
             st.rerun()
         message = result.describe()
         if result.reason == "invalid":
@@ -282,7 +289,7 @@ def load_user_threads(engine, username: str, ws_id: str) -> list[dict]:
                 })
         except Exception:
             continue
-    return list(reversed(threads))
+    return threads
 
 
 def _release_engine(engine) -> None:
@@ -349,7 +356,10 @@ if not visible:
     st.info("No workspaces are granted to your account. Ask an administrator for access.")
     st.stop()
 
-active_ws = st.sidebar.selectbox("Active Workspace", visible)
+target_ws = st.session_state.get("current_ws") or st.query_params.get("ws")
+default_ws_idx = visible.index(target_ws) if target_ws in visible else 0
+active_ws = st.sidebar.selectbox("Active Workspace", visible, index=default_ws_idx)
+st.query_params["ws"] = active_ws
 
 stats = get_workspace_stats(active_ws)
 st.sidebar.caption(f"Status: **{stats['files']}** files | **{stats['chunks']}** indexed chunks")
@@ -363,10 +373,18 @@ if "current_ws" not in st.session_state or st.session_state.current_ws != active
     st.session_state.current_ws = active_ws
     st.session_state.pop("thread_id", None)
     st.session_state.pop("messages", None)
+    st.query_params["ws"] = active_ws
+    st.query_params.pop("thread", None)
 
-# Auto-restore latest thread if messages not yet initialized
+# Auto-restore thread: first check query param/state, then newest thread
+target_tid = st.session_state.get("thread_id") or st.query_params.get("thread")
+target_thread = next((t for t in user_threads if t["thread_id"] == target_tid), None) if target_tid else None
+
 if not st.session_state.get("thread_id") or "messages" not in st.session_state:
-    if user_threads:
+    if target_thread:
+        st.session_state.thread_id = target_thread["thread_id"]
+        st.session_state.messages = thread_messages(target_thread)
+    elif user_threads:
         latest = user_threads[0]
         st.session_state.thread_id = latest["thread_id"]
         st.session_state.messages = thread_messages(latest)
@@ -374,11 +392,15 @@ if not st.session_state.get("thread_id") or "messages" not in st.session_state:
         st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
         st.session_state.messages = []
 
+if st.session_state.get("thread_id"):
+    st.query_params["thread"] = st.session_state.thread_id
+
 # Sidebar: Conversation History
 with st.sidebar.expander(f"Conversations ({len(user_threads)})", expanded=True):
     if st.button("➕ New Chat", use_container_width=True, key="new_chat_btn"):
         st.session_state.thread_id = f"ui-{active_ws}-{uuid.uuid4().hex}"
         st.session_state.messages = []
+        st.query_params["thread"] = st.session_state.thread_id
         st.rerun()
 
     if user_threads:
@@ -398,6 +420,7 @@ with st.sidebar.expander(f"Conversations ({len(user_threads)})", expanded=True):
         )
         if selected_tid != curr_tid:
             st.session_state.thread_id = selected_tid
+            st.query_params["thread"] = selected_tid
             target = next((t for t in user_threads if t["thread_id"] == selected_tid), None)
             if target:
                 st.session_state.messages = thread_messages(target)
