@@ -149,6 +149,19 @@ def test_status_shows_the_review_mode(rollback_index, capsys, monkeypatch):
     assert "[OK] Review mode:" in out
 
 
+def test_status_flags_a_workspace_indexed_with_another_model(rollback_index, capsys, monkeypatch):
+    """Dense search is off for such a workspace and its answers wait for a reviewer, so status must say so and how to fix it."""
+    from rag_lab.storage.workspace_manager import print_status
+
+    monkeypatch.setattr("rag_lab.pipeline.llm_provider.ollama_models", lambda *a, **k: None)
+    monkeypatch.setattr("rag_lab.retrieval.embedding_provider.embedding_fingerprint", lambda: "fastembed:some-other-model")
+    assert print_status() == 1
+    out = capsys.readouterr().out
+    assert "[!!]   default: indexed with" in out
+    assert "but the runtime uses fastembed:some-other-model" in out
+    assert "make sync WS=default FORCE=1" in out
+
+
 def test_admin_panel_shows_the_review_mode():
     from pathlib import Path
 
