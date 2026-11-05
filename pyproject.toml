@@ -40,6 +40,7 @@ dependencies = [
     "langchain-ollama>=0.2.0",
     "langchain-text-splitters>=0.3.0",
     "chromadb>=0.5.0",
+    "numpy>=1.26",
     "fastembed>=0.9.0",
     "huggingface-hub>=0.25.0",
     "PyYAML>=6.0",

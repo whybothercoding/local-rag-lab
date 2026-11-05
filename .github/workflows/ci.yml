@@ -58,7 +58,7 @@ jobs:
 
       - name: Build and install native Rust accelerator
         run: |
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin build --release -m crates/rag_accel/Cargo.toml
+          maturin build --release --locked -m crates/rag_accel/Cargo.toml
           pip install crates/rag_accel/target/wheels/*.whl
 
       - name: Restore embedding model cache
@@ -75,6 +75,8 @@ jobs:
           # A missing PostgreSQL server or Rust accelerator fails the run instead of skipping its tests.
           REQUIRE_POSTGRES: "1"
           REQUIRE_RUST_ACCEL: "1"
+          # The accelerator is the default here: a missing one stops the process instead of falling back.
+          RAG_ACCEL: required
         run: pytest -v --cov=. --cov-report=term-missing:skip-covered
 
       - name: Run test suite with all outbound network blocked
@@ -82,4 +84,5 @@ jobs:
           RAG_OFFLINE: "1"
           REQUIRE_POSTGRES: "1"
           REQUIRE_RUST_ACCEL: "1"
+          RAG_ACCEL: required
         run: pytest -v

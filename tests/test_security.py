@@ -251,8 +251,8 @@ def test_corrupt_office_file_is_refused_cleanly(tmp_path):
 
 def test_parser_runs_under_a_time_limit(tmp_path, monkeypatch):
     import rag_lab.ingestion.parsers as parsers
-    note = tmp_path / "note.md"
-    note.write_text("hello", encoding="utf-8")
+    note = tmp_path / "note.csv"  # a format that is still parsed in the sandboxed child (plain text is decoded in-process)
+    note.write_text("a,b\n1,2\n", encoding="utf-8")
     monkeypatch.setattr(parsers, "PARSE_TIMEOUT_SEC", 0.001)
     with pytest.raises(ParseError, match="longer than"):
         extract_text_from_file(note)

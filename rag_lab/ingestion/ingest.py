@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import chromadb
+import numpy as np
 import yaml
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -33,6 +34,7 @@ from rag_lab.retrieval.embedding_provider import (
     EmbeddingUnavailableError,
     embedding_fingerprint,
     get_embedding_model,
+    stored_fingerprint,
 )
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
@@ -64,6 +66,9 @@ class IngestResult:
     cleared: bool = False
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # Vectors taken over from the previous index (chunks whose text did not change) and chunks embedded afresh.
+    reused: int = 0
+    embedded: int = 0
 
     @property
     def ok(self) -> bool:
@@ -105,6 +110,39 @@ def chunk_document(text: str, splitter) -> list[str]:
         for piece in splitter.split_text("\n".join(lines).strip()):
             chunks.append(f"{heading}\n{piece}" if heading else piece)
     return chunks
+
+
+def _reusable_vectors(ws_id: str, fingerprint: str, manifest: dict | None, force: bool) -> dict[str, list[float]]:
+    """Vectors of the live index by exact chunk text, for chunks that need not be embedded again.
+
+    A vector depends only on the model and on the text it embedded (prefix included), so an unchanged chunk keeps
+    its vector however the rest of the workspace changed. Reuse is limited to the same workspace and to an index
+    built by the same model fingerprint with the same passage prefix; an older manifest that did not record the
+    prefix is not trusted, and neither is an index that cannot be read in full. FORCE=1 recomputes everything.
+    """
+    if force or manifest is None:
+        return {}
+    if manifest.get("embedding") != fingerprint or manifest.get("passage_prefix") != settings.embedding_passage_prefix:
+        return {}
+    try:
+        collection = chromadb.PersistentClient(path=settings.chroma_path).get_collection(f"ws_{ws_id}")
+        if stored_fingerprint(getattr(collection, "metadata", None), manifest) != fingerprint:
+            return {}
+        found: dict[str, list[float]] = {}
+        total = collection.count()
+        for offset in range(0, total, 1000):
+            page = collection.get(include=["documents", "embeddings"], limit=1000, offset=offset)
+            texts, vectors = page.get("documents") or [], page.get("embeddings")
+            if vectors is None or len(texts) != len(vectors):
+                return {}
+            for text, vector in zip(texts, vectors):
+                array = np.asarray(vector, dtype=np.float64)
+                if text and array.ndim == 1 and array.size and bool(np.isfinite(array).all()):
+                    found.setdefault(text, array.tolist())
+        return found
+    except Exception:
+        logger.debug("Could not read the previous vectors of %s; embedding everything", ws_id, exc_info=True)
+        return {}
 
 
 def _get_manifest_path(ws_id: str) -> Path:
@@ -444,9 +482,12 @@ def ingest_workspace(
         result.error = "Documents were read but produced no chunks."
         return result
 
+    # Only chunks whose text is new are embedded; the rest keep the vector they already have (one call, fastembed
+    # batches it internally: measured, other batch sizes, thread counts and worker processes were not faster).
+    stored = _reusable_vectors(ws_id, fingerprint, manifest, force)
+    to_embed = list(dict.fromkeys(text for text in chunks if text not in stored))
     try:
-        embeddings = get_embedding_model()
-        vectors = embeddings.embed_documents(chunks)
+        fresh = get_embedding_model().embed_documents(to_embed) if to_embed else []
     except Exception as exc:
         logger.exception("Embedding failed for workspace %s", ws_id)
         result.error = (
@@ -455,9 +496,13 @@ def ingest_workspace(
         )
         return result
 
-    if len(vectors) != len(chunks):
+    if len(fresh) != len(to_embed):
         result.error = "Embedding service returned a different number of vectors than chunks."
         return result
+    by_text = {**stored, **dict(zip(to_embed, fresh))}
+    vectors = [by_text[text] for text in chunks]
+    result.reused = sum(1 for text in chunks if text in stored)
+    result.embedded = len(to_embed)
 
     chroma_path = settings.chroma_path
     bm25_dir = settings.bm25_dir
@@ -488,6 +533,7 @@ def ingest_workspace(
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "embedding": fingerprint,
+            "passage_prefix": settings.embedding_passage_prefix,
             "sparse_tokenizer": settings.sparse_tokenizer,
             "chunker": CHUNKER_VERSION,
             "total_chunks": len(chunks),
@@ -546,9 +592,10 @@ def _print_result(result: IngestResult) -> None:
             f"{result.documents} file(s), {result.chunks} chunks (skipped re-embedding)."
         )
         return
+    reuse = f" ({result.reused} stored vector(s) reused, {result.embedded} embedded)" if result.reused else ""
     print(
         f"Workspace '{result.workspace_id}' indexed successfully: "
-        f"{result.documents} file(s), {result.chunks} chunks."
+        f"{result.documents} file(s), {result.chunks} chunks{reuse}."
     )
 
 

@@ -12,15 +12,17 @@ nobody reviewed.
 Two-stage retrieval:
 1. Exact Match: Sub-millisecond lookup across the caller's authorized clearance
    hierarchy (from caller's clearance down to public).
-2. Semantic Match: In-process vector cosine similarity against cached questions
-   in the same workspace and index version clearing the similarity threshold. The two questions must
-   also carry the same numbers and negations, so "VAT in 2024" never answers "VAT in 2025".
+2. Semantic Match: cosine similarity against cached questions in the same workspace and index version
+   clearing the similarity threshold, by one matrix product per (workspace, clearance, index version)
+   partition (cache_index.py; only the clearances the caller may see are searched). The two questions
+   must also carry the same numbers and negations, so "VAT in 2024" never answers "VAT in 2025".
 """
 from __future__ import annotations
 
 import array
 import collections
 import collections.abc
+import functools
 import re
 from contextlib import contextmanager
 import hashlib
@@ -31,8 +33,11 @@ import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Generator, Optional
+from typing import Any, Generator
 
+import numpy as np
+
+from rag_lab.retrieval import cache_index
 from rag_lab.security.access import allowed_clearances as get_allowed_clearances
 from rag_lab.config import settings
 from rag_lab.lang import NEGATIONS, detect_language, fold, words
@@ -41,8 +46,6 @@ from rag_lab.security.vault import InvalidTag, open_bytes, open_text, seal_bytes
 logger = logging.getLogger("semantic_cache")
 
 MAX_L1_SIZE = 2048
-# Semantic matching scans in Python, so it only looks at the newest entries of a workspace.
-MAX_SEMANTIC_CANDIDATES = 2000
 _L1_LOCK = threading.Lock()
 _L1_GENERATIONS: "collections.OrderedDict[str, str]" = collections.OrderedDict()
 _L1_CITATIONS: dict[str, list[str]] = {}
@@ -202,6 +205,15 @@ def _open_db(db_path: str | None = None) -> Generator[sqlite3.Connection, None, 
             """
             CREATE INDEX IF NOT EXISTS idx_cache_ws_clr_ver
             ON semantic_cache (workspace_id, clearance, index_version);
+            """
+        )
+        # Covers the query that keeps the in-memory vector index in step with the table (cache_index.py): it reads
+        # a partition's key, rowid, created_at and reviewed flag without touching the table rows.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_cache_partition_sync
+            ON semantic_cache (workspace_id, clearance, index_version, created_at DESC, reviewed, key)
+            WHERE query_vector IS NOT NULL;
             """
         )
         yield conn
@@ -377,48 +389,102 @@ def lookup_cache(
                     return _hit(entry, "exact", 1.0)
 
             # 2. Semantic vector similarity across the matching workspace and index version
-            placeholders = ", ".join("?" for _ in authorized)
-            rows = conn.execute(
-                f"""
-                SELECT {_COLUMNS} FROM semantic_cache
-                WHERE workspace_id = ? AND index_version = ? AND clearance IN ({placeholders})
-                  AND query_vector IS NOT NULL AND created_at >= ?
-                ORDER BY created_at DESC LIMIT ?;
-                """,
-                [workspace_id, curr_version, *authorized, cutoff, MAX_SEMANTIC_CANDIDATES],
-            ).fetchall()
+            return _semantic_lookup(
+                conn, str(Path(db_path or settings.cache_db_path).resolve()), workspace_id, authorized, curr_version,
+                cleaned_query, cutoff, sim_threshold, include_unreviewed,
+            )
     except Exception as exc:
         logger.debug("Cache lookup error: %s", exc)
         return {"hit": False}
 
-    candidates = [e for e in (_open_row(r) for r in rows) if e and e["vector"]]
-    if not include_unreviewed:
-        candidates = [e for e in candidates if e["reviewed"]]
-    if not candidates:
+
+def _load_for_index(
+    conn: sqlite3.Connection, workspace_id: str, clearance: str, version: str, keys: list[str]
+) -> dict[str, tuple[np.ndarray, Any]]:
+    """Open the rows of one partition that the index has not seen. Rows that do not open are left out."""
+    placeholders = ", ".join("?" for _ in keys)
+    rows = conn.execute(
+        f"SELECT {_COLUMNS} FROM semantic_cache WHERE key IN ({placeholders}) "
+        "AND workspace_id = ? AND clearance = ? AND index_version = ?;",
+        [*keys, workspace_id, clearance, version],
+    ).fetchall()
+    loaded: dict[str, tuple[np.ndarray, Any]] = {}
+    for row in rows:
+        entry = _open_row(row)
+        if not entry or entry["clearance"] != clearance:
+            continue
+        vector = cache_index.unit(entry["vector"])
+        if vector is not None:
+            loaded[entry["key"]] = (vector, _signature(entry["query"]))
+    return loaded
+
+
+def _semantic_lookup(
+    conn: sqlite3.Connection,
+    db_key: str,
+    workspace_id: str,
+    authorized: list[str],
+    version: str,
+    query: str,
+    cutoff: str,
+    threshold: float,
+    include_unreviewed: bool,
+) -> dict[str, Any]:
+    """Best cached answer to a similar question, from the partitions the caller may read.
+
+    The index proposes candidates; the winner is re-read from the database, opened (seal and row identity
+    checked), re-checked for clearance, review status, numbers and negations, and its cosine is recomputed
+    from the stored vector before anything is returned.
+    """
+    with cache_index.LOCK:
+        partitions = []
+        for clearance in authorized:
+            index = cache_index.partition(db_key, workspace_id, clearance, version)
+            light = conn.execute(
+                "SELECT key, rowid, created_at, reviewed FROM semantic_cache "
+                "WHERE workspace_id = ? AND clearance = ? AND index_version = ? AND query_vector IS NOT NULL "
+                "AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?;",
+                (workspace_id, clearance, version, cutoff, cache_index.MAX_INDEXED_PER_PARTITION),
+            ).fetchall()
+            index.sync(light, functools.partial(_load_for_index, conn, workspace_id, clearance, version))
+            if index.size and (include_unreviewed or any(index.reviewed)):
+                partitions.append(index)
+        cache_index.enforce_budget()
+    if not partitions:
         return {"hit": False}
 
     try:
         from rag_lab.retrieval.embedding_provider import get_embedding_model
 
-        q_vec = get_embedding_model().embed_query(cleaned_query)
-        if not q_vec:
+        q_vec = get_embedding_model().embed_query(query)
+        unit_query = cache_index.unit(q_vec) if q_vec else None
+        if unit_query is None:
             return {"hit": False}
     except Exception as exc:
         logger.debug("Embedding generation for semantic cache lookup failed: %s", exc)
         return {"hit": False}
 
-    query_signature = _signature(cleaned_query)
-    best_entry: Optional[dict[str, Any]] = None
-    best_sim = -1.0
-    for entry in candidates:
-        if _signature(entry["query"]) != query_signature:
+    signature = _signature(query)
+    with cache_index.LOCK:
+        matches = [m for index in partitions for m in index.search(unit_query, threshold, signature, include_unreviewed)]
+    matches.sort(key=lambda m: m.created, reverse=True)
+    matches.sort(key=lambda m: -m.similarity)
+    for match in matches[:8]:
+        row = conn.execute(
+            f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ? AND workspace_id = ? AND clearance = ? "
+            "AND index_version = ? AND created_at >= ?;",
+            (match.key, workspace_id, match.clearance, version, cutoff),
+        ).fetchone()
+        entry = _open_row(row) if row else None
+        if not entry or entry["clearance"] != match.clearance or not entry["vector"]:
             continue
-        sim = _cosine_similarity(q_vec, entry["vector"])
-        if sim > best_sim:
-            best_sim, best_entry = sim, entry
-
-    if best_entry is not None and best_sim >= sim_threshold:
-        return _hit(best_entry, "semantic", round(float(best_sim), 4))
+        if not include_unreviewed and not entry["reviewed"]:
+            continue
+        if _signature(entry["query"]) != signature:
+            continue
+        similarity = _cosine_similarity(q_vec, entry["vector"])
+        if similarity >= threshold:
+            return _hit(entry, "semantic", round(float(similarity), 4))
     return {"hit": False}
 
 
@@ -438,6 +504,7 @@ def _delete_where(sql_select: str, sql_delete: str, params: tuple, db_path: str 
 def prune_stale_cache(workspace_id: str, db_path: str | None = None) -> int:
     """Evict cached entries whose index_version does not match current workspace manifest."""
     params = (workspace_id, _index_version(workspace_id))
+    cache_index.forget()
     return _delete_where(
         "SELECT key FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
         "DELETE FROM semantic_cache WHERE workspace_id = ? AND index_version != ?;",
@@ -468,6 +535,7 @@ def clear_workspace_cache(workspace_id: str, db_path: str | None = None) -> None
 def clear_cache(db_path: str | None = None) -> None:
     """Wipe all cache entries from L1 memory and SQLite."""
     _l1_clear()
+    cache_index.forget()
     try:
         with _open_db(db_path) as conn:
             conn.execute("DELETE FROM semantic_cache;")

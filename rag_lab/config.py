@@ -141,6 +141,9 @@ class Settings:
     # Whether `make recover` (the operator-run break-glass for a locked-out account) may run. On by default: this
     # is a local-first tool and its operator owns the machine. Turn it off on a shared host.
     local_recovery: bool
+    # The native accelerator (rag_accel): "preferred" uses it and falls back, loudly, to pure Python when it is
+    # missing; "required" refuses to start without it. See rag_lab/accel.py.
+    rag_accel: str
     # Name of a registered envelope-encryption provider (Vault/KMS) that wraps newly created keys. Empty: none.
     key_envelope: str
     backup_dir: str
@@ -221,6 +224,7 @@ class Settings:
             key_service=_env("KEY_SERVICE", "local-rag-lab"),
             key_envelope=_env("KEY_ENVELOPE", "").strip(),
             local_recovery=_flag("LOCAL_RECOVERY", "on"),
+            rag_accel=_env("RAG_ACCEL", "preferred").strip().lower(),
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),

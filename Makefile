@@ -10,7 +10,7 @@ help:
 	@echo "  make models [PROFILE=multilingual|multilingual-large|en]  Download & verify the profile's pinned models"
 	@echo "  make verify-models [PROFILE=...]               Verify cached ONNX model SHA-256 hashes offline"
 	@echo "  make calibrate-models [PROFILE=...]            Suggest the profile's thresholds from the eval calibration split"
-	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
+	@echo "  make rust-build                                Compile the native Rust accelerator (rag_accel) from source"
 	@echo "  make ollama-pull                               Pull the optional Ollama chat model"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
 	@echo "  make lan-tls                                   Optional HTTPS for the UI on the LAN (Caddy profile, docs/lan-tls.md)"
@@ -94,18 +94,20 @@ setup:
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install -r requirements.txt
 	./venv/bin/pip install -e . --no-build-isolation
+	./venv/bin/python -m rag_lab.ops.install_accel
 	@echo "Setup complete. Next steps:"
 	@echo "  1. 'make models' (one-time download; requires network)"
-	@echo "  2. (Optional) 'make rust-build' to compile high-throughput Rust accelerator"
+	@echo "  2. 'make status' shows whether the native accelerator is active (wheelhouse/ wheel, else cargo, else Python fallback)"
 	@echo "  3. 'make add-user ACCOUNT=<name> ADMIN=1' to create your admin account"
 	@echo "  4. (optional) 'make add-user ACCOUNT=<colleague> ADMIN=<name>' adds accounts; you choose a role for each"
 	@echo "  5. 'make sync ADMIN=<name>' to index knowledge_base/ workspaces"
 	@echo "  6. 'make ui' to launch the application"
 
-# 1b. Build optional native Rust accelerator module (rag_accel) for high-throughput context scanning
+# 1b. Build the native Rust accelerator module (rag_accel) from source. 'make setup' installs a prebuilt wheel from
+# wheelhouse/ first, then falls back to this when cargo exists, then to pure Python (see rag_lab/ops/install_accel.py).
 rust-build:
 	@./venv/bin/pip show maturin >/dev/null 2>&1 || ./venv/bin/pip install "maturin>=1.7.0"
-	PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 VIRTUAL_ENV=$$PWD/venv ./venv/bin/maturin develop --release -m crates/rag_accel/Cargo.toml
+	VIRTUAL_ENV=$$PWD/venv ./venv/bin/maturin develop --release --locked -m crates/rag_accel/Cargo.toml
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
 models:

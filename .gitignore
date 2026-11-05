@@ -33,6 +33,9 @@ access_policy.json
 access_policy.json.*.bak
 *.key
 
+# Prebuilt rag_accel wheels (CI artifacts) that 'make setup' installs without a Rust toolchain
+wheelhouse/
+
 # Backups & exports (governance data)
 backups/
 *.backup
