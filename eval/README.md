@@ -7,8 +7,8 @@ Everything runs locally: a fresh index is built in `eval/out/`, and no productio
 
 - `corpus/` holds synthetic policy documents in six workspaces: `engineering`, `finance`, `hr` (English),
   `zurich` (German, with one confidential file), `geneve` (French), and `athens` (Greek).
-- `golden.json` has 142 cases. Each case has:
-  - `suite`: `en` (45), `multilingual` (86: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups).
+- `golden.json` has 159 cases. Each case has:
+  - `suite`: `en` (50), `multilingual` (98: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups).
   - `lang`: the question's language (`en`, `de`, `fr`, `el`). Cross-lingual cases ask in one language about documents in another.
   - `split`: `calibration` chooses thresholds; `test` is held out and gated.
   - `expect`: `answer` (default), `abstain`, `blocked` (prompt injection), `denied` (no grant), `fresh` (a negated or

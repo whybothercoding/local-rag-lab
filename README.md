@@ -18,7 +18,7 @@ Uses **LangGraph** to model the RAG pipeline as a directed state graph (`GraphSt
 
 ### 3. Self-Reflective RAG (Self-RAG)
 Implements dynamic self-assessment loops to verify output quality before answers are finalized:
-* **Document Relevance Grading (`grade_docs`)**: Evaluates whether retrieved chunks contain sufficient relevant information to answer the question.
+* **Document Relevance Grading (`retrieve` + `grade_docs`)**: the evidence gate in `retrieve` (see Retrieval Abstention & Evidence Thresholds) keeps only chunks that clear the profile's relevance threshold; `grade_docs` then checks that any survived and otherwise routes to `rewrite`.
 * **Hallucination Detection (`grade_hallucination`)**: Rejects figures the sources do not contain, then checks each answer sentence with a local, full-precision multilingual entailment (NLI) model (`mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`, scores identical on arm64 and x86): a sentence passes only if a source sentence states it, in any of English, German, French, or Greek, including across languages. A rejected answer is regenerated with the unsupported sentence named.
 * **Answer Relevance Grading (`grade_relevance`)**: Assesses whether the final answer directly addresses the original user prompt.
 
@@ -41,7 +41,7 @@ To prevent hallucinations on irrelevant context, the system enforces strict evid
 * If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
 
 ### 7. State-Scoped & Clearance-Partitioned Semantic Caching
-* Approved query responses and their citations are cached in memory using a composite key: `hashlib.sha256(f"{workspace_id}:{clearance}:{index_fingerprint}:{original_question}")`.
+* Approved answers and their citations are stored sealed (AES-256-GCM) in a persistent SQLite cache with a bounded in-memory L1 in front (`CACHE_BACKEND=postgres` shares one table instead). Lookup is two-stage: an exact match on a composite key, `hashlib.sha256(f"{workspace_id}:{clearance}:{index_version}:{normalized_question}")`, then a cosine match inside the same partition, which also requires the same numbers, negations and language.
 * Partitioning by user clearance ensures a lower-clearance user never hits a cached answer generated from higher-clearance documents, while keying on `original_question` ensures queries rewritten during CRAG loops still hit the cache on subsequent asks.
 * Re-indexing or updating documents automatically rotates `index_fingerprint`, guaranteeing instant cache invalidation with zero stale data served.
 
