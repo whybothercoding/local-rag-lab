@@ -44,8 +44,8 @@ make eval-calibrate           # per-case retrieval signals for the calibration s
 | entailment_rate | >= 0.9 (every suite) | Every claim of the answer is entailed by a retrieved passage (NLI) |
 | judge_support | >= 0.8 (`--llm` only) | The judge found the answer supported by its context |
 
-`multilingual` is gated as well (thresholds in `SUITE_GATES`). `conversation` is measured and reported but not
-gated until follow-up questions use the conversation history.
+`multilingual` and `conversation` are gated as well (thresholds in `SUITE_GATES`; `conversation` gates answer rate,
+retrieval recall, keyword recall >= 0.7, groundedness and entailment).
 
 ### Baseline before the multilingual work (test split)
 
@@ -67,6 +67,15 @@ gated until follow-up questions use the conversation history.
 | multilingual | deterministic | 0.98 | 0.98 | 0.80 | 1.00 | 1.00 | 1.00 | - |
 | multilingual | llm | 0.98 | 0.98 | 0.93 | 1.00 | 1.00 | 1.00 (2 inconclusive) | 0.93 |
 | conversation | llm | 1.00 | 1.00 | 0.89 | - | - | - | 0.89 |
+
+The tables above are the record of their milestones, measured on an earlier, smaller `golden.json`. A deterministic
+`make eval` on the current 159 cases (test split, 2026-11-05) gives:
+
+| Suite | Mode | answer | recall | keywords | abstain | security | cache | judge |
+|---|---|---|---|---|---|---|---|---|
+| en | deterministic | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | - |
+| multilingual | deterministic | 0.98 | 0.98 | 0.84 | 1.00 | 1.00 | 1.00 | - |
+| conversation | deterministic | 1.00 | 1.00 | 0.78 | - | - | - | - |
 
 A cache case is inconclusive when its earlier answer was never cached (a real model's terse answer went to
 review instead), so nothing could have been reused. Deterministic runs require every cache case to be conclusive.
