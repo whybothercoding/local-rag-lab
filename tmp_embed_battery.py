@@ -29,5 +29,7 @@ out = {"platform": f"{platform.machine()} {platform.system()}", "model": setting
 print(out["platform"], settings.fastembed_model, len(texts), "passages,", len(questions), "questions", flush=True)
 Path(sys.argv[1]).write_text(json.dumps(out))
 import base64, gzip
-print("EMBED_B64", base64.b64encode(gzip.compress(json.dumps(out).encode())).decode())
+blob = base64.b64encode(gzip.compress(json.dumps(out).encode())).decode()
+for i in range(0, len(blob), 3000):
+    print(f"EMBED_B64 {i // 3000:04d} {blob[i:i + 3000]}")
 print("EMBED_SIMS_SAMPLE", np.round(sims[0, :5], 4).tolist())
