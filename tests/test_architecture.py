@@ -79,7 +79,6 @@ def test_python_snippets_in_the_makefile_still_run():
 def test_eval_documentation_tracks_golden_set():
     """Pin the case counts and suite splits in eval/README.md to eval/golden.json so doc drift is prevented."""
     import json
-    import re
     from collections import Counter
 
     golden_path = ROOT / "eval" / "golden.json"

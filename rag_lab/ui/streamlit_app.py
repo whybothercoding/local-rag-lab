@@ -50,14 +50,13 @@ from rag_lab.security.access import (
 )
 from rag_lab.pipeline.graph import workflow
 from rag_lab.pipeline.entry import prepare_pipeline_input
-from rag_lab.pipeline.state import REJECTION_NOTICE, GraphState
+from rag_lab.pipeline.state import REJECTION_NOTICE
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
 from rag_lab.storage.checkpointer import close_checkpointer, fetch_checkpoint_threads, open_checkpointer, shared_pool
 from rag_lab.config import settings
 from rag_lab.ingestion.ingest import ingest_workspace
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
-from rag_lab.security.redaction import redact_pii
 from rag_lab.storage.workspace_manager import (
     list_workspaces,
     create_workspace,

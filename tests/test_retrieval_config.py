@@ -1,5 +1,4 @@
 """Configurable retrieval candidate widths (dense, sparse, fusion pool, rerank top k)."""
-import os
 from unittest.mock import MagicMock
 
 from rag_lab.config import Settings, settings
