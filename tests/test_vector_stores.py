@@ -362,6 +362,10 @@ def test_the_pgvector_pool_is_closed_at_exit_so_the_interpreter_finishes_cleanly
     uri = os.getenv("PGVECTOR_TEST_URI") or pgvector_uri_from_env()
     if not uri:
         _unavailable("no pgvector server", "REQUIRE_PGVECTOR")
+    try:  # a URI derived from .env says nothing about whether the server is running
+        psycopg.connect(uri, connect_timeout=3).close()
+    except psycopg.OperationalError as exc:
+        _unavailable(f"pgvector server unreachable ({type(exc).__name__})", "REQUIRE_PGVECTOR")
     schema = f"pytest_exit_{uuid.uuid4().hex[:6]}"
     code = (
         "import os, sys\n"
