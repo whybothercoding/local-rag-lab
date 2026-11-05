@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG Lab Concept Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a reference page. Diagrams first (big picture, then the pipeline), journeys through it, a filterable glossary,
+   then access, data and code maps. Every concept leads with a plain one-liner, then the engineering line with real numbers. */
+:root {
+  --bg: #f3f6f8;
+  --surface: #ffffff;
+  --surface-2: #e9eff3;
+  --ink: #14212b;
+  --muted: #53636e;
+  --line: #d3dce2;
+  --line-strong: #8aa0ad;
+  --accent: #0b6e8a;
+  --accent-ink: #ffffff;
+  --accent-soft: #dff0f5;
+  --c-sec: #a05d00;
+  --c-ret: #0b6e8a;
+  --c-gen: #6a45c0;
+  --c-grd: #1b7f4c;
+  --c-loop: #b0318a;
+  --stop: #b3261e;
+  --stop-soft: #fbe4e2;
+  --warn-soft: #fdf0d9;
+  --font-display: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1920;
+    --surface: #15242d;
+    --surface-2: #1c2f3a;
+    --ink: #e5edf2;
+    --muted: #9db0bc;
+    --line: #2b404c;
+    --line-strong: #5f7a89;
+    --accent: #5cc8e0;
+    --accent-ink: #08222b;
+    --accent-soft: #14323d;
+    --c-sec: #f0b45a;
+    --c-ret: #5cc8e0;
+    --c-gen: #b79cff;
+    --c-grd: #62d394;
+    --c-loop: #ff7ac8;
+    --stop: #ff8f86;
+    --stop-soft: #3d1c1a;
+    --warn-soft: #3a2c12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1920;
+  --surface: #15242d;
+  --surface-2: #1c2f3a;
+  --ink: #e5edf2;
+  --muted: #9db0bc;
+  --line: #2b404c;
+  --line-strong: #5f7a89;
+  --accent: #5cc8e0;
+  --accent-ink: #08222b;
+  --accent-soft: #14323d;
+  --c-sec: #f0b45a;
+  --c-ret: #5cc8e0;
+  --c-gen: #b79cff;
+  --c-grd: #62d394;
+  --c-loop: #ff7ac8;
+  --stop: #ff8f86;
+  --stop-soft: #3d1c1a;
+  --warn-soft: #3a2c12;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+code { font-family: var(--font-mono); font-size: 0.86em; }
+:not(pre) > code { background: var(--surface-2); padding: 0.1em 0.4em; border-radius: 4px; overflow-wrap: anywhere; }
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -0.02em; }
+h2 { font-size: 1.7rem; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; }
+p { margin: 0; }
+
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--line); }
+.topbar-in { max-width: 1040px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
+.brand { font-family: var(--font-display); font-weight: 700; margin-right: auto; }
+.topbar nav { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.92rem; }
+.topbar nav a { text-decoration: none; color: var(--muted); padding: 2px 0; }
+.topbar nav a:hover { color: var(--accent); text-decoration: underline; }
+
+main { max-width: 1040px; margin: 0 auto; padding: 0 16px 80px; }
+.hero { padding: 44px 0 20px; display: grid; gap: 14px; }
+.hero .lead { font-size: 1.15rem; max-width: 66ch; color: var(--muted); }
+.hero .lead strong { color: var(--ink); }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.facts span { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 3px 12px; font-size: 0.86rem; color: var(--muted); }
+.facts b { color: var(--ink); font-family: var(--font-mono); font-weight: 500; }
+section { padding-top: 52px; display: grid; gap: 18px; }
+section > p { max-width: 74ch; }
+.oneliner { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; max-width: 74ch; }
+.oneliner b { font-family: var(--font-display); }
+
+figure { margin: 0; display: grid; gap: 10px; }
+.figbox { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; overflow-x: auto; }
+figcaption { color: var(--muted); font-size: 0.93rem; max-width: 78ch; }
+.svg { display: block; width: 100%; height: auto; margin: 0 auto; color: var(--ink); }
+.svg-tall { max-width: 760px; }
+svg text { font-family: var(--font-body); fill: currentColor; }
+.box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.6; }
+.panel { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.6; }
+.band { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-dasharray: 5 5; }
+.bt { font: 600 13px var(--font-display); }
+.bs { font-size: 11px; fill: var(--muted); }
+.cap { font: 500 10.5px var(--font-mono); fill: var(--muted); letter-spacing: 0.08em; }
+.e { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.el { fill: none; stroke: var(--c-loop); stroke-width: 1.9; stroke-dasharray: 6 4; }
+.ex { fill: none; stroke: var(--stop); stroke-width: 1.9; }
+.ah { fill: var(--muted); }
+.ahl { fill: var(--c-loop); }
+.ahx { fill: var(--stop); }
+.lb { font: 500 11px var(--font-mono); fill: var(--muted); }
+.lb-loop { font: 500 11px var(--font-mono); fill: var(--c-loop); }
+.lb-stop { font: 500 11px var(--font-mono); fill: var(--stop); }
+.nd { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.8; }
+.k-sec { stroke: var(--c-sec); }
+.k-ret { stroke: var(--c-ret); }
+.k-gen { stroke: var(--c-gen); }
+.k-grd { stroke: var(--c-grd); }
+.k-hum { stroke: var(--ink); stroke-width: 3; }
+.nm { font: 500 13px var(--font-mono); }
+.ds { font-size: 11px; fill: var(--muted); }
+.term { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.4; }
+.term-stop { fill: var(--stop-soft); stroke: var(--stop); stroke-width: 1.4; }
+.tt { font: 600 12px var(--font-mono); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.88rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 14px; border-radius: 4px; border: 2.5px solid var(--line-strong); background: var(--surface); }
+.sw.sec { border-color: var(--c-sec); } .sw.ret { border-color: var(--c-ret); } .sw.gen { border-color: var(--c-gen); }
+.sw.grd { border-color: var(--c-grd); } .sw.hum { border-color: var(--ink); border-width: 3.5px; }
+.ln { width: 26px; height: 0; border-top: 2px solid var(--muted); }
+.ln.loop { border-top: 2px dashed var(--c-loop); } .ln.stop { border-top: 2px solid var(--stop); }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 700px; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--font-display); font-size: 0.85rem; background: var(--surface-2); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-family: var(--font-mono); font-size: 0.86rem; font-weight: 500; white-space: nowrap; }
+td.dum { color: var(--muted); font-style: italic; }
+td.file { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+
+.callout { border-radius: 10px; padding: 14px 16px; border: 1px solid var(--accent); background: var(--accent-soft); display: grid; gap: 8px; max-width: 80ch; }
+.callout h3 { font-size: 1.02rem; }
+
+.journeys { display: grid; gap: 12px; }
+.journey { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; }
+.journey p { color: var(--muted); font-size: 0.95rem; }
+.journey .out { color: var(--ink); font-size: 0.9rem; }
+.route { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: center; }
+.route li { font-family: var(--font-mono); font-size: 0.8rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; display: inline-flex; gap: 6px; align-items: baseline; }
+.route li em { font-style: normal; font-family: var(--font-body); font-size: 0.74rem; color: var(--c-loop); font-weight: 600; }
+.route li.stop { background: var(--stop-soft); border-color: var(--stop); }
+.route li.stop em { color: var(--stop); }
+.route li.hum { border-color: var(--ink); border-width: 2px; }
+.route li:not(:last-child)::after { content: "→"; color: var(--muted); font-family: var(--font-body); }
+
+.ladders { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.ladder { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 10px; align-content: start; }
+.bars { display: grid; gap: 8px; }
+.bar { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0; padding: 6px 10px; font-size: 0.9rem; }
+.bar b { font-family: var(--font-mono); font-weight: 500; }
+.bar span { color: var(--muted); display: block; font-size: 0.84rem; }
+.bar.gate { background: var(--warn-soft); border-left-color: var(--c-sec); }
+.ordered { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: 0.93rem; }
+.ordered span { color: var(--muted); }
+
+.tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.tools input[type="search"] {
+  flex: 1 1 240px; min-width: 0; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font: 1rem var(--font-body);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button {
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
+  border-radius: 99px; padding: 4px 12px; font: 500 0.85rem var(--font-body); cursor: pointer;
+}
+.chips button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.count { color: var(--muted); font-size: 0.88rem; }
+.glossary { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.gl { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; border-top: 3px solid var(--line-strong); }
+.gl[hidden] { display: none; }
+.gl[data-cat="core"] { border-top-color: var(--accent); }
+.gl[data-cat="find"] { border-top-color: var(--c-ret); }
+.gl[data-cat="check"] { border-top-color: var(--c-grd); }
+.gl[data-cat="fast"] { border-top-color: var(--c-gen); }
+.gl[data-cat="safe"] { border-top-color: var(--c-sec); }
+.gl[data-cat="eval"] { border-top-color: var(--c-loop); }
+.gl-h { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.gl-h .cat { font: 500 0.72rem var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+.gl .dum { font-weight: 500; }
+.gl .dum b { font-family: var(--font-display); color: var(--accent); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 6px; }
+.gl .tech { color: var(--muted); font-size: 0.92rem; }
+.gl .where { font-size: 0.8rem; color: var(--muted); }
+.empty { color: var(--muted); padding: 10px 0; }
+
+.lessons { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: l; }
+.lessons li { counter-increment: l; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px 12px 52px; position: relative; }
+.lessons li::before { content: counter(l); position: absolute; left: 14px; top: 12px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 700 0.85rem var(--font-display); }
+.lessons b { font-family: var(--font-display); }
+.lessons span { color: var(--muted); display: block; font-size: 0.94rem; }
+footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <span class="brand">RAG Lab</span>
+    <nav aria-label="Sections">
+      <a href="#big-picture">Big picture</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#journeys">Journeys</a>
+      <a href="#concepts">Concepts</a>
+      <a href="#access">Access</a>
+      <a href="#data">Where data lives</a>
+      <a href="#code">Code map</a>
+      <a href="#lessons">Lessons</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <h1>RAG Lab Concept Map</h1>
+    <p class="lead"><strong>Every moving part of the system, in plain words first and engineering detail second.</strong> Read the diagrams top to bottom, then search the glossary for any term you meet.</p>
+    <div class="facts" aria-label="Key numbers">
+      <span><b>13</b> graph nodes</span>
+      <span><b>600 / 100</b> chunk size / overlap</span>
+      <span><b>5 + 5 → 8 → 3</b> search funnel (configurable)</span>
+      <span><b>2 / 1</b> search / write retries</span>
+      <span><b>159</b> golden test cases</span>
+      <span><b>937</b> tests</span>
+    </div>
+  </div>
+
+  <section id="big-picture">
+    <h2>The big picture</h2>
+    <p class="oneliner"><b>For dummies:</b> two jobs. First the system reads your documents and files them away (ingest). Then, for each question, it fetches the right filed pieces, writes an answer and double-checks it (ask). Security wraps both.</p>
+    <figure>
+      <div class="figbox">
+        <svg class="svg" viewBox="0 0 960 450" role="img" aria-label="Two paths share two indexes. Ingest: files are parsed, chunked, tagged and scanned, then embedded and written to a vector index and a keyword index. Ask: a question goes through the graph pipeline, which reads both indexes, and returns an answer with sources. Security wraps every step.">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          </defs>
+          <text class="cap" x="30" y="20">INGEST · ONCE PER DOCUMENT CHANGE (make sync)</text>
+          <rect class="box" x="30" y="30" width="150" height="56" rx="8"/>
+          <text class="bt" x="105" y="53" text-anchor="middle">Files</text>
+          <text class="bs" x="105" y="70" text-anchor="middle">knowledge_base/ or upload</text>
+          <rect class="box" x="215" y="30" width="150" height="56" rx="8"/>
+          <text class="bt" x="290" y="53" text-anchor="middle">Parse</text>
+          <text class="bs" x="290" y="70" text-anchor="middle">sandboxed child process</text>
+          <rect class="box" x="400" y="30" width="150" height="56" rx="8"/>
+          <text class="bt" x="475" y="53" text-anchor="middle">Chunk</text>
+          <text class="bs" x="475" y="70" text-anchor="middle">600 chars, 100 overlap</text>
+          <rect class="box" x="585" y="30" width="150" height="56" rx="8"/>
+          <text class="bt" x="660" y="53" text-anchor="middle">Tag + scan</text>
+          <text class="bs" x="660" y="70" text-anchor="middle">clearance, planted orders</text>
+          <rect class="box" x="770" y="30" width="150" height="56" rx="8"/>
+          <text class="bt" x="845" y="53" text-anchor="middle">Embed</text>
+          <text class="bs" x="845" y="70" text-anchor="middle">ONNX vectors, in-process</text>
+          <path class="e" d="M180,58 H213" marker-end="url(#a1)"/>
+          <path class="e" d="M365,58 H398" marker-end="url(#a1)"/>
+          <path class="e" d="M550,58 H583" marker-end="url(#a1)"/>
+          <path class="e" d="M735,58 H768" marker-end="url(#a1)"/>
+
+          <rect class="panel" x="585" y="160" width="335" height="64" rx="10"/>
+          <path class="e" d="M752,160 V224" stroke-dasharray="3 4"/>
+          <text class="bt" x="668" y="188" text-anchor="middle">Vector index</text>
+          <text class="bs" x="668" y="205" text-anchor="middle">ChromaDB (default)</text>
+          <text class="bt" x="836" y="188" text-anchor="middle">Keyword index</text>
+          <text class="bs" x="836" y="205" text-anchor="middle">SQLite FTS5 · BM25</text>
+          <path class="e" d="M845,86 V158" marker-end="url(#a1)"/>
+          <text class="lb" x="853" y="128">writes at sync</text>
+
+          <text class="cap" x="30" y="288">ASK · ON EVERY QUESTION</text>
+          <rect class="box" x="30" y="300" width="150" height="56" rx="8"/>
+          <text class="bt" x="105" y="323" text-anchor="middle">Question</text>
+          <text class="bs" x="105" y="340" text-anchor="middle">typed in the chat page</text>
+          <rect class="nd k-ret" x="330" y="300" width="400" height="56" rx="8"/>
+          <text class="bt" x="530" y="323" text-anchor="middle">Graph pipeline</text>
+          <text class="bs" x="530" y="340" text-anchor="middle">13 checked steps (next section)</text>
+          <rect class="box" x="780" y="300" width="150" height="56" rx="8"/>
+          <text class="bt" x="855" y="323" text-anchor="middle">Answer</text>
+          <text class="bs" x="855" y="340" text-anchor="middle">with sources attached</text>
+          <path class="e" d="M180,328 H328" marker-end="url(#a1)"/>
+          <text class="lb" x="254" y="320" text-anchor="middle">signed-in user</text>
+          <path class="e" d="M730,328 H778" marker-end="url(#a1)"/>
+          <path class="e" d="M700,226 V298" marker-end="url(#a1)"/>
+          <text class="lb" x="708" y="268">reads per question</text>
+
+          <rect class="band" x="30" y="388" width="900" height="44" rx="10"/>
+          <text class="bs" x="480" y="415" text-anchor="middle">Around every step: sign-in &amp; roles · caller PII masking · clearance filter · audit log · encryption · pinned models</text>
+        </svg>
+      </div>
+      <figcaption>Both paths meet in the two indexes. Ingest writes them when documents change. The pipeline only reads them, and it filters every read by the asker's clearance.</figcaption>
+    </figure>
+    <p class="oneliner"><b>For dummies, the buzzword:</b> this is a <em>compound AI system</em>. Not one giant brain, but a team of small specialists wired together, each doing one job you can test on its own.</p>
+  </section>
+
+  <section id="pipeline">
+    <h2>The pipeline, step by step</h2>
+    <p class="oneliner"><b>For dummies:</b> follow the arrows. Solid arrows are the normal route. Dashed pink arrows are loops: "that wasn't good enough, try again". Red arrows stop or hand over to a person.</p>
+    <figure>
+      <div class="figbox">
+        <svg class="svg svg-tall" viewBox="0 0 820 1066" role="img" aria-label="The question pipeline as a flowchart. A question enters guardrail, then contextualize, cache_lookup and router. Real questions go to retrieve, sanitize_context and grade_docs, then generate, grade_hallucination and grade_relevance, and finally human_approval. Loops: grade_docs can send to rewrite and back to retrieve, grade_hallucination can retry generate, grade_relevance can send irrelevant answers to rewrite. Exits: guardrail failure and cache hit end early; chitchat gets a canned reply.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+            <marker id="ahl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahl"/></marker>
+            <marker id="ahx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahx"/></marker>
+          </defs>
+
+          <!-- spine edges -->
+          <path class="e" d="M400,40 V72" marker-end="url(#ah)"/>
+          <path class="e" d="M400,120 V152" marker-end="url(#ah)"/>
+          <path class="e" d="M400,200 V232" marker-end="url(#ah)"/>
+          <path class="e" d="M400,280 V312" marker-end="url(#ah)"/>
+          <path class="e" d="M400,360 V412" marker-end="url(#ah)"/>
+          <path class="e" d="M400,460 V492" marker-end="url(#ah)"/>
+          <path class="e" d="M400,540 V572" marker-end="url(#ah)"/>
+          <path class="e" d="M400,620 V672" marker-end="url(#ah)"/>
+          <path class="e" d="M400,720 V752" marker-end="url(#ah)"/>
+          <path class="e" d="M400,800 V832" marker-end="url(#ah)"/>
+          <path class="e" d="M400,880 V932" marker-end="url(#ah)"/>
+          <path class="e" d="M400,980 V1020" marker-end="url(#ah)"/>
+          <text class="lb" x="410" y="141">pass</text>
+          <text class="lb" x="410" y="301">miss</text>
+          <text class="lb" x="410" y="392">rag</text>
+          <text class="lb" x="410" y="652">approved · circuit_break</text>
+          <text class="lb" x="410" y="822">grounded</text>
+          <text class="lb" x="410" y="912">relevant · circuit_break</text>
+
+          <!-- early exits on the right -->
+          <path class="ex" d="M500,97 H638" marker-end="url(#ahx)"/>
+          <text class="lb-stop" x="569" y="90" text-anchor="middle">fail</text>
+          <path class="e" d="M500,257 H638" marker-end="url(#ah)"/>
+          <text class="lb" x="569" y="250" text-anchor="middle">hit</text>
+          <rect class="term-stop" x="640" y="80" width="170" height="34" rx="17"/>
+          <text class="tt" x="725" y="101" text-anchor="middle">END · blocked</text>
+          <rect class="term" x="640" y="240" width="170" height="34" rx="17"/>
+          <text class="tt" x="725" y="261" text-anchor="middle">END · cached answer</text>
+          <path class="e" d="M500,337 H618" marker-end="url(#ah)"/>
+          <text class="lb" x="559" y="330" text-anchor="middle">chitchat</text>
+          <rect class="nd" x="620" y="314" width="190" height="46" rx="8"/>
+          <text class="nm" x="715" y="334" text-anchor="middle">chitchat</text>
+          <text class="ds" x="715" y="350" text-anchor="middle">canned friendly reply</text>
+          <path class="e" d="M715,360 V390" marker-end="url(#ah)"/>
+          <rect class="term" x="665" y="392" width="100" height="28" rx="14"/>
+          <text class="tt" x="715" y="410" text-anchor="middle">END</text>
+
+          <!-- loops on the left -->
+          <path class="el" d="M298,597 H202" marker-end="url(#ahl)"/>
+          <text class="lb-loop" x="250" y="589" text-anchor="middle">rewrite</text>
+          <path class="el" d="M120,572 V437 H298" marker-end="url(#ahl)"/>
+          <text class="lb-loop" x="112" y="505" text-anchor="end">search again</text>
+          <text class="lb-loop" x="112" y="519" text-anchor="end">(max 2 times)</text>
+          <path class="el" d="M298,857 H120 V622" marker-end="url(#ahl)"/>
+          <text class="lb-loop" x="210" y="849" text-anchor="middle">irrelevant</text>
+
+          <!-- loops on the right -->
+          <path class="el" d="M502,770 H560 V697 H502" marker-end="url(#ahl)"/>
+          <text class="lb-loop" x="568" y="738">retry + feedback</text>
+          <text class="lb-loop" x="568" y="752">(max 1 time)</text>
+          <path class="ex" d="M502,788 H625 V957 H502" marker-end="url(#ahx)"/>
+          <text class="lb-stop" x="633" y="878">circuit_break</text>
+          <text class="lb-stop" x="633" y="892">a person decides</text>
+
+          <!-- terminals on the spine -->
+          <rect class="term" x="350" y="12" width="100" height="28" rx="14"/>
+          <text class="tt" x="400" y="30" text-anchor="middle">START</text>
+          <rect class="term" x="350" y="1022" width="100" height="28" rx="14"/>
+          <text class="tt" x="400" y="1040" text-anchor="middle">END</text>
+
+          <!-- nodes -->
+          <rect class="nd k-sec" x="300" y="74" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="94" text-anchor="middle">guardrail</text>
+          <text class="ds" x="400" y="110" text-anchor="middle">who are you? is this an attack?</text>
+
+          <rect class="nd" x="300" y="154" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="174" text-anchor="middle">contextualize</text>
+          <text class="ds" x="400" y="190" text-anchor="middle">make follow-ups standalone</text>
+
+          <rect class="nd" x="300" y="234" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="254" text-anchor="middle">cache_lookup</text>
+          <text class="ds" x="400" y="270" text-anchor="middle">already answered and approved?</text>
+
+          <rect class="nd" x="300" y="314" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="334" text-anchor="middle">router</text>
+          <text class="ds" x="400" y="350" text-anchor="middle">small talk or real question?</text>
+
+          <rect class="nd k-ret" x="300" y="414" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="434" text-anchor="middle">retrieve</text>
+          <text class="ds" x="400" y="450" text-anchor="middle">fetch the best 3 pieces</text>
+
+          <rect class="nd k-sec" x="300" y="494" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="514" text-anchor="middle">sanitize_context</text>
+          <text class="ds" x="400" y="530" text-anchor="middle">scan pieces for planted orders</text>
+
+          <rect class="nd k-ret" x="300" y="574" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="594" text-anchor="middle">grade_docs</text>
+          <text class="ds" x="400" y="610" text-anchor="middle">did the search find anything?</text>
+
+          <rect class="nd k-ret" x="40" y="574" width="160" height="46" rx="8"/>
+          <text class="nm" x="120" y="594" text-anchor="middle">rewrite</text>
+          <text class="ds" x="120" y="610" text-anchor="middle">rephrase the search</text>
+
+          <rect class="nd k-gen" x="300" y="674" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="694" text-anchor="middle">generate</text>
+          <text class="ds" x="400" y="710" text-anchor="middle">LLM writes from the pieces only</text>
+
+          <rect class="nd k-grd" x="300" y="754" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="774" text-anchor="middle">grade_hallucination</text>
+          <text class="ds" x="400" y="790" text-anchor="middle">fact-check every sentence</text>
+
+          <rect class="nd k-grd" x="300" y="834" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="854" text-anchor="middle">grade_relevance</text>
+          <text class="ds" x="400" y="870" text-anchor="middle">does it answer the question?</text>
+
+          <rect class="nd k-hum" x="300" y="934" width="200" height="46" rx="8"/>
+          <text class="nm" x="400" y="954" text-anchor="middle">human_approval</text>
+          <text class="ds" x="400" y="970" text-anchor="middle">release now, or wait for a person</text>
+        </svg>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span><i class="sw sec"></i>security check</span>
+        <span><i class="sw ret"></i>search</span>
+        <span><i class="sw gen"></i>writer (LLM)</span>
+        <span><i class="sw grd"></i>grader</span>
+        <span><i class="sw hum"></i>human gate</span>
+        <span><i class="sw"></i>plain step</span>
+        <span><i class="ln"></i>normal route</span>
+        <span><i class="ln loop"></i>loop back (spends a retry)</span>
+        <span><i class="ln stop"></i>blocked or handed to a person</span>
+      </div>
+      <figcaption>Two separate retry budgets keep the loops honest: searching again (default 2) and writing again (default 1). When the search budget runs out the writer says it found nothing. When the writing budget runs out, or the answer stays irrelevant, a person decides. The generated source of this drawing is <code>docs/architecture.mmd</code>, and a test fails when it goes stale.</figcaption>
+    </figure>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Node</th><th>For dummies</th><th>What it really does</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>guardrail</td><td class="dum">The bouncer: checks your badge, then checks you are not carrying a weapon.</td><td>Verifies the signed session token, requires <code>query</code> permission on the workspace, and scans for injection patterns. Callers sanitize input and redact PII via <code>prepare_pipeline_input()</code> before initial checkpointing.</td><td class="file">pipeline/entry.py</td></tr>
+          <tr><td>contextualize</td><td class="dum">Turns "and for contractors?" into a full question.</td><td>Rewrites follow-ups using released turns only, then re-scans and re-masks the result.</td><td class="file">pipeline/context.py</td></tr>
+          <tr><td>cache_lookup</td><td class="dum">Checks the notebook of approved answers.</td><td>Matches by meaning (cosine ≥ 0.92) inside one workspace and clearance partition. A hit ends the run.</td><td class="file">retrieval/semantic_cache.py</td></tr>
+          <tr><td>router</td><td class="dum">Reception desk: chat goes left, work goes right.</td><td>Word lists plus similarity to chitchat examples for short messages. The threshold keeps a wide margin, since a wrong "chat" skips retrieval.</td><td class="file">pipeline/entry.py</td></tr>
+          <tr><td>retrieve</td><td class="dum">Sends two librarians, one by meaning and one by exact words, then picks the best three pages.</td><td>5 dense + 5 keyword hits, fused by RRF (k=60) to 8, injection scan, cross-encoder keeps 3, then the evidence gate. Funnel candidate widths are configurable.</td><td class="file">pipeline/retrieval.py</td></tr>
+          <tr><td>sanitize_context</td><td class="dum">A second look for hidden orders in the pages.</td><td>Strips pieces with role spoofing, delimiter attacks, instruction overrides or exfiltration beacons before the writer sees them.</td><td class="file">security/context_sanitizer.py</td></tr>
+          <tr><td>grade_docs</td><td class="dum">"Did we find anything usable?" If not, search again.</td><td>No documents left: rewrite (budget 2), then <code>circuit_break</code> to the writer, which abstains.</td><td class="file">pipeline/retrieval.py</td></tr>
+          <tr><td>rewrite</td><td class="dum">Tries different search words.</td><td>Builds a keyword-style query, optionally with the LLM, then loops back to retrieve.</td><td class="file">pipeline/retrieval.py</td></tr>
+          <tr><td>generate</td><td class="dum">The writer, who may only use the pages in front of them.</td><td>Prompt with <code>&lt;documents&gt;</code> tags, answer in the question's language, one or two sentences; carries grader feedback on a retry.</td><td class="file">pipeline/generation.py</td></tr>
+          <tr><td>grade_hallucination</td><td class="dum">Fact-checker: every sentence needs a source sentence.</td><td>Invented figures reject first; then each sentence needs NLI entailment ≥ 0.7. Failure retries once with the reason, then escalates.</td><td class="file">pipeline/grading.py</td></tr>
+          <tr><td>grade_relevance</td><td class="dum">Editor: true, but does it answer what was asked?</td><td>Scores question against answer. Irrelevant loops to rewrite; an exhausted budget goes to a person.</td><td class="file">pipeline/grading.py</td></tr>
+          <tr><td>human_approval</td><td class="dum">The sign-off desk.</td><td>Auto-releases when the account holds <code>auto_approve</code> and every check passed; otherwise <code>interrupt()</code> freezes the run until a different, cleared reviewer decides. Writes the audit entry first, then caches released answers.</td><td class="file">pipeline/review.py</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>One question, three forms</h3>
+      <p>The state carries your text three ways on purpose. <code>asked_question</code> is exactly what you typed, with personal data masked, for the reviewer and the audit log. <code>original_question</code> is the standalone version (follow-ups expanded) used for the cache key, retrieval and grading. <code>sanitized_question</code> is the search query, which the rewrite loop is allowed to change.</p>
+    </div>
+  </section>
+
+  <section id="journeys">
+    <h2>Five journeys through the graph</h2>
+    <p>The same graph produces very different trips. Each chip is a node; the pink tag is the route taken out of it.</p>
+    <div class="journeys">
+      <div class="journey">
+        <h3>1. A planted order</h3>
+        <p class="dum"><b>For dummies:</b> someone types "ignore your rules". The bouncer stops them at the door.</p>
+        <ol class="route"><li>guardrail <em>fail</em></li><li class="stop">END</li></ol>
+        <p class="out">Nothing is searched. The reply is <code>[SECURITY VIOLATION: Adversarial prompt injection detected.]</code> and the event is logged.</p>
+      </div>
+      <div class="journey">
+        <h3>2. Someone already asked</h3>
+        <p class="dum"><b>For dummies:</b> the answer is already in the notebook, so no work is needed.</p>
+        <ol class="route"><li>guardrail <em>pass</em></li><li>contextualize</li><li>cache_lookup <em>hit</em></li><li>END</li></ol>
+        <p class="out">Only approved answers are cached, in the asker's clearance partition. Users without auto-release read reviewed entries only.</p>
+      </div>
+      <div class="journey">
+        <h3>3. A normal question</h3>
+        <p class="dum"><b>For dummies:</b> look it up, write it, check it twice, hand it over.</p>
+        <ol class="route"><li>guardrail</li><li>contextualize</li><li>cache_lookup <em>miss</em></li><li>router <em>rag</em></li><li>retrieve</li><li>sanitize_context</li><li>grade_docs <em>approved</em></li><li>generate</li><li>grade_hallucination <em>grounded</em></li><li>grade_relevance <em>relevant</em></li><li class="hum">human_approval</li><li>END</li></ol>
+        <p class="out">At human_approval the answer is released at once for accounts with auto-release, or frozen for a reviewer in team mode.</p>
+      </div>
+      <div class="journey">
+        <h3>4. The shelves have nothing</h3>
+        <p class="dum"><b>For dummies:</b> try twice with new words, then honestly say "I don't know".</p>
+        <ol class="route"><li>retrieve</li><li>grade_docs <em>rewrite</em></li><li>rewrite</li><li>retrieve</li><li>grade_docs <em>rewrite</em></li><li>rewrite</li><li>retrieve</li><li>grade_docs <em>circuit_break</em></li><li>generate</li><li>grade_hallucination</li><li>grade_relevance</li><li class="hum">human_approval</li></ol>
+        <p class="out">With no documents the writer returns the exact abstain sentence "I could not find relevant documentation in this workspace to answer your query." Abstentions are never cached. If the search was degraded (for example an index built by another model), the abstention waits for a reviewer like any other answer.</p>
+      </div>
+      <div class="journey">
+        <h3>5. The draft contains a bad fact</h3>
+        <p class="dum"><b>For dummies:</b> the fact-checker sends it back with a note. If it is still wrong, a human takes over.</p>
+        <ol class="route"><li>generate</li><li>grade_hallucination <em>retry</em></li><li>generate</li><li class="stop">grade_hallucination <em>circuit_break</em></li><li class="hum">human_approval</li></ol>
+        <p class="out">The reviewer sees the draft, its citations and the reason, for example a figure the sources do not contain. Auto-release is withheld even for trusted accounts.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="concepts">
+    <h2>Concepts, A to Z of the design</h2>
+    <p class="oneliner"><b>For dummies:</b> each card starts with a one-line plain explanation. The grey text under it is what the code actually does, with the real numbers. Filter by area or type to search.</p>
+    <div class="tools">
+      <input type="search" id="q" placeholder="Search terms: cache, NLI, clearance..." aria-label="Search concepts">
+      <div class="chips" id="chips" role="group" aria-label="Filter by area"></div>
+    </div>
+    <p class="count" id="count" aria-live="polite"></p>
+    <div class="glossary" id="glossary"></div>
+    <p class="empty" id="empty" hidden>No concept matches. Clear the search or pick All.</p>
+  </section>
+
+  <section id="ladders">
+    <h2>Two ladders worth memorizing</h2>
+    <div class="ladders">
+      <div class="ladder">
+        <h3>Anatomy of a search</h3>
+        <p class="oneliner" style="background:transparent;border:0;padding:0"><b>For dummies:</b> cast a wide net, then keep narrowing until only the best three pages remain.</p>
+        <div class="bars">
+          <div class="bar"><b>≤ 10 candidates</b><span>5 by meaning (vectors) + 5 by exact words (BM25), both filtered by clearance (widths configurable)</span></div>
+          <div class="bar" style="margin-right:10%"><b>8 fused</b><span>Reciprocal rank fusion, score = Σ 1 / (60 + rank)</span></div>
+          <div class="bar" style="margin-right:20%"><b>≤ 8 clean</b><span>Pieces with planted-instruction patterns are dropped</span></div>
+          <div class="bar" style="margin-right:45%"><b>3 reranked</b><span>Cross-encoder reads question and piece together</span></div>
+          <div class="bar gate"><b>Evidence gate</b><span>Best reranker score ≥ −4.5 (default profile) or nothing moves on</span></div>
+        </div>
+      </div>
+      <div class="ladder">
+        <h3>Anatomy of an answer check</h3>
+        <p class="oneliner" style="background:transparent;border:0;padding:0"><b>For dummies:</b> cheap, strict checks first; the smarter model only for what is left.</p>
+        <div class="bars">
+          <div class="bar"><b>1 · figures</b><span>Any number in the answer that the sources lack rejects it at once</span></div>
+          <div class="bar"><b>2 · sentences</b><span>Each sentence needs entailment ≥ 0.7 from a source sentence (NLI, full precision)</span></div>
+          <div class="bar"><b>3 · relevance</b><span>The answer must address the question that was asked</span></div>
+          <div class="bar gate"><b>4 · release rule</b><span>Auto-release only with <code>auto_approve</code>, every check passed and no blocking degradation. Else a person decides.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="access">
+    <h2>Who may see and do what</h2>
+    <p class="oneliner"><b>For dummies:</b> two separate dials. Your <em>role</em> says what you may do (ask, review, release). Your <em>clearance</em> says how secret the pages you may see can be. Neither one grants the other.</p>
+    <div class="ladders">
+      <div class="ladder">
+        <h3>How a permission is looked up</h3>
+        <ol class="ordered">
+          <li>The account's own grant on this workspace.<br><span>Most specific wins.</span></li>
+          <li>The account's grant on all workspaces.<br><span>An empty list means deny.</span></li>
+          <li>The account's groups.<br><span>Combined, but any group's <code>none</code> wins.</span></li>
+          <li>The account's own role.</li>
+          <li>The default role.<br><span><code>trusted</code> on a fresh install (open mode), <code>member</code> after <code>make team-mode</code>.</span></li>
+        </ol>
+      </div>
+      <div class="ladder">
+        <h3>Roles and permissions</h3>
+        <div class="tablewrap" style="border-radius:8px">
+          <table style="min-width:0">
+            <thead><tr><th>Role</th><th>query</th><th>review</th><th>auto_approve</th></tr></thead>
+            <tbody>
+              <tr><td>owner, admin</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>reviewer</td><td>✓</td><td>✓</td><td>–</td></tr>
+              <tr><td>trusted</td><td>✓</td><td>–</td><td>✓</td></tr>
+              <tr><td>member</td><td>✓</td><td>–</td><td>–</td></tr>
+              <tr><td>none</td><td>–</td><td>–</td><td>–</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="color:var(--muted);font-size:0.9rem">Clearance is a separate ladder: <code>public</code> &lt; <code>internal</code> &lt; <code>confidential</code> &lt; <code>secret</code>. Owners and admins also administer accounts, groups, grants and workspaces.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="data">
+    <h2>Where data lives</h2>
+    <p class="oneliner"><b>For dummies:</b> everything is plain files and small databases inside the project folder. Knowing which is which tells you what to back up and what to guard.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Location</th><th>What is in it</th><th>Guard or back up?</th></tr></thead>
+        <tbody>
+          <tr><td>knowledge_base/&lt;ws&gt;/</td><td>Your source documents, one folder per workspace.</td><td>Back up. Your originals.</td></tr>
+          <tr><td>uploads/&lt;ws&gt;/</td><td>Files uploaded through the web page. Ignored by git. Same-name file in knowledge_base wins.</td><td>Back up.</td></tr>
+          <tr><td>chroma_data/</td><td>The vector index, one collection per workspace (<code>ws_&lt;id&gt;</code>). Can be rebuilt with <code>make sync FORCE=1</code>.</td><td>Holds chunk text. Treat as sensitive.</td></tr>
+          <tr><td>bm25_indices/&lt;ws&gt;.db</td><td>The keyword index per workspace (SQLite FTS5).</td><td>Holds chunk text. Rebuildable.</td></tr>
+          <tr><td>data/checkpoints.db</td><td>Conversations and frozen reviews (PostgreSQL when <code>DB_URI</code> is set). Sealed.</td><td>Back up.</td></tr>
+          <tr><td>data/audit.db</td><td>The hash-chained audit log with sealed payloads.</td><td>Back up; anchor regularly.</td></tr>
+          <tr><td>access_policy.json</td><td>Accounts, roles, groups, grants. HMAC-signed.</td><td>Back up. Guard.</td></tr>
+          <tr><td>Semantic cache</td><td>Sealed rows of approved answers in a local database (PostgreSQL when <code>CACHE_BACKEND=postgres</code>).</td><td>Rebuildable.</td></tr>
+          <tr><td>models/</td><td>The pinned ONNX models, about 2 GB. Hash-verified.</td><td>Re-downloadable with <code>make models</code>.</td></tr>
+          <tr><td>OS keychain or key files</td><td>The access key and the data key.</td><td>Keep a copy in custody. <code>make backup</code> excludes keys, and losing them loses the audit log, checkpoints and policy.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="code">
+    <h2>Code map</h2>
+    <p class="oneliner"><b>For dummies:</b> the <code>rag_lab/</code> folder is split by job. Each folder name tells you what its files do.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Folder</th><th>Job</th><th>Key files</th></tr></thead>
+        <tbody>
+          <tr><td>pipeline/</td><td>The graph and every node in it.</td><td class="file">graph.py (wiring) · state.py (shared state) · entry.py (prepare_pipeline_input, guardrail, cache, router, chitchat) · context.py · retrieval.py (retrieve, sanitize, grade_docs, rewrite) · generation.py · grading.py · review.py · llm_provider.py</td></tr>
+          <tr><td>retrieval/</td><td>The search machinery.</td><td class="file">embedding_provider.py · sparse_search.py · reranker.py · nli.py · semantic_cache.py · cache_index.py</td></tr>
+          <tr><td>ingestion/</td><td>Documents in, indexes out.</td><td class="file">ingest.py (chunk, tag, embed, publish) · parsers.py · parser_worker.py (sandbox)</td></tr>
+          <tr><td>security/</td><td>Who you are, what you may see, proof of what happened.</td><td class="file">access.py (roles, sign-in, tokens, TOTP) · keystore.py · vault.py (AES-GCM) · audit.py · context_sanitizer.py + injection_patterns.tsv · redaction.py · model_integrity.py · threat-model.md</td></tr>
+          <tr><td>storage/</td><td>Where vectors, state and workspaces are kept.</td><td class="file">vector_store.py (+ qdrant_store.py, pgvector_store.py) · checkpointer.py · workspace_manager.py · backup.py · retention.py</td></tr>
+          <tr><td>lang/</td><td>English, German, French and Greek language data.</td><td class="file">lang/__init__.py · lang/data/</td></tr>
+          <tr><td>ops/</td><td>Commands you run: review, evaluate, calibrate, fetch models.</td><td class="file">approve.py · eval.py · eval_metrics.py · calibrate.py · fetch_models.py · export_graph.py · install_accel.py · audit-harvest</td></tr>
+          <tr><td>ui/</td><td>The Streamlit chat page.</td><td class="file">streamlit_app.py</td></tr>
+          <tr><td>config.py</td><td>One mutable <code>settings</code> object, read at call time.</td><td class="file">Override fields; never copy them into module globals.</td></tr>
+          <tr><td>crates/rag_accel</td><td>The optional Rust speed-up for the injection scan.</td><td class="file">built as one abi3 wheel per platform</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="lessons">
+    <h2>Design lessons baked into the code</h2>
+    <p class="oneliner"><b>For dummies:</b> these are the mistakes this project already made and measured, so you do not have to repeat them.</p>
+    <ol class="lessons">
+      <li><b>A grader that changes with the CPU is not a grader.</b><span>The int8 NLI model scored one true sentence 0.93 on Apple silicon and 0.12 on x86. Full-precision weights agreed to under 0.0001, so NLI is pinned in fp32 and a test refuses quantized weights.</span></li>
+      <li><b>Run cheap exact checks before the clever model.</b><span>NLI is weak at numbers (a changed figure scored up to 0.997), so invented figures are rejected by plain comparison first.</span></li>
+      <li><b>Never retry an identical prompt at temperature 0.</b><span>It repeats the same answer. The regeneration carries the grader's reason, and the extractive fallback is not retried at all.</span></li>
+      <li><b>Give every loop its own budget.</b><span>Search retries (2) and write retries (1) are separate so one loop cannot spend the other's allowance.</span></li>
+      <li><b>The index proposes, the store decides.</b><span>The cache index only offers candidates. The winning row is re-read, unsealed, re-checked and its cosine recomputed before it answers.</span></li>
+      <li><b>Filter on the server, then guard again.</b><span>Clearance is filtered inside each store and a fail-closed guard in the base class drops any hit without a valid tag, so a new adapter cannot skip it.</span></li>
+      <li><b>Calibrate per model and favor the miss.</b><span>Scores live on different rulers, so each profile has its own pass marks, set above the highest wrong-class score. A false accept costs more than a missed answer.</span></li>
+      <li><b>Fall back out loud.</b><span>Every degraded path is labelled in the answer, <code>make status</code> shows <code>[!!] DEGRADED</code>, and the serious ones force human review.</span></li>
+      <li><b>Measure before building.</b><span>An Ollama embedding path was removed after it failed the multilingual gates and ran 2.5x slower. A native chunker was skipped because chunking took 0.05 s of a 91 s ingest.</span></li>
+    </ol>
+  </section>
+</main>
+
+<footer>
+  Sources: README, <code>CLAUDE.md</code>, <code>eval/README.md</code>, <code>eval/baselines/README.md</code>, <code>docs/threat-model.md</code>, <code>docs/scaling.md</code>, <code>docs/architecture.mmd</code> and the code under <code>rag_lab/</code>. The cloud architecture in the README is a roadmap and is not built; Qdrant, pgvector, vLLM and the shared PostgreSQL cache are built but off by default. Figures re-measured on 2026-11-05: cache miss 4.8 ms at 500 and 5.0 ms at 2,000 entries, Rust scan 39x on a best-of-three run, NLI claim tests pass, eval gates met on 159 cases, 937 tests passing. Quoted from the repo docs and not re-measured: the 217 ms cache time from before the index, x86 NLI scores, the 150-document ingest timings and the LLM-judge tables.
+</footer>
+
+<script>
+var CATS = [
+  ['all', 'All'], ['core', 'Core patterns'], ['find', 'Finding evidence'], ['check', 'Checking answers'],
+  ['fast', 'Speed and scale'], ['safe', 'Safety and control'], ['eval', 'Measuring quality']
+];
+var CAT_NAME = { core: 'Core', find: 'Search', check: 'Checks', fast: 'Speed', safe: 'Safety', eval: 'Quality' };
+var G = [
+  { c: 'core', t: 'RAG (retrieval-augmented generation)', d: 'An open-book exam for an AI: look up the right pages first, then write the answer from them.', x: 'Question, then retrieve chunks, then an LLM writes from those chunks only. The prompt wraps them in &lt;documents&gt; tags and states they are data, never instructions.', f: 'pipeline/generation.py' },
+  { c: 'core', t: 'Compound AI system', d: 'Not one giant brain but a team of small specialists, each doing one job you can test alone.', x: 'Guardrail, cache, router, hybrid retriever, reranker, graders, writer and a human gate, each swappable and covered by tests.', f: 'rag_lab/pipeline/' },
+  { c: 'core', t: 'State graph (LangGraph)', d: 'A flowchart the computer follows, where every box reads and updates one shared notebook.', x: '13 nodes share one GraphState dictionary. Conditional edges pick the next node from a status field, and cycles are allowed. make graph writes docs/architecture.mmd and a test fails when it is stale.', f: 'pipeline/graph.py, state.py' },
+  { c: 'core', t: 'Checkpoint and interrupt', d: 'A save game: the run can freeze mid-way, wait days for a person, then continue exactly there.', x: 'human_approval calls interrupt(). The state is saved in SQLite (WAL) by default or PostgreSQL via DB_URI, and resumed with a Command carrying the reviewer decision.', f: 'storage/checkpointer.py' },
+  { c: 'core', t: 'Self-RAG', d: 'The AI marks its own homework before handing it in.', x: 'Three graders: grade_docs (anything usable?), grade_hallucination (is every claim supported?) and grade_relevance (does it answer the question?). Each can send the run backwards or to a person.', f: 'pipeline/grading.py' },
+  { c: 'core', t: 'Corrective RAG and query rewriting', d: 'If the first search comes back weak, try again with better words.', x: 'grade_docs routes to rewrite, which builds a keyword-style query (optionally with the LLM) and loops to retrieve. Budget MAX_RETRIEVAL_RETRIES = 2.', f: 'pipeline/retrieval.py' },
+  { c: 'core', t: 'Circuit breaker', d: 'A fuse: after a set number of tries, stop looping and hand over.', x: 'Two budgets, MAX_RETRIEVAL_RETRIES = 2 and MAX_GENERATION_RETRIES = 1. Exhausting the first lets the writer abstain; exhausting the second sends the draft to a person.', f: 'config.py' },
+  { c: 'core', t: 'Intent routing', d: 'A reception desk: small talk gets a canned reply, real questions go to the library.', x: 'Word lists, then similarity to chitchat examples for messages with three or fewer content words. The threshold is deliberately strict, because a real question routed to chat never reaches retrieval.', f: 'pipeline/entry.py' },
+  { c: 'core', t: 'Contextualization', d: 'Turns "and the deadline?" into a complete question.', x: 'Rewrites a follow-up using released turns only, then re-scans and re-masks it. The cache key, retrieval and grading use this standalone form.', f: 'pipeline/context.py' },
+
+  { c: 'find', t: 'Chunking', d: 'Cutting documents into index cards so the search can find the right card, not the whole book.', x: 'Split on markdown headings, then by size: 600 characters with 100 overlap. Each chunk begins with the headings above it, so a piece from deep in a long section still knows its topic.', f: 'ingestion/ingest.py' },
+  { c: 'find', t: 'Embedding', d: 'Turns text into a list of numbers so that similar meanings land close together.', x: 'In-process ONNX models chosen by MODEL_PROFILE: multilingual (paraphrase-multilingual-MiniLM-L12-v2, default), multilingual-large (multilingual-e5-large, about 4.5 GB) or en (bge-small-en-v1.5). Similarity is cosine.', f: 'retrieval/embedding_provider.py' },
+  { c: 'find', t: 'Vector store', d: 'A filing cabinet sorted by meaning instead of by letter.', x: 'One VectorStore interface: ChromaDB by default, Qdrant and pgvector opt in. Every query is filtered by clearance on the server, then passes guard_hits(). Scores stay on Chroma\'s 1 - distance cosine scale because the gates are calibrated on it.', f: 'storage/vector_store.py' },
+  { c: 'find', t: 'Keyword search (BM25)', d: 'Ctrl+F with good ranking: finds exact words, codes and names that meaning-search can blur.', x: 'SQLite FTS5 with BM25 ranking and the trigram tokenizer (keyword-only recall@3 on 98 answerable cases: 86 against 80 for unicode61/porter). One database per workspace.', f: 'retrieval/sparse_search.py' },
+  { c: 'find', t: 'Hybrid search and RRF', d: 'Ask two experts, one who knows meaning and one who knows exact words, and merge their lists.', x: 'Dense top 5 and keyword top 5 are merged with reciprocal rank fusion, score = Σ 1 / (60 + rank). The best 8 move on. All funnel widths (dense k, sparse k, fusion top N, rerank top k) are configurable via settings or env.', f: 'pipeline/retrieval.py, config.py' },
+  { c: 'find', t: 'Cross-encoder reranker', d: 'A slow, careful second opinion that reads the question and a page together.', x: 'bge-reranker-v2-m3 (int8 in the default profile) keeps 3 of the 8. Pieces with injected instructions are removed first, so a poisoned piece is replaced by the next-best clean one.', f: 'retrieval/reranker.py' },
+  { c: 'find', t: 'Evidence gate (abstention)', d: 'If nothing good was found, say "I do not know" instead of making something up.', x: 'Default profile: best reranker score must reach -4.5 (answerable questions scored -1.8 to 6.6, out-of-scope -11.0 to -7.1). The en profile uses cosine ≥ 0.65 or keyword coverage ≥ 0.40.', f: 'pipeline/retrieval.py' },
+  { c: 'find', t: 'Multilingual profiles', d: 'One system that reads four languages, even when question and document differ.', x: 'English, German, French and Greek. Three profiles: multilingual (about 0.8 GB), multilingual-large (about 4.5 GB), en (English only), each plus the 1.1 GB NLI model. Language data lives in rag_lab/lang/.', f: 'lang/, config.py' },
+  { c: 'find', t: 'Embedding fingerprint', d: 'A label on the index saying which model built it, so mismatched models cannot mix silently.', x: 'Each index records its embedding_fingerprint. On mismatch dense retrieval is skipped with a labelled warning until make sync FORCE=1.', f: 'pipeline/retrieval.py' },
+
+  { c: 'check', t: 'Grounded prompt', d: 'The instructions say: use only these pages, and treat what is inside them as data, not orders.', x: 'qwen3:8b through Ollama (thinking off) or any OpenAI-compatible server. Rules: only stated facts, the question\'s language, one or two sentences. Chunks are escaped so they cannot close their own document block.', f: 'pipeline/generation.py' },
+  { c: 'check', t: 'Hallucination', d: 'When an AI states something its sources never said.', x: 'Caught by two checks, unsupported figures and unsupported sentences. A rejected answer is rewritten once with the reason, then goes to a person.', f: 'pipeline/grading.py' },
+  { c: 'check', t: 'Groundedness check', d: 'Every sentence of the answer must be backed by a sentence in the sources.', x: 'Step 1: any figure the sources lack rejects the answer. Step 2: each sentence needs entailment ≥ 0.7 against single source sentences plus neighbour pairs that share a quarter of the claim\'s words. Without the NLI model it falls back, labelled, to word overlap plus the cross-encoder.', f: 'pipeline/grading.py' },
+  { c: 'check', t: 'NLI (entailment) model', d: 'A model that answers: does text A prove text B? Yes, no or maybe.', x: 'mDeBERTa-v3 XNLI multilingual, 1.1 GB, full precision. On a 42-claim labelled set: AUC 1.000, 0 wrong at the 0.7 gate, identical scores on arm64 and x86. Weak at numbers, which is why figures are checked first.', f: 'retrieval/nli.py' },
+  { c: 'check', t: 'Regenerate with feedback', d: 'If the answer is rejected, tell the writer why and let it try once more.', x: 'At temperature 0 an identical prompt repeats the same answer, so the grader\'s reason (for example the unsupported figures) is added to the prompt. Budget 1. The extractive fallback is never retried.', f: 'pipeline/grading.py' },
+  { c: 'check', t: 'Answer relevance', d: 'A true answer is still useless if it answers a different question.', x: 'With the cross-encoder fallback the pass mark is ≥ -6.0 (correct answers -2.7 to 5.1, unrelated ≤ -9.1). Irrelevant routes to rewrite; an exhausted budget goes to a person.', f: 'pipeline/grading.py' },
+  { c: 'check', t: 'Extractive fallback', d: 'If the writer model is offline, the system just quotes the best-matching sentence.', x: 'DeterministicContextLLM picks a sentence by word overlap and prefixes "Based on available documentation:". It is also the writer for make eval. Its failures go straight to a reviewer.', f: 'pipeline/llm_provider.py' },
+  { c: 'check', t: 'LLM as a judge', d: 'Asking a second AI to grade the first one\'s answers.', x: 'make eval-judge is advisory; make eval-llm gates judge_support ≥ 0.8. A judge that is also the writer is lenient (it approved 94 to 100%), so set EVAL_JUDGE_MODEL to a different model.', f: 'ops/eval.py' },
+
+  { c: 'fast', t: 'Semantic cache', d: 'A notebook of approved answers: ask the same thing again and get it instantly.', x: 'Sealed (AES-GCM) rows keyed by workspace, clearance, index fingerprint and standalone question. Match cosine ≥ 0.92 (0.94 in the large profile). The winning row is re-read, unsealed and re-checked. Re-indexing rotates the fingerprint, so stale entries cannot be served. A cache miss at 2,000 entries costs 5 ms instead of 217 ms.', f: 'retrieval/semantic_cache.py' },
+  { c: 'fast', t: 'Negation-safe caching', d: '"Can I expense this?" and "Can\'t I expense this?" are different questions.', x: 'Eval cases require that a negated or renumbered question never reuses the cached answer to its twin (cache_accuracy = 1.0). Negation word lists exist per language.', f: 'retrieval/semantic_cache.py' },
+  { c: 'fast', t: 'Incremental ingest', d: 'Re-index only what changed.', x: 'A SHA-256 manifest skips unchanged files; unchanged chunk text reuses its stored vector. Measured on 4,055 chunks: re-sync with nothing changed 7.97 s to 0.02 s; after editing one file 78.8 s to 3.7 s. FORCE=1 recomputes everything.', f: 'ingestion/ingest.py' },
+  { c: 'fast', t: 'Quantization (int8)', d: 'Shrinking a model\'s numbers so it runs faster, at some risk to its answers.', x: 'The int8 NLI model split across CPUs (0.93 against 0.12 for one sentence), so NLI is fp32. The int8 reranker moves at most 0.56 logits on a 17-logit range and all 10 test queries ranked the same document first, so it stays.', f: 'eval/README.md' },
+  { c: 'fast', t: 'Rust accelerator', d: 'A small compiled helper that does one hot job much faster.', x: 'Scans chunks for injection with a single-pass RegexSet: 0.87 ms against 21.2 ms for 1,000 chunks (24x documented, 39x on a later re-run), same verdicts, same pattern file. RAG_ACCEL=preferred falls back loudly to Python; required refuses to start without it.', f: 'crates/rag_accel' },
+
+  { c: 'safe', t: 'Prompt injection', d: 'Hiding orders inside text, hoping the AI obeys them.', x: 'Three layers: the question is scanned at the guardrail; every chunk is scanned at ingest (and withheld if it matches) and again after retrieval; the prompt marks documents as data. Patterns cover English, German, French and Greek, from one shared TSV.', f: 'security/context_sanitizer.py' },
+  { c: 'safe', t: 'Zero trust and fail closed', d: 'Assume nothing is safe, and when unsure say no.', x: 'Authorization runs first, so an unauthorized caller gets no retrieval. Unknown clearance tags reject the file. Qdrant and pgvector have no unfiltered fallback. A key pointer whose entry is gone is an error, never a new key.', f: 'security/access.py' },
+  { c: 'safe', t: 'RBAC (roles, groups, grants)', d: 'Job titles decide what you may do.', x: 'Roles bundle three permissions: query, review, auto_approve. Lookup order: account grant on the workspace, account grant on all workspaces, groups (any none wins), the account\'s role, the default role. The policy file is HMAC-signed.', f: 'security/access.py' },
+  { c: 'safe', t: 'Clearance levels', d: 'A secrecy level stamped on every document and every person.', x: 'public &lt; internal &lt; confidential &lt; secret. Dense search filters on the server, keyword search in SQL, and a fail-closed guard drops hits without a valid tag. The cache is partitioned by clearance.', f: 'security/access.py' },
+  { c: 'safe', t: 'Workspaces (multi-tenancy)', d: 'Separate drawers that never mix.', x: 'Each workspace has its own Chroma collection (ws_&lt;id&gt;) and its own keyword database. Deleting one needs an admin and prunes grants.', f: 'storage/workspace_manager.py' },
+  { c: 'safe', t: 'PII redaction (DLP)', d: 'Black out emails and phone numbers before anything is saved or shown.', x: 'Questions are sanitized and masked at the caller boundary via prepare_pipeline_input() before reaching checkpoints, answers before release, and audit payloads before sealing.', f: 'security/redaction.py, pipeline/entry.py' },
+  { c: 'safe', t: 'Human in the loop', d: 'A person signs off, and never the person who asked.', x: 'Auto-release needs auto_approve, grounded and relevant checks and no blocking degradation. A reviewer needs the review permission, must not be the requester, and needs clearance at least equal to the requester\'s.', f: 'pipeline/review.py' },
+  { c: 'safe', t: 'Audit hash chain', d: 'A diary where each page carries a fingerprint of the page before, so a torn-out page shows.', x: 'Each event is HMAC-chained to the previous one with an AES-GCM sealed payload, and written before an answer is released. make audit-verify walks the chain; make audit-anchor records the head hash, optionally to a second location, to catch truncation.', f: 'security/audit.py' },
+  { c: 'safe', t: 'Keys and encryption', d: 'Locks on stored data, with the key kept somewhere safer than the data.', x: 'The access key signs the policy and session tokens; the data key seals audit payloads, checkpoints and cache rows (AES-256-GCM). Both live in the OS keychain when usable, else owner-only files (KEY_STORE). make backup excludes keys.', f: 'security/keystore.py, vault.py' },
+  { c: 'safe', t: 'Sign-in and sessions', d: 'Proving who you are, and for how long.', x: 'scrypt password hashes (12+ characters), HMAC-signed session tokens valid 8 hours, 30 minutes idle sign-out in the UI, 5 failures in 15 minutes lock the account. Optional TOTP for owners and admins; each code works once.', f: 'security/access.py' },
+  { c: 'safe', t: 'Model pinning', d: 'A fingerprint on every downloaded model, so a swapped file is caught.', x: 'Each model file has a pinned SHA-256. make models downloads and verifies once; make verify-models re-checks offline. Changing a model means recalibrating its thresholds.', f: 'security/model_integrity.py' },
+  { c: 'safe', t: 'Graceful degradation', d: 'If a part breaks, say so and use a plain fallback instead of failing quietly.', x: 'Failures become labelled entries in the degraded list shown under the answer. Notes starting security_warning, dense_retrieval_unavailable or sparse_retrieval_unavailable block auto-release, so a person looks.', f: 'pipeline/state.py' },
+  { c: 'safe', t: 'Air-gapped operation', d: 'No internet while it runs.', x: 'HF_HUB_OFFLINE=1 at runtime; only make models uses the network. make test-offline runs the suite with sockets blocked.', f: 'Makefile' },
+
+  { c: 'eval', t: 'Harvest audit rejections', d: 'Turn human rejections into new evaluation test cases.', x: 'make audit-harvest queries the HMAC-chained audit log for human rejections, extracts the rejected questions, and formats them as candidate cases for eval/golden.json to close the feedback loop.', f: 'security/audit.py, ops/eval.py' },
+  { c: 'safe', t: 'Supply chain hash pinning', d: 'Verify every package against cryptographic hashes so dependencies cannot be tampered with.', x: 'requirements.lock pins every direct and transitive wheel and sdist with multi-platform SHA-256 hashes, enforced by pip --require-hashes. test_requirements_lock_is_hash_pinned guards against unpinned additions.', f: 'requirements.lock, tests/test_packaging.py' },
+  { c: 'safe', t: 'Threat model & trust boundaries', d: 'Documenting what we trust, what we mistrust, and where the barriers sit.', x: 'docs/threat-model.md formalizes trust boundaries (user edge, execution sandbox, storage boundary, model weights). Streamlit binds to 127.0.0.1 by default; LAN requires explicit LAN=1 opt-in.', f: 'docs/threat-model.md' },
+  { c: 'eval', t: 'Golden set', d: 'An answer key: questions with known-good outcomes to test the whole system.', x: 'eval/golden.json: 159 cases over a synthetic corpus in six workspaces. Suites: en 50, multilingual 98 (de, fr, el, cross-lingual), conversation 11. Each case expects answer, abstain, blocked, denied, fresh or cached.', f: 'eval/golden.json' },
+  { c: 'eval', t: 'Calibration and test split', d: 'Tune on one half, grade on the other, so you do not mark yourself on questions you studied.', x: 'The calibration split picks thresholds; the test split is held out and gated. A false accept is worse than a miss, so each threshold sits above the highest score of the wrong class.', f: 'ops/calibrate.py' },
+  { c: 'eval', t: 'Quality gates', d: 'Pass or fail bars the build must clear.', x: 'make eval runs the real graph and gates per suite, for example answer_rate ≥ 0.9, retrieval_recall ≥ 0.9, keyword_recall ≥ 0.8, abstention_accuracy ≥ 0.8, security_accuracy = 1.0, cache_accuracy = 1.0, entailment_rate ≥ 0.9.', f: 'ops/eval.py' },
+  { c: 'eval', t: 'Per-model thresholds', d: 'Each model measures on its own ruler, so each needs its own pass mark.', x: 'Every profile has its own numbers in config.py: evidence gate -4.5, groundedness fallback -3.0, cache similarity 0.92 (0.94 large). make calibrate-models suggests them from the calibration split.', f: 'config.py' },
+  { c: 'fast', t: 'Opt-in scaling', d: 'Bigger engines you can bolt on later. All are off by default.', x: 'Qdrant or pgvector for vectors, vLLM or any OpenAI-compatible server for chat, PostgreSQL for checkpoints and a shared cache, started with make scale-up. The keyword index, audit log, policy and keys stay local files. The cloud stack in the README is a roadmap, not built.', f: 'docs/scaling.md' }
+];
+
+var state = { cat: 'all', q: '' };
+var chips = document.getElementById('chips');
+var grid = document.getElementById('glossary');
+var count = document.getElementById('count');
+var emptyMsg = document.getElementById('empty');
+
+CATS.forEach(function (pair) {
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = pair[1];
+  b.dataset.cat = pair[0];
+  b.setAttribute('aria-pressed', pair[0] === 'all' ? 'true' : 'false');
+  b.addEventListener('click', function () {
+    state.cat = pair[0];
+    chips.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+    apply();
+  });
+  chips.appendChild(b);
+});
+
+G.forEach(function (g) {
+  var a = document.createElement('article');
+  a.className = 'gl';
+  a.dataset.cat = g.c;
+  a.dataset.text = (g.t + ' ' + g.d + ' ' + g.x + ' ' + g.f).replace(/<[^>]*>/g, ' ').replace(/&lt;|&gt;/g, ' ').toLowerCase();
+  a.innerHTML =
+    '<div class="gl-h"><h3>' + g.t + '</h3><span class="cat">' + CAT_NAME[g.c] + '</span></div>' +
+    '<p class="dum"><b>For dummies</b>' + g.d + '</p>' +
+    '<p class="tech">' + g.x + '</p>' +
+    '<p class="where"><code>' + g.f + '</code></p>';
+  grid.appendChild(a);
+});
+
+function apply() {
+  var shown = 0;
+  var terms = state.q.split(/\s+/).filter(Boolean);
+  grid.querySelectorAll('.gl').forEach(function (a) {
+    var okCat = state.cat === 'all' || a.dataset.cat === state.cat;
+    var okText = terms.every(function (t) { return a.dataset.text.indexOf(t) !== -1; });
+    var show = okCat && okText;
+    a.hidden = !show;
+    if (show) { shown++; }
+  });
+  count.textContent = 'Showing ' + shown + ' of ' + G.length + ' concepts';
+  emptyMsg.hidden = shown !== 0;
+}
+document.getElementById('q').addEventListener('input', function (e) { state.q = e.target.value.toLowerCase().trim(); apply(); });
+apply();
+</script>
+</body>
+</html>

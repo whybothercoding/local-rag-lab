@@ -30,6 +30,7 @@ Designed for complete data sovereignty, this system operates **100% air-gapped**
 | **AI Systems** | **Evaluation Benchmark** | **8.5 / 10** | 159 golden benchmark cases (108 held-out test split) across 4 languages with committed reference baselines ([eval/README.md](eval/README.md)). |
 
 *Full security threat model and cryptographic boundaries: see [docs/threat-model.md](docs/threat-model.md).*  
+*Interactive visual guides: see [Beginner Guide](docs/beginner-guide.html) and [Concept Map](docs/concept-map.html).*  
 *Horizontal scaling and containerized cloud deployment options: see [docs/scaling.md](docs/scaling.md).*
 
 ---
@@ -579,11 +580,11 @@ local-rag-lab/
 ├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows (`make help`)
 ├── docker-compose.yml       # PostgreSQL for durable checkpoints; opt-in profiles: qdrant, pgvector, vllm, caddy
 ├── deploy/                  # Caddyfile for the optional LAN TLS proxy
-├── docs/                    # scaling.md, lan-tls.md, threat-model.md, architecture.mmd (generated)
+├── docs/                    # beginner-guide.html, concept-map.html, scaling.md, lan-tls.md, threat-model.md, architecture.mmd
 ├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders
-└── tests/                   # About 920 unit, integration and security tests
+└── tests/                   # 937 unit, integration and security tests
 ```
 
 ---
