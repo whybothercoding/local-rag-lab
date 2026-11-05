@@ -140,6 +140,15 @@ machine: 0.62), not a swing, so it stays.
 `tests/test_nli.py` keeps 17 labelled claims with wide margins (true at or above 0.8, false at or below 0.5) and refuses
 quantized NLI weights, so a model swap or a numerics change shows up in the suite on any machine.
 
+## Why there is no Ollama embedding path
+
+An Ollama embedding path (`EMBEDDING_PROVIDER=ollama`, `nomic-embed-text`) was removed after it was measured on the eval
+corpus. With it the multilingual gates fail, because every threshold is calibrated for the ONNX model (retrieval recall
+0.75, abstention accuracy 0.27, both required >= 0.9); its model cannot be hash-pinned; and it was about 2.5x slower per
+query (11 ms vs 4.5 ms). Retrieval quality was close (recall@1 0.90 vs 0.93, a three-case difference of 91; recall@3 1.00
+for both) and was not the reason: as integrated it never added the task prefixes `nomic-embed-text` expects. A leftover
+`EMBEDDING_PROVIDER=ollama` now fails with instructions; indexes built with it need `make sync FORCE=1`.
+
 ## Chat model choice
 
 Compared with `make eval-llm` (`OLLAMA_MODEL=...`) on an Apple M4 with 16 GB, thinking off. All licences are

@@ -1,6 +1,6 @@
 # Local Enterprise RAG Lab
 
-An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen3:8b`)**, **ChromaDB**, **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
+An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen3:8b`)** or any OpenAI-compatible server (vLLM), **ChromaDB** (or Qdrant / pgvector), **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
 
 Designed for complete data sovereignty, this system operates **100% air-gapped** with zero external network requests during inference. It integrates multi-tenant knowledge workspaces, self-reflective corrective RAG loops, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
 
@@ -19,7 +19,7 @@ Uses **LangGraph** to model the RAG pipeline as a directed state graph (`GraphSt
 ### 3. Self-Reflective RAG (Self-RAG)
 Implements dynamic self-assessment loops to verify output quality before answers are finalized:
 * **Document Relevance Grading (`grade_docs`)**: Evaluates whether retrieved chunks contain sufficient relevant information to answer the question.
-* **Hallucination Detection (`grade_hallucination`)**: Rejects figures the sources do not contain, then checks each answer sentence with a local multilingual entailment (NLI) model: a sentence passes only if a source sentence states it, in any of English, German, French, or Greek, including across languages. A rejected answer is regenerated with the unsupported sentence named.
+* **Hallucination Detection (`grade_hallucination`)**: Rejects figures the sources do not contain, then checks each answer sentence with a local, full-precision multilingual entailment (NLI) model (`mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`, scores identical on arm64 and x86): a sentence passes only if a source sentence states it, in any of English, German, French, or Greek, including across languages. A rejected answer is regenerated with the unsupported sentence named.
 * **Answer Relevance Grading (`grade_relevance`)**: Assesses whether the final answer directly addresses the original user prompt.
 
 ### 4. Corrective RAG (CRAG) & Adaptive Query Rewriting
@@ -30,14 +30,14 @@ An answer that fails the groundedness check is regenerated from the same documen
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
 * **Dense Retrieval**: Cosine similarity via ChromaDB and in-process ONNX embeddings. `MODEL_PROFILE` picks the models: `multilingual` (default; `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`, about 0.8 GB), `multilingual-large` (`multilingual-e5-large` + `bge-reranker-v2-m3`, about 4.5 GB, slower, marginally better), or `en` (`bge-small-en-v1.5` + `ms-marco-MiniLM-L-6-v2`, English only). Documents and questions may be in English, German, French, or Greek, in any combination.
-  Models never switch automatically: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`). An Ollama embedding path (`EMBEDDING_PROVIDER=ollama`, `nomic-embed-text`) was removed after it was measured on the eval corpus. With it the multilingual gates fail, because every threshold is calibrated for the ONNX model (retrieval recall 0.75, abstention accuracy 0.27, both required >= 0.9); its model cannot be hash-pinned; and it was about 2.5x slower per query (11 ms vs 4.5 ms). Retrieval quality was close (recall@1 0.90 vs 0.93, a three-case difference of 91; recall@3 1.00 for both) and was not the reason: as integrated it never added the task prefixes `nomic-embed-text` expects. A leftover `EMBEDDING_PROVIDER=ollama` now fails with instructions; indexes built with it need `make sync FORCE=1`.
+  Models never switch automatically: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`). Every profile also downloads the 1.1 GB NLI model (default profile: about 2 GB in all). There is no Ollama embedding path: it failed the multilingual gates, could not be hash-pinned and was slower (measurements in [eval/README.md](eval/README.md)); a leftover `EMBEDDING_PROVIDER=ollama` fails with instructions.
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
 * **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (per profile) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
 
 ### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
 To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:
-* Cosine similarity cutoff ($\ge 0.65$) or query token keyword coverage ($\ge 40\%$).
+* The gate is per model profile (calibrated with `make calibrate-models`). The default `multilingual` profile requires the cross-encoder reranker's best score to reach its threshold; the `en` profile requires cosine similarity $\ge 0.65$; either falls back to similarity or query keyword coverage when no reranker score exists.
 * If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
 
 ### 7. State-Scoped & Clearance-Partitioned Semantic Caching
@@ -68,7 +68,7 @@ An offline evaluation suite (`rag_lab/ops/eval.py`, `rag_lab/ops/eval_metrics.py
 * **Document-Level Clearance Filtering**: Documents declare hierarchical clearance tags (`public`, `internal`, `confidential`, `secret`) in frontmatter or headers (unrecognized tags fail closed during ingestion). Vector search (`ChromaDB where` + post-query guard) and keyword search (`SQLite FTS5 WHERE clearance IN (...)`) strictly enforce the caller's authorized clearance, rendering classified documents completely invisible to unauthorized users.
 
 ### 14. Model Weight Pinning, Native Rust Acceleration & Graceful Degradation
-* Embedding and cross-encoder reranker weights are verified against pinned SHA-256 hashes (`rag_lab/security/model_integrity.py`).
+* Embedding, cross-encoder reranker and NLI weights are verified against pinned SHA-256 hashes (`rag_lab/security/model_integrity.py`). The NLI model is pinned in full precision on purpose: its int8 sibling scored one true sentence 0.93 on Apple silicon and 0.12 on x86 Linux (details in [eval/README.md](eval/README.md)).
 * **Native Rust Accelerator (`crates/rag_accel`)**: the prompt-injection scan (`RegexSet` single-pass automaton, 24x faster than the Python regexes on 1,000 chunks: 0.87 ms against 21.2 ms) with verdict and reason parity, from the same pattern file as the Python scanner. It is the default, with a fallback that is never quiet: `RAG_ACCEL=preferred` (default) uses it when installed and otherwise falls back to the pure-Python scanner with one warning on stderr, and `make status` shows `[!!] DEGRADED`; `RAG_ACCEL=required` refuses to start without it. `make setup` installs it for you, in order: a prebuilt wheel from `wheelhouse/`, a build from source when `cargo` exists, else the fallback. The `wheels` GitHub workflow builds one abi3 wheel per platform (macOS arm64 and x86_64, Linux x86_64 and aarch64) that serves Python 3.11 and later; download the artifact for your platform into `wheelhouse/` and run `make setup`. There is no native chunker: chunking was 0.05 s of a 91 s ingest.
 * If the primary LLM, cross-encoder, or vector store is unreachable, the system enters a degraded mode with transparent extractive fallbacks and visible warnings rather than failing silently.
 * **Measured performance** (Apple M-series, 150 documents / 4,055 chunks, idle machine, before to after). Ingest: a full sync 79.6 s to 69.9 s; a re-sync with nothing changed 7.97 s to 0.02 s; a re-sync after editing one file 78.8 s to 3.7 s. Re-syncs embed only chunks whose text is new and reuse the stored vector of every other chunk (same workspace, same model, same prefix; `FORCE=1` recomputes everything), and plain-text files are decoded in-process instead of in a sandboxed child (the sandbox stays for every other format). Embedding is over 80% of a full sync and runs at about 55 to 60 chunks/s however it is batched: one batch size, thread count or worker-process setting after another was no faster. Query: a question that misses a cache of 2,000 answers spent 217 ms in the cache before and 5 ms now (57.5 ms to 4.1 ms at 500), so such a query takes 243 ms instead of 476 ms; with an empty cache nothing changes. The semantic cache searches one matrix per (workspace, clearance, index version) partition, only the clearances the caller may read, and re-reads and re-verifies the winning row before it answers.
@@ -114,9 +114,9 @@ The generated topology is [`docs/architecture.mmd`](docs/architecture.mmd) (`mak
 ### 1. Prerequisites & Environment Setup
 
 * **Python**: `>= 3.11` (tested up to 3.14)
-* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB); embeddings run in-process, no Ollama needed
+* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB); embeddings, reranking and entailment run in-process, no Ollama needed. Any OpenAI-compatible server (vLLM, LM Studio, llama.cpp) works too: `LLM_PROVIDER=openai`, see [docs/scaling.md](docs/scaling.md)
 * **Rust Toolchain** (optional: only to build the native `rag_accel` extension when no prebuilt wheel fits your platform)
-* **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
+* **Docker** (optional: the PostgreSQL checkpointer, the Qdrant / pgvector / vLLM profiles, LAN TLS)
 
 ```bash
 # 0. View all available make commands
@@ -125,7 +125,7 @@ make help
 # 1. Create virtual environment and install dependencies
 make setup
 
-# 2. Download and verify pinned embedding & reranker models (requires network once)
+# 2. Download and verify the pinned embedding, reranker and NLI models (about 2 GB; requires network once)
 make models
 
 # 3. Verify cached model weights offline
@@ -346,6 +346,10 @@ make test
 # Run test suite with all outbound sockets blocked
 make test-offline
 
+# Static gates
+make lint
+make typecheck
+
 # Run offline RAG benchmark evaluation (eval/golden.json)
 make eval
 
@@ -358,6 +362,8 @@ make eval-calibrate
 # Export LangGraph architecture diagram to docs/architecture.mmd
 make graph
 ```
+
+About 920 tests. Services are optional locally: a test that needs PostgreSQL, Qdrant or pgvector probes it and skips when it is not running. GitHub Actions (`.github/workflows/ci.yml`) runs lint, mypy and the whole suite twice (online, then with sockets blocked) against real PostgreSQL, Qdrant and pgvector services and fails instead of skipping; a run takes about 20 minutes. The `wheels` workflow builds the Rust accelerator wheels.
 
 ---
 
@@ -394,7 +400,9 @@ The repository includes a `docker-compose.yml` to run PostgreSQL (`postgres:16-a
 
 ## 9. Scaling Beyond a Single Host: Cloud Architecture & Modern Stack
 
-While **Local Enterprise RAG Lab** is engineered as a zero-cost, self-contained 10/10 appliance for local workstations and air-gapped team servers, growing organizations often face requirements that justify migrating to a distributed cloud architecture.
+While **Local Enterprise RAG Lab** is engineered as a zero-cost, self-contained appliance for local workstations and air-gapped team servers, growing organizations often face requirements that justify migrating to a distributed cloud architecture.
+
+**Already built, opt-in and off by default** ([docs/scaling.md](docs/scaling.md)): Qdrant or pgvector as the vector store, vLLM or any OpenAI-compatible server for the chat model, and a PostgreSQL-backed semantic cache shared by several UI processes. The keyword index, the audit log, the policy and the keys remain local files. The rest of this section is a roadmap, not implemented.
 
 ### When & Why to Scale to the Cloud
 
@@ -435,11 +443,11 @@ To preserve this project's security invariants (Zero Trust clearance isolation, 
 | Layer | Local Appliance (Current) | Cloud Enterprise Equivalent | Key Capabilities |
 | :--- | :--- | :--- | :--- |
 | **Orchestration & Compute** | Local Python runtime & Streamlit | **Kubernetes (EKS / GKE / AKS) + KEDA** | Horizontal Pod Autoscaling, stateless workers, rolling zero-downtime updates |
-| **Vector Database** | Embedded ChromaDB (in-process) | **Qdrant Cluster** or **pgvector on AWS Aurora** | Sharded HNSW indexing, billions of vectors, multi-tenant payload filtering |
+| **Vector Database** | Embedded ChromaDB (default); Qdrant or pgvector server, opt-in today | **Qdrant Cluster** or **pgvector on AWS Aurora** | Sharded HNSW indexing, billions of vectors, multi-tenant payload filtering |
 | **Sparse Lexical Search** | SQLite FTS5 with BM25 ranking | **OpenSearch / Elasticsearch Cluster** | Distributed inverted index, cross-region search, tokenizers for all languages |
 | **State & Checkpoints** | Embedded SQLite WAL (`checkpoints.db`) | **Managed PostgreSQL (Aurora Serverless / Cloud SQL)** | Multi-AZ failover, automated continuous backup (PITR), connection pooling |
-| **Semantic & Response Cache** | SQLite float32 packed vector cache | **Valkey / Redis Cluster with Vector Search** | Distributed sub-millisecond LRU cache with multi-node clearance isolation |
-| **Model Inference Engine** | Local Ollama (`qwen3:8b`) / CPU ONNX | **vLLM / TensorRT-LLM on GPU Pools (A100/H100)** | Continuous batching, PagedAttention, 20x higher throughput, 70B+ models |
+| **Semantic & Response Cache** | SQLite float32 packed vector cache (shared PostgreSQL, opt-in today) | **Valkey / Redis Cluster with Vector Search** | Distributed sub-millisecond LRU cache with multi-node clearance isolation |
+| **Model Inference Engine** | Local Ollama (`qwen3:8b`) or an OpenAI-compatible server such as vLLM (opt-in) / CPU ONNX | **vLLM / TensorRT-LLM on GPU Pools (A100/H100)** | Continuous batching, PagedAttention, 20x higher throughput, 70B+ models |
 | **Ingestion Pipeline** | Batch CLI (`rag_lab/ingestion/ingest.py`) & child processes | **Temporal.io / Celery + Apache Kafka / SQS** | Distributed asynchronous parsing, rate-limited chunking, dead-letter queues |
 | **Identity & Access** | Local `access_policy.json` (scrypt + HMAC) | **Okta / Microsoft Entra ID (OIDC / SAML 2.0)** | Enterprise SSO, SCIM automated provisioning, MFA enforcement |
 | **Audit & Observability** | Tamper-evident HMAC SQLite log + anchors | **OpenTelemetry + Splunk / Datadog / CloudWatch** | Immutable cloud audit vaults (S3 Object Lock / WORM), distributed tracing |
@@ -505,23 +513,28 @@ flowchart TD
 ```text
 local-rag-lab/
 ├── pyproject.toml           # Declarative PEP 517/518/621 package & tool configurations
+├── requirements.txt / .lock # Runtime dependencies (the lock file is what CI installs)
 ├── ui.py                    # Streamlit launcher (runs rag_lab/ui/streamlit_app.py)
 ├── rag_lab/                 # The package; data stays at the repo root (rag_lab.ROOT / RAG_LAB_HOME)
 │   ├── config.py            # One mutable `settings` object built from the environment, read at call time
 │   ├── pipeline/            # LangGraph Self-RAG: state, entry, retrieval, generation, grading, review, graph
 │   │                        #   + llm_provider (Ollama / OpenAI-compatible / extractive fallback)
-│   ├── retrieval/           # Embeddings, FTS5 keyword index, cross-encoder reranker, semantic cache
+│   ├── retrieval/           # Embeddings, FTS5 keyword index, reranker, NLI, semantic cache + its vector index
 │   ├── ingestion/           # Indexer, format parsers, sandboxed parser worker
-│   ├── security/            # Accounts & RBAC, AES-GCM vault, hash-chained audit, redaction, injection scan, model pins
-│   ├── storage/             # Checkpointer, workspaces, backups, retention
-│   ├── ops/                 # approve (HITL CLI), eval + metrics, graph export, model download
+│   ├── security/            # Accounts & RBAC, keystore, AES-GCM vault, hash-chained audit, redaction, injection scan, model pins
+│   ├── storage/             # VectorStore (Chroma, Qdrant, pgvector), checkpointer, workspaces, backups, retention
+│   ├── lang/                # EN/DE/FR/EL text layer and language data
+│   ├── ops/                 # approve (HITL CLI), eval + metrics, calibration, model download, accelerator install, purge
 │   └── ui/                  # Streamlit page
 ├── crates/rag_accel/        # Native Rust PyO3 accelerator (prompt-injection scan), built as one abi3 wheel per platform
-├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows
-├── docker-compose.yml       # Optional PostgreSQL container for durable checkpoints
-├── eval/                    # Golden test dataset and benchmark corpus
+├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows (`make help`)
+├── docker-compose.yml       # PostgreSQL for durable checkpoints; opt-in profiles: qdrant, pgvector, vllm, caddy
+├── deploy/                  # Caddyfile for the optional LAN TLS proxy
+├── docs/                    # scaling.md, lan-tls.md, architecture.mmd (generated)
+├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), wheels.yml
+├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders
-└── tests/                   # Comprehensive test suite (240+ unit, integration, and security tests)
+└── tests/                   # About 920 unit, integration and security tests
 ```
 
 ---
