@@ -142,7 +142,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         if mismatch:
             raise _EmbeddingMismatch(mismatch)
         q_vec = get_embedding_model().embed_query(query)
-        for hit in store.query(ws_id, q_vec, 5, authorized_clrs):
+        for hit in store.query(ws_id, q_vec, settings.retrieval_dense_k, authorized_clrs):
             dense_candidates.append({
                 "id": hit.id,
                 "content": hit.document,
@@ -163,7 +163,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
         sparse_candidates = search_sparse_chunks(
             ws_id,
             query,
-            top_n=5,
+            top_n=settings.retrieval_sparse_k,
             allowed_clearances=authorized_clrs,
             base_dir=settings.bm25_dir,
         )
@@ -179,9 +179,13 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
 
     # 4. Fuse with Reciprocal Rank Fusion (RRF), drop chunks that carry injected instructions, and only
-    # then cut to the final top 3 with the cross-encoder. Screening before the cut means a poisoned chunk
+    # then cut to the final top passages with the cross-encoder. Screening before the cut means a poisoned chunk
     # is replaced by the next-best clean one instead of leaving a gap.
-    fused_docs = reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=8) if candidates else []
+    fused_docs = (
+        reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=settings.retrieval_fusion_top_n)
+        if candidates
+        else []
+    )
     clean_pool: List[Dict[str, Any]] = []
     dropped_chunks: List[Dict[str, Any]] = []
     for item in fused_docs:
@@ -194,7 +198,11 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
                 "reason": reason or "unknown_violation",
                 "preview": item["content"][:120],
             })
-    reranked_docs, rerank_note = rerank_with_status(query, clean_pool, top_n=3) if clean_pool else ([], None)
+    reranked_docs, rerank_note = (
+        rerank_with_status(query, clean_pool, top_n=settings.retrieval_rerank_top_k)
+        if clean_pool
+        else ([], None)
+    )
     if rerank_note:
         degraded.append(rerank_note)
 
@@ -210,7 +218,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             # documents cover only one part. Each part is scored on its own; the full question still goes to
             # the model, which says what the documents do not contain.
             for part in _question_parts(query):
-                part_docs, part_note = rerank_with_status(part, clean_pool, top_n=3)
+                part_docs, part_note = rerank_with_status(part, clean_pool, top_n=settings.retrieval_rerank_top_k)
                 part_score = _top_rerank_score(part, part_docs, part_note)
                 if part_score is not None and part_score >= settings.relevance_min_rerank_score and part_score > best_rerank:
                     reranked_docs, best_rerank, relevant = part_docs, part_score, True

@@ -234,6 +234,11 @@ class Settings:
     # rewrite the query and search again; generation retries regenerate with the grader's reason added.
     max_retrieval_retries: int
     max_generation_retries: int
+    # Candidate retrieval widths: dense candidates, sparse candidates, fused candidate pool, and reranked top passages
+    retrieval_dense_k: int
+    retrieval_sparse_k: int
+    retrieval_fusion_top_n: int
+    retrieval_rerank_top_k: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -302,6 +307,10 @@ class Settings:
             relevance_cross_encoder_threshold=float(_env("RELEVANCE_CROSS_ENCODER_THRESHOLD", profile["relevance_cross_encoder_threshold"])),
             max_retrieval_retries=int(_env("MAX_RETRIEVAL_RETRIES", "2")),
             max_generation_retries=int(_env("MAX_GENERATION_RETRIES", "1")),
+            retrieval_dense_k=int(_env("RETRIEVAL_DENSE_K", "5")),
+            retrieval_sparse_k=int(_env("RETRIEVAL_SPARSE_K", "5")),
+            retrieval_fusion_top_n=int(_env("RETRIEVAL_FUSION_TOP_N", "8")),
+            retrieval_rerank_top_k=int(_env("RETRIEVAL_RERANK_TOP_K", "3")),
         )
 
 
