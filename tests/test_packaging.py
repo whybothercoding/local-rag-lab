@@ -214,3 +214,20 @@ def test_settings_are_read_at_call_time(monkeypatch, tmp_path):
             if isinstance(node, ast.ImportFrom) and node.module == "rag_lab.config":
                 stale = [a.name for a in node.names if a.name in LEGACY_NAMES]
                 assert not stale, f"{path.name} imports {stale}; read settings.<field> at call time instead"
+
+
+def test_requirements_lock_is_hash_pinned():
+    """Verify that dependencies in requirements.lock are cryptographically pinned with SHA-256 hashes."""
+    import re
+
+    lock_path = Path(__file__).resolve().parent.parent / "requirements.lock"
+    assert lock_path.is_file(), "requirements.lock must exist"
+    content = lock_path.read_text(encoding="utf-8")
+
+    pkg_matches = re.findall(r"^([a-zA-Z0-9_\-\[\]]+==[^\s\\]+)", content, re.MULTILINE)
+    hash_matches = re.findall(r"--hash=sha256:[a-f0-9]{64}", content)
+
+    assert len(pkg_matches) >= 100, f"Expected at least 100 pinned packages, found {len(pkg_matches)}"
+    assert len(hash_matches) >= len(pkg_matches), "Every package must have at least one cryptographic hash"
+    assert len(hash_matches) > 1000, f"Expected full multi-platform hash coverage, found {len(hash_matches)}"
+
