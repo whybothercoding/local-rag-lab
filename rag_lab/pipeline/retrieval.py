@@ -311,6 +311,10 @@ def sanitize_context_node(state: StateInput) -> dict[str, Any]:
 
 
 def grade_documents_node(state: StateInput) -> dict[str, Any]:
+    """Route on whether any evidence survived. The relevance gate itself runs in hybrid_retrieval_node, which
+    passes no documents on when the best signal misses the profile's threshold; this node only turns an empty
+    result into a rewrite (budget max_retrieval_retries) and then a circuit break. The node keeps its name
+    because saved threads refer to graph nodes by name."""
     docs = state.get("documents", [])
     retries = state.get("retry_count", 0)
 

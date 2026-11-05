@@ -58,7 +58,7 @@ def _run_until_review(engine, thread: str, question: str) -> dict:
 
 # --- G16: abstention --------------------------------------------------------
 
-def test_off_topic_question_abstains_and_still_goes_to_review(rollback_index):
+def test_off_topic_question_abstains_and_waits_for_review_without_auto_approve(rollback_index):
     values = _run_until_review(workflow.compile(checkpointer=MemorySaver()), "t-off-topic", OFF_TOPIC_QUESTION)
     assert values["generation"] == ABSTAIN_MESSAGE
     assert values["telemetry"]["abstained"] is True
