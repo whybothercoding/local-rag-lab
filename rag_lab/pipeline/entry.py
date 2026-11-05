@@ -28,8 +28,50 @@ SEMANTIC_CACHE = PersistentSemanticCache()
 SEMANTIC_CACHE_CITATIONS = PersistentCitationsCache()
 
 
+def prepare_pipeline_input(
+    *,
+    question: str,
+    principal_token: str,
+    workspace_id: str = "default",
+    session_id: str = "",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build a sanitized initial input payload for the LangGraph pipeline.
+
+    Redacts PII immediately so that LangGraph's initial checkpoint write never
+    persists raw PII, regardless of which caller or entry point submits the query.
+    """
+    redacted = redact_pii(question)
+    payload: dict[str, Any] = {
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "principal_token": principal_token,
+        "question": redacted,
+        "original_question": redacted,
+        "sanitized_question": "",
+        "documents": [],
+        "citations": [],
+        "generation": "",
+        "intent": "",
+        "cache_hit": False,
+        "is_safe": True,
+        "grade_status": "",
+        "hallucination_status": "",
+        "relevance_status": "",
+        "retry_count": 0,
+        "generation_retry_count": 0,
+        "grader_feedback": "",
+        "telemetry": {},
+        **kwargs,
+    }
+    payload["question"] = redacted
+    payload["original_question"] = redacted
+    return payload
+
+
 def guardrail_input_node(state: StateInput) -> dict[str, Any]:
-    # Callers must pass redacted input: the checkpoint stores the submitted state before this node runs.
+    # Callers should pass redacted input (e.g. via prepare_pipeline_input), but this node
+    # also enforces redaction and updates state['question'] so unredacted input cannot persist.
     t0 = time.perf_counter()
     raw = state.get("question", "")
     ws_id = state.get("workspace_id", "default")
@@ -49,6 +91,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
         )
         return {
             "is_safe": False,
+            "question": denied_query,
             "generation": "[ACCESS DENIED: this account is not authorized for the selected workspace.]",
             "sanitized_question": denied_query,
             "telemetry": telemetry,
@@ -67,6 +110,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
         )
         return {
             "is_safe": False,
+            "question": safe_query,
             "generation": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
             "sanitized_question": safe_query,
             "telemetry": telemetry,
@@ -83,6 +127,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
     telemetry["guardrail_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     return {
         "is_safe": True,
+        "question": sanitized,
         "principal": principal,
         "principal_clearance": get_user_clearance(principal),
         "asked_question": sanitized,

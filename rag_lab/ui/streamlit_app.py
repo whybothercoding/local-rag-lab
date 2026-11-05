@@ -49,6 +49,7 @@ from rag_lab.security.access import (
     verify_token,
 )
 from rag_lab.pipeline.graph import workflow
+from rag_lab.pipeline.entry import prepare_pipeline_input
 from rag_lab.pipeline.state import REJECTION_NOTICE, GraphState
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
@@ -729,29 +730,12 @@ if user_query:
     with st.chat_message("user"):
         st.write(user_query)
 
-    inputs: GraphState = {
-        "workspace_id": active_ws,
-        "session_id": st.session_state.thread_id,
-        # The pipeline verifies this token itself. The plain name is never sent.
-        "principal_token": st.session_state.token,
-        # Redacted before submission: LangGraph persists the input in the checkpoint before any node runs.
-        "question": redact_pii(user_query),
-        "original_question": redact_pii(user_query),
-        "sanitized_question": "",
-        "documents": [],
-        "citations": [],
-        "generation": "",
-        "intent": "",
-        "cache_hit": False,
-        "is_safe": True,
-        "grade_status": "",
-        "hallucination_status": "",
-        "relevance_status": "",
-        "retry_count": 0,
-        "generation_retry_count": 0,
-        "grader_feedback": "",
-        "telemetry": {}
-    }
+    inputs = prepare_pipeline_input(
+        workspace_id=active_ws,
+        session_id=st.session_state.thread_id,
+        principal_token=st.session_state.token,
+        question=user_query,
+    )
 
     with st.spinner("Processing query via guardrails, hybrid search, and Self-RAG..."):
         for _ in engine.stream(inputs, config=config):

@@ -179,16 +179,15 @@ def judge_support(llm, documents: list[str], answer: str) -> bool | None:
 
 
 def _inputs(case: dict, question: str, thread_id: str) -> dict:
+    from rag_lab.pipeline.entry import prepare_pipeline_input
     from rag_lab.security.access import issue_token
 
-    return {
-        "workspace_id": case["workspace"],
-        "session_id": thread_id,
-        "principal_token": issue_token(case.get("principal", "eval")),
-        "question": question,
-        "original_question": question,
-        "telemetry": {},
-    }
+    return prepare_pipeline_input(
+        workspace_id=case["workspace"],
+        session_id=thread_id,
+        principal_token=issue_token(case.get("principal", "eval")),
+        question=question,
+    )
 
 
 def _ask(engine, case: dict, question: str, thread_id: str) -> dict:
