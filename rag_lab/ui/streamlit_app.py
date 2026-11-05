@@ -49,7 +49,7 @@ from rag_lab.security.access import (
     verify_token,
 )
 from rag_lab.pipeline.graph import workflow
-from rag_lab.pipeline.state import GraphState
+from rag_lab.pipeline.state import REJECTION_NOTICE, GraphState
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
 from rag_lab.storage.checkpointer import close_checkpointer, fetch_checkpoint_threads, open_checkpointer, shared_pool
@@ -207,7 +207,7 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
             else:
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": "[Rejected by reviewer]",
+                    "content": REJECTION_NOTICE,
                     "citations": [],
                 })
         st.rerun()
@@ -236,7 +236,7 @@ def thread_messages(thread: dict) -> list[dict]:
     turns = [h for h in thread.get("history", []) if isinstance(h, dict)]
     for turn in turns:
         msgs.append({"role": "user", "content": turn.get("asked") or turn.get("question", "")})
-        msgs.append({"role": "assistant", "content": turn.get("answer") or "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"})
+        msgs.append({"role": "assistant", "content": turn.get("answer") or REJECTION_NOTICE})
     last_asked = turns[-1].get("asked") if turns else None
     if thread["paused"] or thread["question"] != last_asked:
         msgs.append({"role": "user", "content": thread["question"]})
@@ -704,7 +704,7 @@ if not paused and st.session_state.messages and st.session_state.messages[-1]["r
     completed_state = engine.get_state(config)
     if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
         gen_text = completed_state.values.get("generation", "")
-        rejected = "REJECTED BY HUMAN COMPLIANCE" in gen_text
+        rejected = gen_text == REJECTION_NOTICE
         cites = [] if rejected else completed_state.values.get("citations", [])
         deg = [] if rejected else completed_state.values.get("degraded", [])
         st.session_state.messages.append({

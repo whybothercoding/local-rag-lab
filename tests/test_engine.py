@@ -6,6 +6,7 @@ from rag_lab.pipeline.entry import guardrail_input_node, cache_lookup_node, rout
 from rag_lab.pipeline.retrieval import grade_documents_node, query_rewrite_node, reciprocal_rank_fusion
 from rag_lab.pipeline.grading import grade_hallucination_node, grade_answer_relevance_node
 from rag_lab.pipeline.review import human_in_the_loop_node
+from rag_lab.pipeline.state import REJECTION_NOTICE
 from rag_lab.retrieval.semantic_cache import cache_key
 
 
@@ -199,7 +200,7 @@ def test_hitl_node_rejection(mocker):
     }
 
     result = human_in_the_loop_node(state)
-    assert "rejected by human compliance" in result["generation"].lower()
+    assert result["generation"] == REJECTION_NOTICE == "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
     assert result["citations"] == []
     assert result["degraded"] == []
 

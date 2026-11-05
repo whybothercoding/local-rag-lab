@@ -118,3 +118,10 @@ def test_add_user_panel_warns_when_answers_could_not_be_reviewed():
         assert any("nobody able to approve" in w.value for w in app.sidebar.warning)
     finally:
         delete_user("uinewbie")
+
+
+def test_every_screen_shows_the_one_rejection_notice():
+    """The reviewer's session, a reloaded thread and the requester's screen must read the same rejection text."""
+    source = (Path(UI).parent / "rag_lab" / "ui" / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "REJECTION_NOTICE" in source
+    assert "rejected by" not in source.lower(), "a rejection text is written inline instead of using REJECTION_NOTICE"

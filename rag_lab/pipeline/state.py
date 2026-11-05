@@ -51,6 +51,9 @@ def _sha256(text: str) -> str:
 
 ABSTAIN_MESSAGE = "I could not find relevant documentation in this workspace to answer your query."
 
+# What a rejected answer is replaced by: the saved answer and every screen that shows it use this one text.
+REJECTION_NOTICE = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
+
 
 # Retrieval problems that mean the evidence behind an answer may be incomplete or tampered with.
 # An answer carrying one of these is never auto-approved: a person must look at it.

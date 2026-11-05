@@ -14,7 +14,7 @@ from rag_lab.security.audit import record as audit_record
 from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.context import MAX_HISTORY_TURNS
-from rag_lab.pipeline.state import ABSTAIN_MESSAGE, BLOCKING_DEGRADED_PREFIXES, StateInput, _sha256
+from rag_lab.pipeline.state import ABSTAIN_MESSAGE, BLOCKING_DEGRADED_PREFIXES, REJECTION_NOTICE, StateInput, _sha256
 
 
 def _normalize_decision(raw: Any) -> dict[str, str]:
@@ -147,6 +147,5 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
 
         return {"generation": gen, "history": history}
 
-    rejection_notice = "[RESPONSE REJECTED BY HUMAN COMPLIANCE]"
     history = (history + [{"question": display_q, "asked": asked, "answer": "", "released": False}])[-MAX_HISTORY_TURNS:]
-    return {"generation": rejection_notice, "citations": [], "degraded": [], "history": history}
+    return {"generation": REJECTION_NOTICE, "citations": [], "degraded": [], "history": history}
