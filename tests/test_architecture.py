@@ -74,3 +74,39 @@ def test_python_snippets_in_the_makefile_still_run():
     for code in snippets:
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT)
         assert out.returncode == 0 and out.stdout.strip(), (code, out.stderr)
+
+
+def test_eval_documentation_tracks_golden_set():
+    """Pin the case counts and suite splits in eval/README.md to eval/golden.json so doc drift is prevented."""
+    import json
+    import re
+    from collections import Counter
+
+    golden_path = ROOT / "eval" / "golden.json"
+    with open(golden_path, encoding="utf-8") as f:
+        cases = json.load(f)
+
+    total = len(cases)
+    by_suite = Counter(c.get("suite") for c in cases)
+    by_split = Counter(c.get("split") for c in cases)
+    test_conv = sum(1 for c in cases if c.get("split") == "test" and c.get("suite") == "conversation")
+
+    readme = (ROOT / "eval" / "README.md").read_text(encoding="utf-8")
+
+    assert f"`golden.json` has {total} cases." in readme, f"eval/README.md total case count drifted from {total}"
+    assert f"`en` ({by_suite['en']})" in readme, f"eval/README.md suite 'en' count drifted from {by_suite['en']}"
+    assert f"`multilingual` ({by_suite['multilingual']}:" in readme, (
+        f"eval/README.md suite 'multilingual' count drifted from {by_suite['multilingual']}"
+    )
+    assert f"`conversation` ({by_suite['conversation']} follow-ups)" in readme, (
+        f"eval/README.md suite 'conversation' count drifted from {by_suite['conversation']}"
+    )
+    assert f"on the current {total} cases" in readme, (
+        f"eval/README.md test-split table header drifted from {total} cases"
+    )
+
+    # Invariants for the held-out test split vs calibration split
+    assert by_split["test"] == 108, f"Unexpected test split count: {by_split['test']}"
+    assert by_split["calibration"] == 51, f"Unexpected calibration split count: {by_split['calibration']}"
+    assert test_conv == 9, f"Unexpected conversation test count: {test_conv}"
+
