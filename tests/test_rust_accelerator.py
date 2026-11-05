@@ -99,15 +99,20 @@ def test_performance_benchmark():
         "Quarterly financial projections show an estimated 15% increase in operational efficiency.",
     ] * 200  # 1,000 chunks
 
-    # 1. Benchmark Pure Python
-    t0 = time.perf_counter()
-    py_results = [_pure_python_scan(chunk) for chunk in sample_corpus]
-    py_duration = time.perf_counter() - t0
+    def best_of_three(scan):
+        """Fastest of three passes after a warm-up call. One timed pass failed on a shared CI runner (Rust 0.27 s against
+        Python 0.026 s, then 0.0004 s per 1,000 chunks when run again here): a stall or one-time setup is not what
+        this test measures."""
+        scan(sample_corpus[0])
+        runs = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            results = [scan(chunk) for chunk in sample_corpus]
+            runs.append(time.perf_counter() - t0)
+        return min(runs), results
 
-    # 2. Benchmark Native Rust
-    t0 = time.perf_counter()
-    rs_results = [rag_accel.scan_chunk(chunk) for chunk in sample_corpus]
-    rs_duration = time.perf_counter() - t0
+    py_duration, py_results = best_of_three(_pure_python_scan)
+    rs_duration, rs_results = best_of_three(rag_accel.scan_chunk)
 
     speedup = py_duration / rs_duration if rs_duration > 0 else 1.0
     print(f"\n[BENCHMARK] 1,000 chunks: Python = {py_duration*1000:.2f}ms | Rust = {rs_duration*1000:.2f}ms | Speedup = {speedup:.1f}x")
