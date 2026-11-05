@@ -39,3 +39,12 @@ def test_runtime_data_is_still_ignored_at_the_root_only():
 
 def test_the_rust_lockfile_is_tracked_for_reproducible_wheels():
     assert _ignored([ROOT / "crates" / "rag_accel" / "Cargo.lock"]) == []
+
+
+def test_the_license_is_declared_once_and_agrees_everywhere():
+    """The README said Apache-2.0 while pyproject.toml said MIT and no LICENSE file existed."""
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert config["project"]["license"]["text"] == "Apache-2.0"
+    assert "Apache-2.0" in (ROOT / "README.md").read_text(encoding="utf-8").rsplit("## License", 1)[1]
+    text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert "Apache License" in text.splitlines()[0] and "Version 2.0, January 2004" in text

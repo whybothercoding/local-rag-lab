@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Air-gapped Compound AI retrieval and compliance engine"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Local RAG Lab Contributors"}
 ]
