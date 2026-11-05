@@ -33,10 +33,14 @@ _CONTINUATIONS = {fold(w) for w in (
 )}
 # Only words that cannot also be an article or a relative word ("la", "les", "τους", "that" are both).
 _ANAPHORA = {fold(w) for w in (
-    "it", "they", "them", "there", "those", "then",
-    "dafür", "danach", "dabei", "davon", "darüber", "dort",
-    "ça", "cela", "ceci",
-    "αυτό", "αυτά", "εκεί", "γι",
+    # English: object, spatial, and personal pronouns
+    "it", "they", "them", "there", "those", "then", "he", "she", "him", "her", "his",
+    # German: demonstrative, spatial, and personal pronouns
+    "dafür", "danach", "dabei", "davon", "darüber", "dort", "er", "sie", "ihn", "ihm", "sein", "seine",
+    # French: demonstrative, spatial, and personal pronouns
+    "ça", "cela", "ceci", "il", "elle", "ils", "elles", "lui",
+    # Greek: demonstrative, spatial, and personal pronouns
+    "αυτό", "αυτά", "εκεί", "γι", "αυτός", "αυτή", "αυτοί", "αυτές", "εκείνος", "εκείνη", "εκείνοι", "εκείνες",
 )}
 _REWRITE_PROMPT = (
     "Rewrite the last question so that it can be understood without the conversation, in the same "

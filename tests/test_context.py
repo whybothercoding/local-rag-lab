@@ -19,6 +19,10 @@ TURN = {"question": "On which days are production deployments scheduled?", "answ
 @pytest.mark.parametrize("question", [
     "And between which hours?", "What about weekends?", "Und wie viel bezahlt die Firma dafür?",
     "Et jusqu'à quand peut-on les reporter ?", "Και για γάμο;", "And for longer flights?",
+    "What was his primary salary?", "When did he leave the company?",
+    "Welche Position hatte er im Vorstand?", "Hat sie den Arbeitsvertrag unterschrieben?",
+    "Quel poste occupait il dans le conseil?", "Pourquoi a-t-elle démissionné ?",
+    "Ποια θέση είχε αυτός στο συμβούλιο;", "Πότε υπέγραψε αυτή τη σύμβαση;",
 ])
 def test_follow_ups_are_recognised_in_every_language(question):
     assert looks_like_follow_up(question)
