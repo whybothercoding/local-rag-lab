@@ -1,6 +1,5 @@
 """The semantic cache's vector index: same answers as the old linear scan, never across clearances, never stale."""
 import random
-import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -47,7 +46,9 @@ def fake(monkeypatch):
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(tmp_path, cache_backend):
+    """The cache database of a test: a file for SQLite; for PostgreSQL the path is ignored (one shared table that
+    conftest.cache_backend empties around every test). Every test that takes `db` runs against both backends."""
     return str(tmp_path / "cache.db")
 
 
@@ -155,8 +156,9 @@ def test_a_row_edited_or_moved_on_disk_leaves_the_matrix_and_never_matches(db, f
     sc.store_cache("ops", question("alpha"), "internal", "internal answer", db_path=db)
     fake.near(question("bravo"), question("alpha"), 0.0, seed=5)
     assert sc.lookup_cache("ops", question("bravo"), "internal", threshold=0.5, db_path=db)["hit"]
-    with sqlite3.connect(db) as conn:
+    with sc._open_db(db) as conn:
         conn.execute("UPDATE semantic_cache SET clearance = 'public'")  # move it down: the seal binds the clearance
+        conn.commit()
     for clearance in ("public", "internal"):
         sc._l1_clear()
         assert sc.lookup_cache("ops", question("bravo"), clearance, threshold=0.0, db_path=db) == {"hit": False}
@@ -167,10 +169,11 @@ def test_a_row_whose_vector_is_swapped_for_another_rows_does_not_open(db, fake):
     sc.store_cache("ops", question("charlie"), "public", "second", db_path=db)
     fake.near(question("bravo"), question("alpha"), 0.0, seed=6)
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db)["generation"] == "first"
-    with sqlite3.connect(db) as conn:
-        a, c = [r[0] for r in conn.execute("SELECT query_vector FROM semantic_cache ORDER BY rowid")]
-        conn.execute("UPDATE semantic_cache SET query_vector = ? WHERE generation IS NOT NULL AND rowid = 1", (c,))
-        conn.execute("UPDATE semantic_cache SET query_vector = ? WHERE rowid = 2", (a,))
+    with sc._open_db(db) as conn:
+        (first_id, a), (second_id, c) = conn.execute("SELECT rowid, query_vector FROM semantic_cache ORDER BY rowid").fetchall()
+        conn.execute("UPDATE semantic_cache SET query_vector = ? WHERE rowid = ?", (c, first_id))
+        conn.execute("UPDATE semantic_cache SET query_vector = ? WHERE rowid = ?", (a, second_id))
+        conn.commit()
     sc._l1_clear()
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.0, db_path=db) == {"hit": False}
 
@@ -185,8 +188,9 @@ def test_changes_by_other_writers_are_seen_on_the_next_lookup(db, fake):
     sc._l1_clear()
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db)["generation"] == "v2"
     assert cache_index.stats()["entries"] == cache_index_before, "replaced, not duplicated"
-    with sqlite3.connect(db) as conn:
+    with sc._open_db(db) as conn:
         conn.execute("DELETE FROM semantic_cache")
+        conn.commit()
     sc._l1_clear()
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.0, db_path=db) == {"hit": False}
     sc.store_cache("ops", question("delta"), "public", "after a wipe", db_path=db)  # rowids start again at 1
@@ -198,12 +202,14 @@ def test_a_review_flag_changed_in_place_is_honoured_without_reopening_the_row(db
     sc.store_cache("ops", question("alpha"), "public", "auto-approved", db_path=db, reviewed=False)
     fake.near(question("bravo"), question("alpha"), 0.0, seed=9)
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db, include_unreviewed=False) == {"hit": False}
-    with sqlite3.connect(db) as conn:
+    with sc._open_db(db) as conn:
         conn.execute("UPDATE semantic_cache SET reviewed = 1")
+        conn.commit()
     got = sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db, include_unreviewed=False)
     assert got["hit"] and got["reviewed"] is True
-    with sqlite3.connect(db) as conn:
+    with sc._open_db(db) as conn:
         conn.execute("UPDATE semantic_cache SET reviewed = 0")
+        conn.commit()
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db, include_unreviewed=False) == {"hit": False}
 
 
@@ -212,8 +218,9 @@ def test_expired_entries_leave_the_index(db, fake):
     fake.near(question("bravo"), question("alpha"), 0.0, seed=10)
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.5, db_path=db)["hit"]
     stale = (datetime.now(UTC) - timedelta(days=400)).isoformat(timespec="seconds")
-    with sqlite3.connect(db) as conn:
+    with sc._open_db(db) as conn:
         conn.execute("UPDATE semantic_cache SET created_at = ?", (stale,))
+        conn.commit()
     assert sc.lookup_cache("ops", question("bravo"), "public", threshold=0.0, db_path=db) == {"hit": False}
     assert cache_index.stats()["entries"] == 0
 

@@ -38,6 +38,16 @@ os.environ["KEY_SERVICE"] = "local-rag-lab-pytest"
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 # A .env file may set these for real use; tests get no second anchor location unless they ask for one.
 os.environ["AUDIT_ANCHOR_COPY_DIR"] = ""
+# Scaling options stay off: a .env that enables Qdrant, pgvector or a shared cache must never make a test write to a
+# real service. Tests of those options opt in with their own namespace (tests/test_vector_stores.py, test_shared_cache.py).
+os.environ["VECTOR_STORE"] = "chroma"
+os.environ["CACHE_BACKEND"] = "sqlite"
+os.environ["CACHE_DB_URI"] = ""
+os.environ["QDRANT_URL"] = ""
+os.environ["QDRANT_API_KEY"] = ""
+os.environ["PGVECTOR_URI"] = ""
+os.environ["LOCAL_LLM_API_KEY"] = "local"
+os.environ["LOCAL_LLM_MODEL"] = ""
 os.environ["BACKUP_DIR"] = os.path.join(_scratch_dir, "backups")
 os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')}"
 # Indexes and uploads too: no test may write to the repository's chroma_data/, bm25_indices/, or uploads/.
@@ -58,6 +68,8 @@ for _field in ("audit_db_path", "cache_db_path", "access_policy_path", "access_k
         raise RuntimeError(f"settings.{_field} was built before the test redirect: {getattr(settings, _field)}")
 if settings.key_store != "file" or settings.key_envelope or settings.audit_anchor_copy_dir:
     raise RuntimeError("key storage or the anchor copy directory was built before the test redirect")
+if settings.vector_store != "chroma" or settings.cache_backend != "sqlite" or settings.qdrant_url or settings.pgvector_uri:
+    raise RuntimeError("a scaling option was built before the test redirect: tests must not reach a real service")
 if not settings.db_uri.startswith(f"sqlite:///{_scratch_dir}"):
     raise RuntimeError(f"settings.db_uri was built before the test redirect: {settings.db_uri}")
 
@@ -72,6 +84,28 @@ def _fresh_accelerator_state():
     accel._state.update(calls=0, noted=False)
     yield
     accel._state.update(calls=0, noted=False)
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def cache_backend(request, monkeypatch):
+    """Run a test against the SQLite cache and against the shared PostgreSQL cache (CACHE_BACKEND=postgres).
+
+    The Postgres run uses the dedicated `<database>_pytest` database of the `postgres_uri` fixture, so it skips (or, with
+    REQUIRE_POSTGRES=1, fails) exactly like the checkpointer tests do. The shared table is emptied around every test.
+    """
+    from rag_lab.retrieval import cache_index
+    from rag_lab.retrieval import semantic_cache as sc
+
+    if request.param == "postgres":
+        uri = request.getfixturevalue("postgres_uri")
+        monkeypatch.setattr(settings, "cache_backend", "postgres")
+        monkeypatch.setattr(settings, "cache_db_uri", uri)
+        sc.clear_cache()
+    cache_index.forget()
+    yield request.param
+    if request.param == "postgres":
+        sc.clear_cache()
+    cache_index.forget()
 
 
 @pytest.fixture(autouse=True)

@@ -7,20 +7,19 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
-import chromadb
 from psycopg_pool import ConnectionPool
 
 from rag_lab.config import settings
 from rag_lab.storage.checkpointer import is_postgres_uri, get_sqlite_path
 from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index
+from rag_lab.storage.vector_store import WorkspaceNotIndexed, get_vector_store, vector_store_status
 
 
 logger = logging.getLogger("workspace_manager")
 
 # `ws_<id>__build` must stay inside Chroma's 63-character collection name limit.
 _MAX_WORKSPACE_ID = 48
-_TEMP_SUFFIXES = ("__build", "__old")
 
 
 def sanitize_workspace_id(raw_name: str) -> str:
@@ -69,15 +68,11 @@ def list_workspaces() -> List[str]:
     ensure_base_dirs()
     workspaces = set()
 
-    # 1. Discover collections from ChromaDB (not the temporary __build/__old copies used while re-indexing)
+    # 1. Discover indexes in the vector store (not the temporary copies used while re-indexing)
     try:
-        client = chromadb.PersistentClient(path=settings.chroma_path)
-        for col in client.list_collections():
-            name = getattr(col, "name", str(col))
-            if name.startswith("ws_") and not name.endswith(_TEMP_SUFFIXES):
-                workspaces.add(name[3:])
+        workspaces |= get_vector_store().workspaces()
     except Exception as exc:
-        logger.warning("Could not list Chroma collections: %s", exc)
+        logger.warning("Could not list the vector store's workspaces: %s", exc)
 
     # 2. Discover SQLite FTS5 keyword indices
     if os.path.exists(settings.bm25_dir):
@@ -165,12 +160,11 @@ def create_workspace(raw_name: str, actor: str | None = None) -> str:
     # Ensure staging folder exists
     os.makedirs(os.path.join(settings.uploads_dir, ws_id), exist_ok=True)
 
-    # Initialize empty collection in ChromaDB
+    # Initialize an empty index in the vector store
     try:
-        client = chromadb.PersistentClient(path=settings.chroma_path)
-        client.get_or_create_collection(name=f"ws_{ws_id}", metadata={"hnsw:space": "cosine"})
+        get_vector_store().ensure(ws_id)
     except Exception as exc:
-        logger.warning("Could not create Chroma collection for %s: %s", ws_id, exc)
+        logger.warning("Could not create the vector index for %s: %s", ws_id, exc)
 
     _audit_workspace("workspace_created", ws_id, who)
     return ws_id
@@ -194,16 +188,11 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
     if not ws_id:
         return False
 
-    # 1. Delete Chroma collections
+    # 1. Delete the vector index (and any leftover re-index copy)
     try:
-        client = chromadb.PersistentClient(path=settings.chroma_path)
-        for name in (f"ws_{ws_id}", f"ws_{ws_id}__build", f"ws_{ws_id}__old"):
-            try:
-                client.delete_collection(name=name)
-            except Exception as exc:
-                logger.debug("Collection %s not deleted: %s", name, exc)
+        get_vector_store().delete(ws_id)
     except Exception as exc:
-        logger.warning("Could not delete Chroma collection for %s: %s", ws_id, exc)
+        logger.warning("Could not delete the vector index for %s: %s", ws_id, exc)
 
     # 2. Delete sparse index (SQLite FTS5 and any leftover legacy PKL)
     delete_sparse_index(ws_id, base_dir=settings.bm25_dir)
@@ -276,13 +265,10 @@ def get_workspace_stats(raw_name: str) -> Dict[str, Any]:
     bm25_indexed = False
     embedding = None
 
-    # Chunks from Chroma
+    # Chunks in the vector store
     try:
-        from chromadb.errors import NotFoundError
-        client = chromadb.PersistentClient(path=settings.chroma_path)
-        col = client.get_collection(name=f"ws_{ws_id}")
-        chunk_count = col.count()
-    except NotFoundError:
+        chunk_count = get_vector_store().count(ws_id)
+    except WorkspaceNotIndexed:
         chunk_count = 0
     except Exception as exc:
         logger.warning("Could not read chunk count for %s: %s", ws_id, exc)
@@ -396,7 +382,21 @@ def print_status() -> int:
         ok = False
     pulled = ollama_models(settings.ollama_base_url)
     chat_provider = settings.llm_provider.lower().strip()
-    if pulled is None:
+    if chat_provider == "openai":
+        from rag_lab.pipeline.llm_provider import openai_model_name, probe_openai
+
+        probe = probe_openai()
+        wanted = openai_model_name()
+        if probe.models is None:
+            print(f"[!!] LLM backend         : OpenAI-compatible server at {settings.local_llm_url}: {probe.error}")
+            ok = False
+        elif wanted in probe.models:
+            print(f"[OK] LLM backend         : OpenAI-compatible server reachable ({wanted} at {settings.local_llm_url})")
+        else:
+            print(f"[!!] LLM backend         : {settings.local_llm_url} is up but does not serve '{wanted}' "
+                  f"(serves: {', '.join(sorted(probe.models)) or 'nothing'}); set LOCAL_LLM_MODEL")
+            ok = False
+    elif pulled is None:
         if chat_provider == "ollama":
             print(f"[!!] Ollama              : offline at {settings.ollama_base_url}, but the configuration requires it")
             ok = False
@@ -439,6 +439,11 @@ def print_status() -> int:
     ):
         print(f"[{marker}] Key storage          : {text}")
         ok = ok and marker != "!!"
+
+    # 3c. Where the vectors live, and whether that place answers
+    store_ok, store_line = vector_store_status()
+    print(f"[{'OK' if store_ok else '!!'}] Vector store        : {store_line}")
+    ok = ok and store_ok
 
     # 4. Workspaces
     workspaces = list_workspaces()
@@ -489,11 +494,17 @@ def print_status() -> int:
             print("[--] Anchor copy         : none (set AUDIT_ANCHOR_COPY_DIR to a second location so a rewound "
                   "anchor file is detectable)")
 
-    # 7. Semantic cache
+    # 7. Semantic cache (SQLite file, or the shared PostgreSQL, which is asked rather than assumed)
     try:
-        from rag_lab.retrieval.semantic_cache import cache_stats
-        cs = cache_stats()
-        print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s)")
+        from rag_lab.retrieval.semantic_cache import cache_backend_status, cache_stats
+        healthy, where = cache_backend_status()
+        if not healthy:
+            print(f"[!!] Semantic cache      : {where}")
+            ok = False
+        else:
+            cs = cache_stats()
+            note = f" [{where}]" if settings.cache_backend != "sqlite" else ""
+            print(f"[OK] Semantic cache      : {cs['total_entries']} entry(s) across {len(cs['workspaces'])} workspace(s){note}")
     except Exception as exc:
         print(f"[!!] Semantic cache error: {exc}")
         ok = False

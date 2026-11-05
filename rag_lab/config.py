@@ -11,7 +11,7 @@ Defaults match docker-compose.yml and the models a fresh `make setup` machine do
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 
 from dotenv import load_dotenv
 
@@ -23,6 +23,18 @@ load_dotenv(ROOT / ".env")
 # Fixed values: not configuration, so they stay plain constants.
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"
+
+
+def pgvector_uri_from_env() -> str:
+    """The pgvector compose profile's server (loopback, port 5433), with the same credentials as the checkpoint
+    database. Empty when POSTGRES_PASSWORD is not set: there is no default password."""
+    from urllib.parse import quote
+
+    user, password = os.getenv("POSTGRES_USER", "rag_user"), os.getenv("POSTGRES_PASSWORD", "")
+    if not password:
+        return ""
+    port = os.getenv("PGVECTOR_PORT", "5433")
+    return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@localhost:{port}/rag_vectors"
 
 
 def postgres_uri_from_env() -> str:
@@ -141,6 +153,26 @@ class Settings:
     # Whether `make recover` (the operator-run break-glass for a locked-out account) may run. On by default: this
     # is a local-first tool and its operator owns the machine. Turn it off on a shared host.
     local_recovery: bool
+    # --- scaling options, all off by default (docs/scaling.md) ---------------------------------------------------
+    # Where chunk vectors live: "chroma" (embedded, default), "qdrant" or "pgvector". See rag_lab/storage/vector_store.py.
+    vector_store: str
+    qdrant_url: str
+    # Secrets and connection strings with passwords stay out of repr(), so printing settings cannot leak them.
+    qdrant_api_key: str = field(repr=False)
+    # Prepended to every Qdrant collection name: lets installs (and tests) share one server without touching each other.
+    qdrant_prefix: str
+    pgvector_uri: str = field(repr=False)
+    # The schema holding rag_chunks / rag_workspaces in the pgvector database.
+    pgvector_schema: str
+    # Where the semantic cache lives: "sqlite" (default, a local file) or "postgres" (shared by several UI processes).
+    cache_backend: str
+    cache_db_uri: str = field(repr=False)
+    # OpenAI-compatible chat server (vLLM, LM Studio, llama.cpp), used with LLM_PROVIDER=openai.
+    local_llm_api_key: str = field(repr=False)
+    local_llm_model: str
+    # JSON merged into the request as chat_template_kwargs. The default turns Qwen3's thinking off, as the Ollama path
+    # does; set it empty for a server that rejects unknown request fields.
+    local_llm_template_kwargs: str
     # The native accelerator (rag_accel): "preferred" uses it and falls back, loudly, to pure Python when it is
     # missing; "required" refuses to start without it. See rag_lab/accel.py.
     rag_accel: str
@@ -225,6 +257,18 @@ class Settings:
             key_envelope=_env("KEY_ENVELOPE", "").strip(),
             local_recovery=_flag("LOCAL_RECOVERY", "on"),
             rag_accel=_env("RAG_ACCEL", "preferred").strip().lower(),
+            vector_store=_env("VECTOR_STORE", "chroma").strip().lower(),
+            qdrant_url=_env("QDRANT_URL", "http://localhost:6333"),
+            qdrant_api_key=_env("QDRANT_API_KEY", ""),
+            qdrant_prefix=_env("QDRANT_PREFIX", ""),
+            # Unset: derive it from POSTGRES_* (the compose profile). Set but empty: off, however .env is filled.
+            pgvector_uri=os.environ["PGVECTOR_URI"] if "PGVECTOR_URI" in os.environ else pgvector_uri_from_env(),
+            pgvector_schema=_env("PGVECTOR_SCHEMA", "public"),
+            cache_backend=_env("CACHE_BACKEND", "sqlite").strip().lower(),
+            cache_db_uri=_env("CACHE_DB_URI", ""),
+            local_llm_api_key=_env("LOCAL_LLM_API_KEY", "local"),
+            local_llm_model=_env("LOCAL_LLM_MODEL", ""),
+            local_llm_template_kwargs=_env("LOCAL_LLM_TEMPLATE_KWARGS", '{"enable_thinking": false}'),
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),

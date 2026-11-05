@@ -374,6 +374,8 @@ The repository includes a `docker-compose.yml` to run PostgreSQL (`postgres:16-a
 
 **Credentials.** There is no password in the repository. `make up` creates `.env` (mode 600, git-ignored) with a random `POSTGRES_PASSWORD` the first time; `docker-compose.yml` reads it through `${POSTGRES_PASSWORD}` and refuses to start without one. The server listens on `127.0.0.1` only. To use it as the checkpoint store, uncomment the `DB_URI` line in `.env` (it expands `${POSTGRES_USER}` and `${POSTGRES_PASSWORD}`). The PostgreSQL tests use `POSTGRES_TEST_URI`, or the credentials in `.env`.
 
+**Scaling options (all off by default).** Qdrant or pgvector as the vector store, vLLM or any OpenAI-compatible server as the chat model, a PostgreSQL-backed semantic cache shared by several UI processes, each a compose profile started with `make scale-up SERVICE=<name>` that `make up` never starts: see [docs/scaling.md](docs/scaling.md), including the measurements and what does **not** scale (the keyword index, the audit log and the policy stay local files).
+
 **HTTPS on a LAN.** `make ui` serves plain HTTP. For colleagues on a network there is an optional Caddy proxy with a local CA (`make lan-tls`, a compose profile that `make up` never starts): see [docs/lan-tls.md](docs/lan-tls.md).
 
 **Upgrading from an earlier version.** The old compose file used a fixed password, and PostgreSQL applies `POSTGRES_PASSWORD` only when a volume is first created. After `make up` has created `.env`, run `make db-password` once: it sets the existing role's password to the one in `.env` over the container's local socket (the data is untouched). Starting fresh instead (`docker compose down -v`) deletes the volume and its checkpoints.

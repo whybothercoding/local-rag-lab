@@ -7,8 +7,10 @@ Ensures the Local Enterprise Hub operates seamlessly:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -111,6 +113,30 @@ class DeterministicContextLLM(BaseChatModel):
         return "deterministic-context-synthesizer"
 
 
+# A reasoning model's thinking, if a server leaves it in the text: it must never reach the graders or the reader.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN = re.compile(r"<think>.*", re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks, and a block that never closed (a cut-off answer is not an answer)."""
+    return _THINK_OPEN.sub("", _THINK_BLOCK.sub("", text)).strip()
+
+
+def _template_kwargs() -> dict[str, Any]:
+    """LOCAL_LLM_TEMPLATE_KWARGS as a dict. Empty means send none, for servers that reject unknown request fields."""
+    raw = settings.local_llm_template_kwargs.strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LOCAL_LLM_TEMPLATE_KWARGS must be a JSON object or empty ({exc}).") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("LOCAL_LLM_TEMPLATE_KWARGS must be a JSON object or empty.")
+    return parsed
+
+
 def _openai_role(message: BaseMessage) -> str:
     if isinstance(message, SystemMessage):
         return "system"
@@ -127,10 +153,13 @@ class OpenAICompatibleChat(BaseChatModel):
 
     base_url: str
     model_name: str = "qwen3:8b"
-    api_key: str = "local"
+    # A secret: kept out of repr() so it cannot reach a log line or a traceback by accident.
+    api_key: str = Field(default="local", repr=False)
     # Read when the client is created, so a settings override applies.
     timeout_sec: float = Field(default_factory=lambda: settings.ollama_timeout_sec)
     transport: Any = None
+    # Merged into the request as chat_template_kwargs; the default turns Qwen3's thinking off (LOCAL_LLM_TEMPLATE_KWARGS).
+    template_kwargs: dict[str, Any] = Field(default_factory=_template_kwargs)
 
     @property
     def _llm_type(self) -> str:
@@ -143,11 +172,13 @@ class OpenAICompatibleChat(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "temperature": 0.0,
             "messages": [{"role": _openai_role(m), "content": str(m.content)} for m in messages],
         }
+        if self.template_kwargs:
+            payload["chat_template_kwargs"] = self.template_kwargs
         with httpx.Client(timeout=self.timeout_sec, transport=self.transport) as client:
             response = client.post(
                 f"{self.base_url.rstrip('/')}/chat/completions",
@@ -155,8 +186,53 @@ class OpenAICompatibleChat(BaseChatModel):
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=str(content)))])
+        choices = response.json().get("choices") or []
+        if not choices:
+            raise ValueError("The chat server returned no choices.")
+        # Only `content` is the answer. A server that separates its reasoning (reasoning / reasoning_content) is ignored
+        # on purpose, and any <think> block left in the text is removed.
+        content = choices[0].get("message", {}).get("content") or ""
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=strip_thinking(str(content))))])
+
+
+@dataclass(frozen=True)
+class OpenAIProbe:
+    models: set[str] | None
+    error: str = ""
+
+
+def probe_openai(base_url: str | None = None, api_key: str | None = None, timeout_sec: float = 2.0,
+                 transport: Any = None) -> OpenAIProbe:
+    """Ask an OpenAI-compatible server which models it serves (GET /models). Never raises; `error` says why not."""
+    url = f"{(base_url or settings.local_llm_url).rstrip('/')}/models"
+    key = settings.local_llm_api_key if api_key is None else api_key
+    try:
+        with httpx.Client(timeout=timeout_sec, transport=transport) as client:
+            response = client.get(url, headers={"Authorization": f"Bearer {key}"})
+    except httpx.HTTPError as exc:
+        return OpenAIProbe(None, f"unreachable ({type(exc).__name__})")
+    if response.status_code in (401, 403):
+        return OpenAIProbe(None, f"HTTP {response.status_code}: the server refused LOCAL_LLM_API_KEY")
+    if response.status_code != 200:
+        return OpenAIProbe(None, f"HTTP {response.status_code}")
+    try:
+        return OpenAIProbe({str(m["id"]) for m in response.json().get("data", [])})
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return OpenAIProbe(None, "an answer that is not an OpenAI model list")
+
+
+def openai_model_name() -> str:
+    """The model id sent to an OpenAI-compatible server: LOCAL_LLM_MODEL, else the shared chat model setting."""
+    return settings.local_llm_model or settings.chat_model
+
+
+def _openai_chat(transport: Any = None) -> BaseChatModel:
+    return OpenAICompatibleChat(
+        base_url=settings.local_llm_url,
+        model_name=openai_model_name(),
+        api_key=settings.local_llm_api_key,
+        transport=transport,
+    )
 
 
 def is_ollama_alive(base_url: str | None = None, timeout_sec: float = 0.5) -> bool:
@@ -222,7 +298,7 @@ def get_chat_llm(provider: str | None = None) -> BaseChatModel:
     active = (provider or settings.llm_provider).lower().strip()
 
     if active == "openai":
-        return OpenAICompatibleChat(base_url=settings.local_llm_url, model_name=settings.chat_model)
+        return _openai_chat()
 
     if active == "deterministic":
         return DeterministicContextLLM()

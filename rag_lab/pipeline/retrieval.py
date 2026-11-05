@@ -10,8 +10,6 @@ from typing import List
 import json
 import time
 
-from chromadb.errors import NotFoundError
-import chromadb
 
 from rag_lab.config import settings
 from rag_lab.pipeline import llm_provider
@@ -20,6 +18,7 @@ from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError
 from rag_lab.retrieval.embedding_provider import embedding_fingerprint
 from rag_lab.retrieval.embedding_provider import get_embedding_model
 from rag_lab.retrieval.embedding_provider import stored_fingerprint
+from rag_lab.storage.vector_store import WorkspaceNotIndexed, get_vector_store
 from rag_lab.retrieval.reranker import rerank_with_status, score_pairs
 from rag_lab.retrieval.sparse_search import has_sparse_index
 from rag_lab.retrieval.sparse_search import search_sparse_chunks
@@ -32,17 +31,6 @@ from rag_lab.security.context_sanitizer import scan_chunk
 
 from rag_lab.pipeline.state import StateInput
 from rag_lab.pipeline.text import _content_terms, _coverage, _keywords, _stem_variants
-
-
-def _similarity(distance: float, space: str) -> float:
-    """Convert a Chroma distance to a cosine-like similarity for the collection's distance space.
-
-    Collections built by this version use cosine distance. Older ones use squared L2 on unit vectors,
-    where cosine = 1 - d / 2.
-    """
-    if space == "cosine":
-        return 1.0 - distance
-    return 1.0 - distance / 2.0
 
 
 class _EmbeddingMismatch(RuntimeError):
@@ -146,41 +134,22 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     user_clr = get_user_clearance(principal) if principal else "public"
     authorized_clrs = allowed_clearances(user_clr)
 
-    # 1. Dense retrieval (ChromaDB) with clearance filter + fail-closed post-query verification
+    # 1. Dense retrieval through the configured vector store (VECTOR_STORE): clearance filter on the server, and the
+    # fail-closed guard of VectorStore.query() on every hit, whichever store it is.
     try:
-        chroma_client = chromadb.PersistentClient(path=settings.chroma_path)
-        collection = chroma_client.get_collection(name=f"ws_{ws_id}")
-        raw_meta = getattr(collection, "metadata", None)
-        space = str(raw_meta.get("hnsw:space", "l2")) if isinstance(raw_meta, dict) else "l2"
-        mismatch = _embedding_mismatch(ws_id, raw_meta)
+        store = get_vector_store()
+        mismatch = _embedding_mismatch(ws_id, store.collection_metadata(ws_id))
         if mismatch:
             raise _EmbeddingMismatch(mismatch)
         q_vec = get_embedding_model().embed_query(query)
-        try:
-            results = collection.query(
-                query_embeddings=[q_vec],  # type: ignore[arg-type]  # chroma stubs want numpy; lists are accepted
-                n_results=5,
-                where={"clearance": {"$in": authorized_clrs}},  # type: ignore[dict-item]
-            )
-        except Exception:
-            results = collection.query(query_embeddings=[q_vec], n_results=20)  # type: ignore[arg-type]
-        docs = (results.get("documents") or [[]])[0]
-        metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
-        ids = (results.get("ids") or [[]])[0]
-        distances = (results.get("distances") or [[]])[0] or [2.0] * len(docs)
-        for doc, meta, cid, distance in zip(docs, metas, ids, distances):
-            meta_dict = meta or {}
-            # A chunk with no clearance tag is treated as unreadable, never as public.
-            doc_clr = str(meta_dict.get("clearance", "")).strip().lower()
-            if not doc_clr or doc_clr not in authorized_clrs:
-                continue
+        for hit in store.query(ws_id, q_vec, 5, authorized_clrs):
             dense_candidates.append({
-                "id": cid,
-                "content": doc,
-                "citation": f"[{cid}] {meta_dict.get('source', 'document')}",
-                "similarity": _similarity(float(distance), space),
+                "id": hit.id,
+                "content": hit.document,
+                "citation": f"[{hit.id}] {hit.metadata.get('source', 'document')}",
+                "similarity": hit.similarity,
             })
-    except NotFoundError:
+    except WorkspaceNotIndexed:
         degraded.append("not_indexed: this workspace has no vector index yet")
     except _EmbeddingMismatch as exc:
         degraded.append(str(exc))

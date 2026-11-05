@@ -40,7 +40,74 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # --- Scaling options. Each is a profile: 'make up' starts none of them, 'make scale-up SERVICE=<name>' starts one.
+  # They bind to loopback; put them behind a TLS proxy or a private network before reaching them from another host.
+  # Setup, trade-offs and what each does not solve: docs/scaling.md.
+
+  # Vector store: VECTOR_STORE=qdrant. An empty QDRANT_API_KEY means no authentication (loopback only); set one
+  # before exposing the port.
+  qdrant:
+    profiles: ["qdrant"]
+    image: qdrant/qdrant:v1.20.0
+    container_name: local-rag-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # Vector store: VECTOR_STORE=pgvector, and the shared cache (CACHE_BACKEND=postgres) if you want one database. This
+  # is a separate server from the checkpoint database because postgres:16-alpine has no pgvector extension.
+  pgvector:
+    profiles: ["pgvector"]
+    image: pgvector/pgvector:pg16
+    container_name: local-rag-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag_vectors
+      POSTGRES_USER: ${POSTGRES_USER:-rag_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (run 'make up', which creates .env)}
+    ports:
+      - "127.0.0.1:${PGVECTOR_PORT:-5433}:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d rag_vectors"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Chat model: LLM_PROVIDER=openai LOCAL_LLM_URL=http://localhost:8000/v1 LOCAL_LLM_MODEL=<VLLM_MODEL>. Needs an NVIDIA
+  # GPU and the NVIDIA Container Toolkit (it cannot run on a Mac). The first start downloads the model from Hugging Face:
+  # unlike the ONNX models, it is not SHA-256 pinned, and the host is not air-gapped until the cache volume is filled.
+  vllm:
+    profiles: ["vllm"]
+    image: vllm/vllm-openai:latest
+    container_name: local-rag-vllm
+    restart: unless-stopped
+    command: ["--model", "${VLLM_MODEL:-Qwen/Qwen3-8B}", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports:
+      - "127.0.0.1:${VLLM_PORT:-8000}:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  qdrant_data:
+  pgvector_data:
+  vllm_cache:

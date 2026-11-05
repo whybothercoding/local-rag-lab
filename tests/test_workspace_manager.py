@@ -240,3 +240,34 @@ def test_status_shows_the_python_fallback_as_degraded_and_fails(rollback_index, 
     assert code == 1
     assert "[!!] Context sanitizer   : DEGRADED, pure-Python fallback (No module named 'rag_accel')" in out
     assert "wheelhouse" in out and "make rust-build" in out
+
+
+# --- make status: an OpenAI-compatible chat server (vLLM, LM Studio, llama.cpp) ---------------------------------
+
+def _openai_status(capsys, monkeypatch, probe):
+    from rag_lab.pipeline import llm_provider
+
+    monkeypatch.setattr(settings, "local_llm_url", "http://vllm.test/v1")
+    monkeypatch.setattr(settings, "local_llm_model", "Qwen/Qwen3-8B")
+    monkeypatch.setattr(llm_provider, "probe_openai", lambda *a, **k: probe)
+    return _status(capsys, monkeypatch, llm="openai")
+
+
+def test_status_reports_a_reachable_openai_server_that_serves_the_model(rollback_index, capsys, monkeypatch):
+    from rag_lab.pipeline.llm_provider import OpenAIProbe
+
+    code, out = _openai_status(capsys, monkeypatch, OpenAIProbe({"Qwen/Qwen3-8B"}))
+    assert code == 0, out
+    assert "[OK] LLM backend         : OpenAI-compatible server reachable (Qwen/Qwen3-8B at http://vllm.test/v1)" in out
+    assert "Ollama" not in out.split("LLM backend")[1].split("\n")[0]
+
+
+def test_status_flags_an_openai_server_that_is_down_refuses_the_key_or_lacks_the_model(rollback_index, capsys, monkeypatch):
+    from rag_lab.pipeline.llm_provider import OpenAIProbe
+
+    code, out = _openai_status(capsys, monkeypatch, OpenAIProbe(None, "unreachable (ConnectError)"))
+    assert code == 1 and "[!!] LLM backend" in out and "unreachable (ConnectError)" in out
+    code, out = _openai_status(capsys, monkeypatch, OpenAIProbe(None, "HTTP 401: the server refused LOCAL_LLM_API_KEY"))
+    assert code == 1 and "LOCAL_LLM_API_KEY" in out
+    code, out = _openai_status(capsys, monkeypatch, OpenAIProbe({"other/model"}))
+    assert code == 1 and "does not serve 'Qwen/Qwen3-8B'" in out and "set LOCAL_LLM_MODEL" in out
