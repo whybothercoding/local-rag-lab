@@ -384,7 +384,7 @@ def print_status() -> int:
     pulled = ollama_models(settings.ollama_base_url)
     chat_provider = settings.llm_provider.lower().strip()
     if pulled is None:
-        if chat_provider == "ollama" or provider == "ollama":
+        if chat_provider == "ollama":
             print(f"[!!] Ollama              : offline at {settings.ollama_base_url}, but the configuration requires it")
             ok = False
         else:
@@ -397,12 +397,6 @@ def print_status() -> int:
             ok = False
         else:
             print(f"[--] LLM backend         : {chat_provider}; {settings.chat_model} is not pulled into Ollama")
-        if provider == "ollama":
-            if settings.embed_model in pulled:
-                print(f"[OK] Ollama embeddings   : {settings.embed_model} pulled")
-            else:
-                print(f"[!!] Ollama embeddings   : {settings.embed_model} is not pulled (run 'make ollama-pull')")
-                ok = False
 
     # 3. Accounts & RBAC policy
     try:
@@ -424,6 +418,14 @@ def print_status() -> int:
     except PolicyIntegrityError as exc:
         print(f"[!!] RBAC policy error   : {exc}")
         ok = False
+
+    # 3b. Keys: the OS keychain, or key files (advisory where no keychain exists, a fault if a pointer is broken)
+    from rag_lab.security.keystore import key_storage_report
+    for marker, text in key_storage_report(
+        {"access": Path(settings.access_key_path), "data": Path(settings.data_key_path)}
+    ):
+        print(f"[{marker}] Key storage          : {text}")
+        ok = ok and marker != "!!"
 
     # 4. Workspaces
     workspaces = list_workspaces()
@@ -467,6 +469,12 @@ def print_status() -> int:
             for problem in problems:
                 print(f"[!!] Audit anchor error  : {problem}")
             ok = False
+        if settings.audit_anchor_copy_dir:
+            if chain_ok and anchors_ok:
+                print(f"[OK] Anchor copy         : {settings.audit_anchor_copy_dir} (in step with the primary)")
+        else:
+            print("[--] Anchor copy         : none (set AUDIT_ANCHOR_COPY_DIR to a second location so a rewound "
+                  "anchor file is detectable)")
 
     # 7. Semantic cache
     try:

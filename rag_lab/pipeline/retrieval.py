@@ -71,7 +71,7 @@ def _embedding_mismatch(ws_id: str, collection_metadata: Any) -> str | None:
         return None
     return (
         f"dense_retrieval_unavailable: the index was built with {built_with} but the runtime uses {runtime}; "
-        "re-index with 'make sync FORCE=1' or restore EMBEDDING_PROVIDER"
+        "re-index with 'make sync FORCE=1' (or restore the model it was built with)"
     )
 
 

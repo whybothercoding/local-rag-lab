@@ -60,16 +60,11 @@ def test_idempotent_ingestion_manifest(tmp_path: Path, monkeypatch):
     assert res3.unchanged is False
 
 
-def test_embedding_fingerprint_and_no_silent_ollama_fallback(mocker):
+def test_embedding_fingerprint_and_no_silent_model_swap(mocker):
     import rag_lab.retrieval.embedding_provider as embedding_provider
     from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError, embedding_fingerprint, get_embedding_model
-    from langchain_ollama import OllamaEmbeddings
 
-    assert embedding_fingerprint("ollama").startswith("ollama:")
     assert embedding_fingerprint("fastembed").startswith("fastembed:")
-
-    ollama_emb = get_embedding_model("ollama")
-    assert isinstance(ollama_emb, OllamaEmbeddings)
 
     # A FastEmbed failure surfaces as an actionable error; it never swaps in a model of another vector size.
     mocker.patch.object(embedding_provider, "LocalFastEmbeddings", side_effect=EmbeddingUnavailableError("run make models"))

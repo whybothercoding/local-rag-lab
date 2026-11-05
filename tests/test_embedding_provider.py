@@ -2,7 +2,6 @@
 import chromadb
 import httpx
 import pytest
-from langchain_ollama import OllamaEmbeddings
 
 import rag_lab.retrieval.embedding_provider as embedding_provider
 from rag_lab.pipeline.state import BLOCKING_DEGRADED_PREFIXES
@@ -19,7 +18,8 @@ from rag_lab.retrieval.embedding_provider import (
 from rag_lab.pipeline.llm_provider import ollama_models
 
 QUESTION = "What is the rollback SLA?"
-OLLAMA_FINGERPRINT = f"ollama:{settings.embed_model}"
+# What an index built before the Ollama embedding path was removed carries: a model this runtime no longer has.
+OLLAMA_FINGERPRINT = "ollama:nomic-embed-text"
 FASTEMBED_FINGERPRINT = f"fastembed:{settings.fastembed_model}"
 
 
@@ -31,23 +31,34 @@ def _retrieval_state(question: str = QUESTION) -> dict:
 
 def test_fingerprints_name_the_provider_and_model():
     assert embedding_fingerprint("fastembed") == FASTEMBED_FINGERPRINT
-    assert embedding_fingerprint("ollama") == OLLAMA_FINGERPRINT
-    assert embedding_fingerprint(" Ollama ") == OLLAMA_FINGERPRINT
+    assert embedding_fingerprint(" FastEmbed ") == FASTEMBED_FINGERPRINT
 
 
-def test_ollama_provider_returns_ollama_embeddings():
-    assert isinstance(get_embedding_model("ollama"), OllamaEmbeddings)
+def test_fastembed_is_the_only_provider():
     assert isinstance(get_embedding_model("fastembed"), LocalFastEmbeddings)
+    assert isinstance(get_embedding_model(), LocalFastEmbeddings)
+
+
+def test_the_removed_ollama_provider_fails_loudly_with_the_way_out(monkeypatch):
+    """A leftover EMBEDDING_PROVIDER=ollama must not be ignored: that would quietly query an index built by
+    another model."""
+    for call in (lambda: get_embedding_model("ollama"), lambda: embedding_fingerprint(" Ollama ")):
+        with pytest.raises(EmbeddingUnavailableError, match="no longer supported") as caught:
+            call()
+        assert "make sync FORCE=1" in str(caught.value) and "Unset EMBEDDING_PROVIDER" in str(caught.value)
+    monkeypatch.setattr(settings, "embedding_provider", "ollama")
+    with pytest.raises(EmbeddingUnavailableError, match="no longer supported"):
+        get_embedding_model()
 
 
 def test_unknown_provider_is_refused_with_the_valid_choices():
-    with pytest.raises(EmbeddingUnavailableError, match="fastembed, ollama"):
+    with pytest.raises(EmbeddingUnavailableError, match="Use one of: fastembed"):
         get_embedding_model("openai")
     with pytest.raises(EmbeddingUnavailableError):
         embedding_fingerprint("sentence-transformers")
 
 
-def test_fastembed_failure_raises_instead_of_switching_to_ollama(tmp_path):
+def test_fastembed_failure_raises_instead_of_switching_to_another_model(tmp_path):
     """A different model would produce vectors of another size: the failure must surface, not switch."""
     broken = LocalFastEmbeddings(cache_dir=str(tmp_path / "no-models-here"))
     with pytest.raises(EmbeddingUnavailableError, match="make models"):
@@ -96,7 +107,7 @@ def test_ingest_stamps_the_fingerprint_on_the_live_collection(rollback_index):
 
 # --- retrieval refuses to compare vectors from two models ----------------------
 
-def test_provider_switch_without_reindex_skips_dense_with_a_labelled_note(rollback_index, monkeypatch):
+def test_an_index_built_by_another_model_skips_dense_with_a_labelled_note(rollback_index, monkeypatch):
     monkeypatch.setattr("rag_lab.pipeline.retrieval.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)
 
     def must_not_embed(*args, **kwargs):
@@ -147,8 +158,8 @@ def test_unloadable_embedding_model_is_reported_with_its_fix(rollback_index, mon
     assert state["documents"]
 
 
-def test_reindex_after_provider_switch_clears_the_mismatch(rollback_index, monkeypatch):
-    """Re-syncing under the new provider stores the new fingerprint, so retrieval trusts the index again."""
+def test_reindexing_after_a_model_change_clears_the_mismatch(rollback_index, monkeypatch):
+    """Re-syncing under the new model stores the new fingerprint, so retrieval trusts the index again."""
     from rag_lab.ingestion.ingest import ingest_workspace
 
     monkeypatch.setattr("rag_lab.ingestion.ingest.embedding_fingerprint", lambda: OLLAMA_FINGERPRINT)

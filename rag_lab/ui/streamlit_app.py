@@ -14,11 +14,14 @@ from rag_lab.security.access import (
     PolicyIntegrityError,
     add_to_group,
     add_user,
+    begin_totp_enrollment,
     allowed_workspaces,
     authorize,
     clearance_covers,
+    confirm_totp_enrollment,
     create_group,
     describe_review_mode,
+    disable_totp,
     effective_permissions,
     get_default_permissions,
     get_default_role,
@@ -26,8 +29,11 @@ from rag_lab.security.access import (
     get_user_clearance,
     is_admin,
     is_idle_expired,
+    is_owner,
     list_groups,
     load_policy,
+    recovery_codes_left,
+    regenerate_recovery_codes,
     remove_from_group,
     reset_grant,
     review_mode_report,
@@ -39,6 +45,7 @@ from rag_lab.security.access import (
     set_user_clearance,
     set_user_permissions_everywhere,
     sign_in,
+    totp_enabled,
     verify_token,
 )
 from rag_lab.pipeline.graph import workflow
@@ -117,9 +124,10 @@ def login_gate() -> None:
     with st.form("login"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
+        code = st.text_input("Authentication code (only if two-factor sign-in is on)", key="login_code")
         submitted = st.form_submit_button("Sign in")
     if submitted:
-        result = sign_in(username, password)
+        result = sign_in(username, password, code=code)
         if result.ok:
             st.session_state.user = result.username
             st.session_state.token = result.token
@@ -316,7 +324,7 @@ if admin:
                 st.error(f"Chain broken at seq {bad_seq}.")
             anchors_ok, problems, anchor_count = verify_anchors()
             if anchor_count == 0:
-                st.info("No anchors yet. Run make audit-anchor, then copy data/audit_anchors.jsonl off the host.")
+                st.info("No anchors yet. Run make audit-anchor (set AUDIT_ANCHOR_COPY_DIR to keep a second copy elsewhere).")
             elif anchors_ok:
                 st.success(f"{anchor_count} anchors match the log.")
             for problem in problems:
@@ -563,6 +571,57 @@ if admin:
                     st.rerun()
                 except (ValueError, PermissionError) as exc:
                     st.error(str(exc))
+
+    # 1d. Two-factor sign-in for the signed-in owner or administrator
+    with st.sidebar.expander("Two-factor sign-in (Admin)"):
+        if totp_enabled(user):
+            st.caption(f"On for **{user}**. Recovery codes left: {recovery_codes_left(user)}.")
+            current = st.text_input("Authentication or recovery code", key="totp_current_code")
+            off_col, new_col = st.columns(2)
+            try:
+                if off_col.button("Turn off", key="totp_off_btn"):
+                    disable_totp(user, current, actor=user)
+                    st.rerun()
+                if new_col.button("New recovery codes", key="totp_recovery_btn"):
+                    st.session_state.recovery_codes = regenerate_recovery_codes(user, current, actor=user)
+                    st.rerun()
+            except (ValueError, PermissionError) as exc:
+                st.error(str(exc))
+        elif "totp_enrolment" in st.session_state:
+            enrolment = st.session_state.totp_enrolment
+            st.caption("Add this secret to your authenticator app (or open the link on the device), then enter a code.")
+            st.code(enrolment.secret)
+            st.code(enrolment.uri)
+            confirm_code = st.text_input("Code from the app", key="totp_confirm_code")
+            if st.button("Confirm", key="totp_confirm_btn"):
+                try:
+                    st.session_state.recovery_codes = confirm_totp_enrollment(user, confirm_code, actor=user)
+                    del st.session_state["totp_enrolment"]
+                    st.rerun()
+                except (ValueError, PermissionError) as exc:
+                    st.error(str(exc))
+        elif st.button("Set up two-factor sign-in", key="totp_setup_btn"):
+            try:
+                st.session_state.totp_enrolment = begin_totp_enrollment(user, actor=user)
+                st.rerun()
+            except (ValueError, PermissionError) as exc:
+                st.error(str(exc))
+        if "recovery_codes" in st.session_state:
+            st.warning("Recovery codes: each works once and they are not shown again. Store them somewhere safe.")
+            st.code("\n".join(st.session_state.recovery_codes))
+            if st.button("I saved them", key="totp_codes_saved_btn"):
+                del st.session_state["recovery_codes"]
+                st.rerun()
+        if is_owner(user):
+            enrolled = sorted(
+                name for name, info in load_policy()["users"].items() if info.get("totp") and name != user
+            )
+            if enrolled:
+                st.divider()
+                reset_target = st.selectbox("Reset another account's two-factor sign-in", enrolled, key="totp_reset_select")
+                if st.button("Reset (signs them out)", key="totp_reset_btn"):
+                    disable_totp(reset_target, actor=user)
+                    st.rerun()
 
     # 2. Add New Workspace
     with st.sidebar.expander("Create Workspace Bundle"):

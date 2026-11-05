@@ -1,0 +1,18 @@
+# LAN TLS for the Streamlit UI (compose profile "caddy"; see docs/lan-tls.md). Off by default.
+{
+	# No public ACME and no internet: certificates come from Caddy's own local CA.
+	local_certs
+}
+
+{$RAG_LAN_HOST:localhost} {
+	tls internal
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+	# Streamlit needs WebSockets; reverse_proxy upgrades them without further configuration.
+	reverse_proxy {$RAG_UPSTREAM:host.docker.internal:8501}
+}

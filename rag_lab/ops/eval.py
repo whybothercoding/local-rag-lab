@@ -58,6 +58,10 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
     os.environ["ACCESS_KEY_PATH"] = str(out_dir / "access.key")
     os.environ["DATA_KEY_PATH"] = str(out_dir / "data.key")
     os.environ["ANCHOR_PATH"] = str(out_dir / "audit_anchors.jsonl")
+    # Throwaway keys belong in out_dir, never in the OS keychain.
+    os.environ["KEY_STORE"] = "file"
+    os.environ["KEY_ENVELOPE"] = ""
+    os.environ["AUDIT_ANCHOR_COPY_DIR"] = ""
     os.environ["DB_URI"] = f"sqlite:///{out_dir / 'unused_checkpoints.db'}"
     if llm_mode:
         os.environ["LLM_PROVIDER"] = "ollama"

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import sqlite3
 import sys
 import threading
@@ -271,8 +272,61 @@ def _canonical(entry: dict[str, Any]) -> str:
     return json.dumps(entry, sort_keys=True, separators=(",", ":"))
 
 
-def anchor(path: str | None = None, anchor_path: str | None = None) -> dict[str, Any] | None:
-    """Record the current head hash in the anchor file. Each anchor is signed and chained to the previous one."""
+class AnchorCopyError(RuntimeError):
+    """The primary anchor was written, but the second copy could not be brought up to date."""
+
+    def __init__(self, entry: dict[str, Any], message: str):
+        super().__init__(message)
+        self.entry = entry
+
+
+def _copy_target(anchor_path: str | None, copy_dir: str | None) -> Path | None:
+    """The second anchor file, or None. AUDIT_ANCHOR_COPY_DIR applies to the live anchor file only: a backup's
+    anchors, or any explicit file, are checked on their own unless a directory is passed."""
+    chosen = copy_dir if copy_dir is not None else (settings.audit_anchor_copy_dir if anchor_path is None else "")
+    if not chosen:
+        return None
+    return Path(chosen) / Path(anchor_path or settings.anchor_path).name
+
+
+def _sync_copy(primary: list[dict[str, Any]], target: Path) -> None:
+    """Append the anchors the copy lacks. Refuses to touch a copy that disagrees with the primary."""
+    directory = target.parent
+    if not directory.is_dir():
+        if not directory.parent.is_dir():
+            raise AnchorCopyError({}, f"{directory} is not reachable (is the drive or share mounted?)")
+        directory.mkdir()
+    try:
+        existing = _read_anchors(str(target))
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        raise AnchorCopyError({}, f"the copy {target} could not be read ({exc})") from exc
+    if len(existing) > len(primary):
+        raise AnchorCopyError({}, f"the copy {target} has more anchors ({len(existing)}) than the primary "
+                                  f"({len(primary)}): the primary anchor file was truncated")
+    for index, (mine, theirs) in enumerate(zip(primary, existing), 1):
+        if mine != theirs:
+            raise AnchorCopyError({}, f"the copy {target} differs from the primary at anchor {index}: "
+                                      "one of them was edited, so nothing was appended")
+    missing = primary[len(existing):]
+    if not missing:
+        return
+    fd = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as handle:
+        for entry in missing:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def anchor(
+    path: str | None = None, anchor_path: str | None = None, copy_dir: str | None = None
+) -> dict[str, Any] | None:
+    """Record the current head hash in the anchor file. Each anchor is signed and chained to the previous one.
+
+    With AUDIT_ANCHOR_COPY_DIR (or `copy_dir`) the anchors are also written to a second location, which should be
+    somewhere an attacker on this host cannot rewrite. The primary is written first; if the copy then fails,
+    AnchorCopyError carries the new anchor and says why, and the command exits non-zero.
+    """
     conn = _open(path)
     try:
         head = conn.execute("SELECT seq, record_hash FROM audit_events ORDER BY seq DESC LIMIT 1").fetchone()
@@ -292,17 +346,20 @@ def anchor(path: str | None = None, anchor_path: str | None = None) -> dict[str,
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    copy = _copy_target(anchor_path, copy_dir)
+    if copy is not None:
+        try:
+            _sync_copy([*anchors, entry], copy)
+        except AnchorCopyError as exc:
+            raise AnchorCopyError(entry, str(exc)) from None
+        except OSError as exc:
+            raise AnchorCopyError(entry, f"the copy {copy} could not be written ({exc})") from exc
     return entry
 
 
-def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> tuple[bool, list[str], int]:
-    """Check every anchor's signature and chaining, and that the anchored records still exist unchanged.
-
-    Anchors older than the retention base describe records that were deleted on purpose; they are
-    accepted without a record to compare against.
-    """
+def _check_anchor_file(conn: sqlite3.Connection, target: Path, label: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Check one anchor file's signatures, chaining, and that the anchored records still exist unchanged."""
     problems: list[str] = []
-    target = Path(anchor_path or settings.anchor_path)
     anchors: list[dict[str, Any]] = []
     if target.exists():
         with open(target, encoding="utf-8") as handle:
@@ -312,41 +369,81 @@ def verify_anchors(path: str | None = None, anchor_path: str | None = None) -> t
                 try:
                     parsed = json.loads(line)
                 except json.JSONDecodeError:
-                    problems.append(f"anchor line {line_no}: invalid JSON (anchor file was edited)")
+                    problems.append(f"{label}anchor line {line_no}: invalid JSON (anchor file was edited)")
                     continue
                 if not isinstance(parsed, dict):
-                    problems.append(f"anchor line {line_no}: entry is not a JSON object")
+                    problems.append(f"{label}anchor line {line_no}: entry is not a JSON object")
                     continue
                 anchors.append(parsed)
+    base_seq, base_hash = _base(conn)
+    prev = GENESIS_HASH
+    for index, entry in enumerate(anchors, 1):
+        body = {key: value for key, value in entry.items() if key != "mac"}
+        if not hmac.compare_digest(anchor_mac(_canonical(body)), str(entry.get("mac", ""))):
+            problems.append(f"{label}anchor {index}: signature does not match (anchor file was edited)")
+        if entry.get("prev") != prev:
+            problems.append(f"{label}anchor {index}: chaining to the previous anchor is broken")
+        prev = str(entry.get("mac", ""))
+
+        try:
+            seq = int(entry["seq"])
+            expected_hash = str(entry["hash"])
+        except (KeyError, TypeError, ValueError):
+            problems.append(f"{label}anchor {index}: missing or invalid seq/hash fields")
+            continue
+        row = conn.execute("SELECT record_hash FROM audit_events WHERE seq = ?", (seq,)).fetchone()
+        if row is not None:
+            if row[0] != expected_hash:
+                problems.append(f"{label}anchor {index}: record {seq} changed after it was anchored")
+        elif seq == base_seq:
+            if base_hash != expected_hash:
+                problems.append(f"{label}anchor {index}: retention base does not match the anchored hash")
+        elif seq > base_seq:
+            problems.append(f"{label}anchor {index}: anchored record {seq} is missing; the log was truncated")
+    return anchors, problems
+
+
+def verify_anchors(
+    path: str | None = None, anchor_path: str | None = None, copy_dir: str | None = None
+) -> tuple[bool, list[str], int]:
+    """Check every anchor file on its own, then the primary against the second copy when one is configured.
+
+    Anchors older than the retention base describe records that were deleted on purpose; they are
+    accepted without a record to compare against. Returns (ok, problems, anchors in the primary file).
+
+    The two files are compared by signature: a copy with more anchors than the primary means the primary was
+    truncated, a different anchor at the same position means one was edited, and a copy with fewer is behind
+    (`make audit-anchor` brings it up to date). Both files being intact and equal is what makes deleting or
+    rewriting the primary on this host detectable.
+    """
+    target = Path(anchor_path or settings.anchor_path)
+    copy = _copy_target(anchor_path, copy_dir)
     conn = _open(path)
     try:
-        base_seq, base_hash = _base(conn)
-        prev = GENESIS_HASH
-        for index, entry in enumerate(anchors, 1):
-            body = {key: value for key, value in entry.items() if key != "mac"}
-            if not hmac.compare_digest(anchor_mac(_canonical(body)), str(entry.get("mac", ""))):
-                problems.append(f"anchor {index}: signature does not match (anchor file was edited)")
-            if entry.get("prev") != prev:
-                problems.append(f"anchor {index}: chaining to the previous anchor is broken")
-            prev = str(entry.get("mac", ""))
-
-            try:
-                seq = int(entry["seq"])
-                expected_hash = str(entry["hash"])
-            except (KeyError, TypeError, ValueError):
-                problems.append(f"anchor {index}: missing or invalid seq/hash fields")
-                continue
-            row = conn.execute("SELECT record_hash FROM audit_events WHERE seq = ?", (seq,)).fetchone()
-            if row is not None:
-                if row[0] != expected_hash:
-                    problems.append(f"anchor {index}: record {seq} changed after it was anchored")
-            elif seq == base_seq:
-                if base_hash != expected_hash:
-                    problems.append(f"anchor {index}: retention base does not match the anchored hash")
-            elif seq > base_seq:
-                problems.append(
-                    f"anchor {index}: anchored record {seq} is missing; the log was truncated"
-                )
+        anchors, problems = _check_anchor_file(conn, target, "")
+        if copy is not None:
+            copy_anchors: list[dict[str, Any]] = []
+            if not copy.parent.is_dir():
+                problems.append(f"copy: {copy.parent} is not reachable (is the drive or share mounted?)")
+            elif not copy.exists():
+                if anchors:
+                    problems.append(f"copy: {copy} does not exist; {len(anchors)} anchor(s) are not copied "
+                                    "(run 'make audit-anchor')")
+            else:
+                copy_anchors, copy_problems = _check_anchor_file(conn, copy, "copy: ")
+                problems.extend(copy_problems)
+            if copy.exists():
+                for index, (mine, theirs) in enumerate(zip(anchors, copy_anchors), 1):
+                    if mine != theirs:
+                        problems.append(f"copy: anchor {index} differs from the primary: one of them was edited")
+                        break
+                else:
+                    if len(copy_anchors) > len(anchors):
+                        problems.append(f"copy: has {len(copy_anchors)} anchor(s) but the primary has {len(anchors)}: "
+                                        "the primary anchor file was truncated")
+                    elif len(copy_anchors) < len(anchors):
+                        problems.append(f"copy: is behind by {len(anchors) - len(copy_anchors)} anchor(s) "
+                                        "(run 'make audit-anchor' to bring it up to date)")
     finally:
         conn.close()
     return not problems, problems, len(anchors)
@@ -428,8 +525,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok and anchors_ok else 1
 
     if args.command == "anchor":
-        entry = anchor()
+        try:
+            entry = anchor()
+        except AnchorCopyError as exc:
+            print(f"Anchored seq {exc.entry['seq']}: {exc.entry['hash']}")
+            print(f"Error: the second anchor copy is NOT up to date: {exc}", file=sys.stderr)
+            return 1
         print("Nothing to anchor: the log is empty." if entry is None else f"Anchored seq {entry['seq']}: {entry['hash']}")
+        if entry is not None and settings.audit_anchor_copy_dir:
+            print(f"Copied to {settings.audit_anchor_copy_dir}.")
         return 0
 
     if args.command == "head":

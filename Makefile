@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -11,9 +11,14 @@ help:
 	@echo "  make verify-models [PROFILE=...]               Verify cached ONNX model SHA-256 hashes offline"
 	@echo "  make calibrate-models [PROFILE=...]            Suggest the profile's thresholds from the eval calibration split"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
-	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
-	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker)"
-	@echo "  make status                                    Check models, accelerator, LLM, workspaces, and audit health"
+	@echo "  make ollama-pull                               Pull the optional Ollama chat model"
+	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker); 'up' creates .env with a random password"
+	@echo "  make lan-tls                                   Optional HTTPS for the UI on the LAN (Caddy profile, docs/lan-tls.md)"
+	@echo "  make lan-tls-down                              Stop the LAN TLS proxy"
+	@echo "  make lan-tls-ca                                Export Caddy's local root certificate for client devices"
+	@echo "  make db-password                               Give an existing PostgreSQL volume the password in .env (once, after upgrading)"
+	@echo "  make status                                    Check models, accelerator, LLM, keys, workspaces, and audit health"
+	@echo "  make migrate-keys [REVERSE=1]                  Move the keys into the OS keychain (REVERSE=1: back into their files)"
 	@echo ""
 	@echo "RBAC & User Management (Admin-Only after first admin is created):"
 	@echo "  Roles: owner, admin (+administration) | reviewer (query,review) | trusted (query,auto_approve) | member (query) | none"
@@ -25,6 +30,10 @@ help:
 	@echo "  make set-admin ACCOUNT=<u> ADMIN=<admin> [REVOKE=1]  Shortcut for ROLE=admin / ROLE=default"
 	@echo "  make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>  (or PERMS=<list>)"
 	@echo "  make team-mode ADMIN=<admin>                   Default role trusted -> member (needs a reviewer)"
+	@echo "  make totp-enroll ADMIN=<me>                    Turn on two-factor sign-in for yourself (owners and admins)"
+	@echo "  make totp-recovery ADMIN=<me>                  Replace your recovery codes"
+	@echo "  make totp-disable ADMIN=<me> [ACCOUNT=<u>]     Turn it off (yours; another account's: owner only)"
+	@echo "  make recover ACCOUNT=<u> [RESET_TOTP=1] [RESET_PASSWORD=1]  Operator break-glass at this machine for a locked-out account"
 	@echo "  make groups                                    List groups, members, and workspace roles"
 	@echo "  make create-group GROUP=<g> ADMIN=<admin>"
 	@echo "  make delete-group GROUP=<g> ADMIN=<admin>      Members keep their own access"
@@ -55,7 +64,7 @@ help:
 	@echo "  make audit-verify                              Verify HMAC audit hash chain and anchors"
 	@echo "  make audit-tail [N=20] [WS=<ws>]               Show most recent audit events"
 	@echo "  make audit-feedback [N=20] [WS=<ws>]           Show rejected answers and reviewer reasons"
-	@echo "  make audit-anchor                              Record signed audit head hash anchor"
+	@echo "  make audit-anchor                              Record signed audit head hash anchor (+ AUDIT_ANCHOR_COPY_DIR copy)"
 	@echo "  make audit-export [OUT=audit-export.jsonl]     Export decrypted audit trail as JSONL"
 	@echo "  make retention [DAYS=183]                      Prune expired audit records and idle checkpoints"
 	@echo "  make backup                                    Create checksummed snapshot in backups/"
@@ -115,16 +124,35 @@ calibrate-models:
 up:
 	@command -v docker >/dev/null 2>&1 || { echo "Error: Docker is not installed. (Note: Docker is optional; SQLite is used by default with zero setup)."; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running. Start Docker or use the default embedded SQLite checkpointer."; exit 1; }
+	@$(if $(wildcard venv/bin/python),./venv/bin/python,python3) -m rag_lab.ops.init_env
 	docker compose up -d
+
+# Optional LAN TLS (compose profile "caddy"): Caddy terminates HTTPS with its own local CA and proxies to the
+# Streamlit UI on the host. Never started by `make up`. Set RAG_LAN_HOST and RAG_HTTPS_PORT in .env.
+lan-tls:
+	@docker info >/dev/null 2>&1 || { echo "Error: Docker daemon is not running."; exit 1; }
+	docker compose --profile caddy up -d caddy
+
+lan-tls-down:
+	docker compose --profile caddy rm -sf caddy
+
+# Copy Caddy's local root certificate out of the container, to install on the devices that open the UI.
+lan-tls-ca:
+	@mkdir -p data && docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt data/caddy-root.crt && echo "Wrote data/caddy-root.crt (public certificate; install it as a trusted root on your devices)."
+
+# Rotate the database role's password to the one in .env. POSTGRES_PASSWORD only applies when the volume is
+# first created, so a volume from an earlier version keeps its old password until this runs. It connects over
+# the container's local socket (no old password needed) and the password never appears on the host.
+db-password:
+	@docker compose exec -T postgres sh -c 'printf "ALTER USER \"%s\" PASSWORD '"'"'%s'"'"';\n" "$$POSTGRES_USER" "$$POSTGRES_PASSWORD" | psql -q -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' && echo "The database role now uses the password in .env."
 
 down:
 	@command -v docker >/dev/null 2>&1 || exit 0
 	docker compose down
 
-# 5. Optional: pull the Ollama chat and embedding models (names resolved by config.py, so .env applies)
+# 5. Optional: pull the Ollama chat model (name resolved by config.py, so .env applies). Embeddings are in-process ONNX.
 ollama-pull:
 	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.chat_model)')"
-	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.embed_model)')"
 
 # 6. Run the test suite
 test:
@@ -177,7 +205,8 @@ audit-verify:
 audit-tail:
 	./venv/bin/python -m rag_lab.security.audit tail -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
 
-# 15. Anchor the audit head hash. Run on a schedule and copy data/audit_anchors.jsonl off the host.
+# 15. Anchor the audit head hash. Run on a schedule. With AUDIT_ANCHOR_COPY_DIR the anchors are also written to a
+# second location (another disk or share); the command exits non-zero when that copy cannot be updated.
 audit-anchor:
 	./venv/bin/python -m rag_lab.security.audit anchor
 
@@ -200,6 +229,11 @@ backups:
 backup-verify:
 	@test -n "$(DIR)" || (echo "Set DIR=<backup directory>" && exit 1)
 	./venv/bin/python -m rag_lab.storage.backup verify $(DIR)
+
+# 11b. Keys: move the access and data keys into the OS keychain, or back into their owner-only files.
+# Keys in the keychain are not covered by `make backup`: keep a copy in custody (REVERSE=1 restores the files).
+migrate-keys:
+	./venv/bin/python -m rag_lab.security.keystore migrate $(if $(REVERSE),--reverse,)
 
 # 12. Account & Role-Based Access Control (RBAC) Management
 users:
@@ -236,6 +270,24 @@ set-role:
 set-default:
 	@test -n "$(or $(ROLE),$(PERMS))" || (echo "Usage: make set-default ROLE=<member|trusted|reviewer|none> ADMIN=<admin>  (or PERMS=query,auto_approve)" && exit 1)
 	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) set-default $(if $(ROLE),--role $(ROLE),--perms $(PERMS))
+
+# Break-glass for an account that cannot sign in (lost authenticator and codes, forgotten password), including a sole
+# owner. No sign-in: run it at the machine, from a terminal. See README "When someone is locked out".
+recover:
+	@test -n "$(ACCOUNT)" && { test -n "$(RESET_TOTP)" || test -n "$(RESET_PASSWORD)"; } || (echo "Usage: make recover ACCOUNT=<account> [RESET_TOTP=1] [RESET_PASSWORD=1]" && exit 1)
+	./venv/bin/python -m rag_lab.security.access recover $(ACCOUNT) $(if $(RESET_TOTP),--totp,) $(if $(RESET_PASSWORD),--password,)
+
+totp-enroll:
+	@test -n "$(ADMIN)" || (echo "Usage: make totp-enroll ADMIN=<your account>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access --as $(ADMIN) totp-enroll
+
+totp-recovery:
+	@test -n "$(ADMIN)" || (echo "Usage: make totp-recovery ADMIN=<your account>" && exit 1)
+	./venv/bin/python -m rag_lab.security.access --as $(ADMIN) totp-recovery
+
+totp-disable:
+	@test -n "$(ADMIN)" || (echo "Usage: make totp-disable ADMIN=<your account> [ACCOUNT=<account to reset, owner only>]" && exit 1)
+	./venv/bin/python -m rag_lab.security.access --as $(ADMIN) totp-disable $(ACCOUNT)
 
 groups:
 	./venv/bin/python -m rag_lab.security.access groups
@@ -339,6 +391,7 @@ factory-reset:
 			exit 1; \
 		fi; \
 	fi
+	./venv/bin/python -m rag_lab.security.keystore forget || echo "Warning: keychain entries could not be removed; delete the local-rag-lab entries in your keychain app by hand."
 	rm -f access_policy.json access_policy.json.*.bak access_policy.json.lock
 	rm -rf data
 	rm -rf chroma_data

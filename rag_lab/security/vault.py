@@ -1,7 +1,7 @@
 """Encryption at rest and keyed tags for the local data stores.
 
-Audit payloads and checkpoint state are sealed with AES-256-GCM under a data key kept in its own
-owner-only file (DATA_KEY_PATH). Every sealed audit payload is bound to its row metadata through
+Audit payloads and checkpoint state are sealed with AES-256-GCM under a data key held in the OS keychain
+or in its own owner-only file (DATA_KEY_PATH; see keystore.py). Every sealed audit payload is bound to its row metadata through
 additional authenticated data, so a ciphertext moved to another row fails to open.
 
 Values written before sealing existed are read as plaintext, so existing databases still load.
@@ -13,7 +13,6 @@ import hashlib
 import hmac
 import os
 import secrets
-from pathlib import Path
 
 import contextlib
 import contextvars
@@ -22,7 +21,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from rag_lab.config import settings
+from rag_lab.security.keystore import InvalidKeyError, load_or_create_key
 
 __all__ = [
     "InvalidTag",
@@ -43,15 +42,10 @@ TEXT_PREFIX = "enc1:"
 _BYTES_PREFIX = b"ENC1"
 _BOUND_PREFIX = b"ENC2"
 _NONCE_BYTES = 12
-_KEY_BYTES = 32
 
 # The thread a checkpoint operation belongs to. checkpointer.py sets it around every saver call so that
 # sealed state is bound to its thread and cannot be copied into another one.
 _THREAD: contextvars.ContextVar[str | None] = contextvars.ContextVar("checkpoint_thread", default=None)
-
-
-class InvalidKeyError(RuntimeError):
-    """A key file is the wrong size or unreadable. Every keyed check refuses to run with it."""
 
 
 @contextlib.contextmanager
@@ -68,44 +62,6 @@ def _allow_legacy(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def load_or_create_key(path: str | None = None) -> bytes:
-    """Read a 32-byte key, creating it atomically with owner-only permissions on first use.
-
-    The key is written to a private temporary file and published with a hard link, so a concurrent
-    reader sees either no key or a complete one, never an empty or partial file. A key of any other
-    length is refused: an empty HMAC key would make every signature forgeable.
-    """
-    target = Path(path or settings.data_key_path)
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(secrets.token_bytes(_KEY_BYTES))
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
-                os.link(temporary, target)
-            except FileExistsError:
-                pass
-        finally:
-            try:
-                os.unlink(temporary)
-            except FileNotFoundError:
-                pass
-    try:
-        key = target.read_bytes()
-    except OSError as exc:
-        raise InvalidKeyError(f"Key file {target} could not be read: {exc}") from exc
-    if len(key) != _KEY_BYTES:
-        raise InvalidKeyError(
-            f"Key file {target} holds {len(key)} bytes; expected {_KEY_BYTES}. "
-            "Restore it from custody. A new key would make existing data unreadable."
-        )
-    return key
 
 
 def _aead() -> AESGCM:

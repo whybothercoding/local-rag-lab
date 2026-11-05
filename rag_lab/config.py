@@ -23,10 +23,24 @@ load_dotenv(ROOT / ".env")
 # Fixed values: not configuration, so they stay plain constants.
 DEFAULT_SQLITE_PATH = str(ROOT / "data" / "checkpoints.db")
 DEFAULT_DB_URI = f"sqlite:///{DEFAULT_SQLITE_PATH}"
-POSTGRES_DB_URI = "postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints"
+
+
+def postgres_uri_from_env() -> str:
+    """The URI of the docker-compose PostgreSQL server, built from POSTGRES_USER / POSTGRES_PASSWORD (.env).
+
+    Empty when they are not set: there is no default password anywhere in the code.
+    """
+    from urllib.parse import quote
+
+    user, password = os.getenv("POSTGRES_USER", "rag_user"), os.getenv("POSTGRES_PASSWORD", "")
+    if not password:
+        return ""
+    database, port = os.getenv("POSTGRES_DB", "rag_checkpoints"), os.getenv("POSTGRES_PORT", "5432")
+    return f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}@localhost:{port}/{quote(database, safe='')}"
+
+
 # Chosen by `make eval-llm` (eval/README.md): multilingual, Apache 2.0, about 5 GB in memory.
 DEFAULT_CHAT_MODEL = "qwen3:8b"
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
 
@@ -116,6 +130,19 @@ class Settings:
     # Encrypts audit payloads and checkpoint state. Keep its backup custody separate from the backups themselves.
     data_key_path: str
     anchor_path: str
+    # A second place for audit anchors (another disk, a mount, a synced folder). Empty means none.
+    audit_anchor_copy_dir: str
+    # Where the two keys above live: "auto" (OS keychain when one is usable, else the key files), "file",
+    # or "keyring" (required; an unusable keychain is an error). Existing key files stay files until
+    # `make migrate-keys`. See rag_lab/security/keystore.py.
+    key_store: str
+    # Service name for keychain entries; each key gets its own random account name, stored in its key file.
+    key_service: str
+    # Whether `make recover` (the operator-run break-glass for a locked-out account) may run. On by default: this
+    # is a local-first tool and its operator owns the machine. Turn it off on a shared host.
+    local_recovery: bool
+    # Name of a registered envelope-encryption provider (Vault/KMS) that wraps newly created keys. Empty: none.
+    key_envelope: str
     backup_dir: str
     # Audit records and idle checkpoint threads older than this are deleted. Six months.
     retention_days: int
@@ -129,7 +156,6 @@ class Settings:
     ollama_base_url: str
     local_llm_url: str
     chat_model: str
-    embed_model: str
     # A hung model server must not hang the app: every chat request gives up after this many seconds.
     ollama_timeout_sec: float
     embedding_provider: str
@@ -190,6 +216,11 @@ class Settings:
             access_key_path=_env("ACCESS_KEY_PATH", str(ROOT / "data" / "access.key")),
             data_key_path=_env("DATA_KEY_PATH", str(ROOT / "data" / "data.key")),
             anchor_path=_env("ANCHOR_PATH", str(ROOT / "data" / "audit_anchors.jsonl")),
+            audit_anchor_copy_dir=_env("AUDIT_ANCHOR_COPY_DIR", ""),
+            key_store=_env("KEY_STORE", "auto").strip().lower(),
+            key_service=_env("KEY_SERVICE", "local-rag-lab"),
+            key_envelope=_env("KEY_ENVELOPE", "").strip(),
+            local_recovery=_flag("LOCAL_RECOVERY", "on"),
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),
@@ -198,7 +229,6 @@ class Settings:
             ollama_base_url=_env("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
             local_llm_url=_env("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL),
             chat_model=_env("OLLAMA_MODEL", DEFAULT_CHAT_MODEL),
-            embed_model=_env("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL),
             ollama_timeout_sec=float(_env("OLLAMA_TIMEOUT_SEC", "120")),
             embedding_provider=_env("EMBEDDING_PROVIDER", "fastembed"),
             model_profile=_env("MODEL_PROFILE", DEFAULT_MODEL_PROFILE),

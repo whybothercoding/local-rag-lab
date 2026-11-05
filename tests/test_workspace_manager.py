@@ -180,31 +180,34 @@ def test_status_default_configuration_is_healthy_without_ollama(rollback_index, 
     assert "indexed with" not in out
 
 
-def test_status_flags_ollama_embeddings_when_ollama_is_offline(rollback_index, capsys, monkeypatch):
-    from rag_lab.config import settings
-
-    code, out = _status(capsys, monkeypatch, embedding="ollama")
+def test_status_flags_an_offline_ollama_only_when_the_chat_model_needs_it(rollback_index, capsys, monkeypatch):
+    code, out = _status(capsys, monkeypatch, llm="ollama")
     assert code == 1
     assert "the configuration requires it" in out
-    assert f"Model verified      : {settings.fastembed_model}" not in out, "FastEmbed weights are not needed on Ollama"
+    code, out = _status(capsys, monkeypatch, llm="deterministic")
+    assert code == 0 and "Ollama embeddings" not in out, "embeddings never need Ollama"
 
 
-def test_status_flags_missing_ollama_models(rollback_index, capsys, monkeypatch):
+def test_status_flags_a_missing_chat_model(rollback_index, capsys, monkeypatch):
     from rag_lab.config import settings
 
-    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="auto", pulled=set())
+    code, out = _status(capsys, monkeypatch, llm="auto", pulled=set())
     assert code == 1
     assert f"{settings.chat_model} is not pulled" in out
-    assert f"{settings.embed_model} is not pulled" in out
 
 
 def test_status_reports_a_workspace_indexed_with_another_model(rollback_index, capsys, monkeypatch):
-    from rag_lab.config import settings
-
-    code, out = _status(capsys, monkeypatch, embedding="ollama", llm="ollama", pulled={settings.embed_model, settings.chat_model})
-    assert code == 1
+    """An index built before the Ollama embedding path was removed carries an ollama: fingerprint."""
+    monkeypatch.setattr("rag_lab.retrieval.embedding_provider.embedding_fingerprint", lambda *a, **k: "fastembed:other/model")
+    code, out = _status(capsys, monkeypatch)
     assert "default: indexed with fastembed:" in out
     assert "make sync WS=default FORCE=1" in out
+
+
+def test_status_names_the_way_out_of_a_leftover_ollama_embedding_setting(rollback_index, capsys, monkeypatch):
+    code, out = _status(capsys, monkeypatch, embedding="ollama")
+    assert code == 1
+    assert "no longer supported" in out and "make sync FORCE=1" in out
 
 
 def test_status_rejects_an_unknown_embedding_provider(rollback_index, capsys, monkeypatch):

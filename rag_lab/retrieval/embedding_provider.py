@@ -1,12 +1,17 @@
-"""In-process and Ollama embedding adapters for dense vector retrieval.
+"""The embedding adapter for dense vector retrieval: an in-process ONNX runtime (`fastembed`).
 
-Defaults to an in-process ONNX runtime (`fastembed`) requiring zero external daemons or network
-calls. Setting EMBEDDING_PROVIDER=ollama switches to the local Ollama embedding model instead.
+It needs no daemon and no network, and its weights are pinned by SHA-256 (model_integrity.py). An
+Ollama embedding path existed until it was measured and dropped. The reasons, strongest first: with it
+the pipeline's multilingual gates fail (retrieval recall 0.75, abstention accuracy 0.27, both required
+>= 0.9) because every threshold is calibrated for the ONNX model; its model cannot be hash-pinned; and
+it took about 2.5 times as long per query. Retrieval quality was close (recall@1 0.90 against 0.93, a
+three-case difference of 91, recall@3 1.00 for both) and is not a reason: as integrated it never added
+the task prefixes nomic-embed-text expects, so that gap says nothing about the model itself.
 
-There is no automatic fallback between the two: they produce vectors of different sizes, so a
-silent switch would index or query with a model the stored vectors were not built with. Changing
-provider is a deliberate setting followed by a re-index (`make sync FORCE=1`). The fingerprint of
-the model that built an index is stored with it, and retrieval refuses to query across a mismatch.
+Models never switch automatically: they produce vectors of different sizes. Changing the model
+(MODEL_PROFILE, FASTEMBED_MODEL) is a deliberate setting followed by `make calibrate-models` and a
+re-index (`make sync FORCE=1`). The fingerprint of the model that built an index is stored with it,
+and retrieval refuses to query across a mismatch.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ logger = logging.getLogger("embedding_provider")
 
 _FASTEMBED_CACHE: dict[str, Any] = {}
 
-PROVIDERS = ("fastembed", "ollama")
+PROVIDERS = ("fastembed",)
 # Collection metadata key recording which embedding model built a workspace's vectors.
 FINGERPRINT_KEY = "embedding_fingerprint"
 
@@ -33,6 +38,12 @@ class EmbeddingUnavailableError(RuntimeError):
 
 def _active_provider(provider: str | None) -> str:
     active = (provider or settings.embedding_provider).lower().strip()
+    if active == "ollama":
+        raise EmbeddingUnavailableError(
+            "EMBEDDING_PROVIDER=ollama is no longer supported: the in-process ONNX model retrieves as well, is "
+            "faster, is hash-pinned, and is the one the thresholds are calibrated for. Unset EMBEDDING_PROVIDER "
+            "(and OLLAMA_EMBED_MODEL), run 'make models', then re-index with 'make sync FORCE=1'."
+        )
     if active not in PROVIDERS:
         raise EmbeddingUnavailableError(
             f"Unknown EMBEDDING_PROVIDER '{active}'. Use one of: {', '.join(PROVIDERS)}."
@@ -68,12 +79,12 @@ class LocalFastEmbeddings(Embeddings):
             except ModelIntegrityError as exc:
                 raise EmbeddingUnavailableError(
                     f"Embedding model {self.model_name} is not available: {exc}. "
-                    "Run 'make models', or set EMBEDDING_PROVIDER=ollama and re-index with 'make sync FORCE=1'."
+                    "Run 'make models' to fetch and verify it."
                 ) from exc
             except Exception as exc:
                 raise EmbeddingUnavailableError(
                     f"Embedding model {self.model_name} failed to load ({type(exc).__name__}: {exc}). "
-                    "Run 'make verify-models', or set EMBEDDING_PROVIDER=ollama and re-index with 'make sync FORCE=1'."
+                    "Run 'make verify-models' to check the cached weights."
                 ) from exc
         return _FASTEMBED_CACHE[cache_key]
 
@@ -97,8 +108,7 @@ def embedding_fingerprint(provider: str | None = None) -> str:
     Stored in ingestion manifests and collection metadata so a model change forces re-indexing and
     retrieval can refuse to compare vectors from two different models.
     """
-    if _active_provider(provider) == "ollama":
-        return f"ollama:{settings.embed_model}"
+    _active_provider(provider)
     return f"fastembed:{settings.fastembed_model}"
 
 
@@ -118,11 +128,8 @@ def stored_fingerprint(collection_metadata: Any, manifest: dict | None = None) -
 def get_embedding_model(provider: str | None = None) -> Embeddings:
     """Factory returning the configured embedding model instance.
 
-    `LocalFastEmbeddings` by default (in-process ONNX, no daemon), or `OllamaEmbeddings` when the
-    provider is 'ollama'. A FastEmbed load failure raises EmbeddingUnavailableError on first use;
-    it never switches model silently.
+    `LocalFastEmbeddings` (in-process ONNX, no daemon). A load failure raises EmbeddingUnavailableError
+    on first use; it never switches model silently.
     """
-    if _active_provider(provider) == "ollama":
-        from langchain_ollama import OllamaEmbeddings
-        return OllamaEmbeddings(model=settings.embed_model, base_url=settings.ollama_base_url)
+    _active_provider(provider)
     return LocalFastEmbeddings()

@@ -13,6 +13,7 @@ jobs:
 
     env:
       # Tests run on throwaway SQLite stores; this server backs the PostgreSQL checkpointer tests.
+      # Credentials of a throwaway service container that exists only for this run; real deployments use .env.
       POSTGRES_TEST_URI: postgresql://rag_user:rag_password@localhost:5432/rag_checkpoints
 
     services:

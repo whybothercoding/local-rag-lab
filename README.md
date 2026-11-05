@@ -30,7 +30,7 @@ An answer that fails the groundedness check is regenerated from the same documen
 ### 5. Hybrid Retrieval & Cross-Encoder Reranking
 Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
 * **Dense Retrieval**: Cosine similarity via ChromaDB and in-process ONNX embeddings. `MODEL_PROFILE` picks the models: `multilingual` (default; `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`, about 0.8 GB), `multilingual-large` (`multilingual-e5-large` + `bge-reranker-v2-m3`, about 4.5 GB, slower, marginally better), or `en` (`bge-small-en-v1.5` + `ms-marco-MiniLM-L-6-v2`, English only). Documents and questions may be in English, German, French, or Greek, in any combination.
-  Set `EMBEDDING_PROVIDER=ollama` to embed with `nomic-embed-text` instead. The two models produce vectors of different sizes, so there is no automatic switch between them: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`).
+  Models never switch automatically: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`). An Ollama embedding path (`EMBEDDING_PROVIDER=ollama`, `nomic-embed-text`) was removed after it was measured on the eval corpus. With it the multilingual gates fail, because every threshold is calibrated for the ONNX model (retrieval recall 0.75, abstention accuracy 0.27, both required >= 0.9); its model cannot be hash-pinned; and it was about 2.5x slower per query (11 ms vs 4.5 ms). Retrieval quality was close (recall@1 0.90 vs 0.93, a three-case difference of 91; recall@3 1.00 for both) and was not the reason: as integrated it never added the task prefixes `nomic-embed-text` expects. A leftover `EMBEDDING_PROVIDER=ollama` now fails with instructions; indexes built with it need `make sync FORCE=1`.
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
 * **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
 * **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (per profile) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
@@ -113,7 +113,7 @@ The generated topology is [`docs/architecture.mmd`](docs/architecture.mmd) (`mak
 ### 1. Prerequisites & Environment Setup
 
 * **Python**: `>= 3.11` (tested up to 3.14)
-* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB) and the alternative embedding model (`nomic-embed-text`)
+* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB); embeddings run in-process, no Ollama needed
 * **Rust Toolchain** (optional, for compiling the native `rag_accel` PyO3 extension)
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
@@ -150,6 +150,28 @@ Nothing is reachable without a signed-in account. Passwords are hashed with **sc
 **Review modes.** A fresh install runs in **open** mode: the default role is `trusted` (`query` + `auto_approve`), so every account can chat on every workspace and answers that pass every automated check are released without a person reading them. Answers that fail a check still pause for review. For team use, appoint at least one reviewer and run `make team-mode ADMIN=<admin>`: it moves the default role from `trusted` to `member`, so answers wait for a reviewer unless an account holds `auto_approve` through its role, groups or grants. `make status`, `make users` and the admin panel show the current mode, and flag workspaces where a paused answer could not be decided (no reviewer, only the requester as reviewer, or no reviewer cleared as high as the requester), and warn when a shared install in open mode has confidential or secret documents indexed. Adding an account (from the second one on, you are asked for its role) prints the same warning when it leaves answers nobody can approve. As the team grows, `make status` suggests the next step (team mode, groups, a second owner); it never changes anything itself.
 
 **Upgrading.** A policy file from an earlier version is migrated on first load, after its signature verifies: administrators become `owner` (the first alphabetically) or `admin`, the old defaults become the default role (or stay a custom permission set), and nobody's effective access changes. Where an administrator's new role would grant more than they held, their old access is pinned as an explicit grant on all workspaces. The old file is kept beside the new one as `access_policy.json.v2-<timestamp>.bak`, and the migration is written to the audit log. A file that fails its signature is refused and left untouched.
+
+**Two-factor sign-in (optional, owners and administrators).** `make totp-enroll ADMIN=<you>` (or the sidebar panel) adds a TOTP secret to an authenticator app, confirms it with a code, and prints ten single-use recovery codes. From then on that account needs the code at every sign-in: the UI form, `--as` commands, `make sync`, and review sign-ins. The code is asked for only after the password verifies, a wrong code counts toward the lockout, and a code works once (replay-protected). The secret is stored sealed, bound to the account. Enforcement follows the enrolment, so a demoted administrator keeps it. Turn it off with `make totp-disable` (needs a code); an owner can reset another account's, which signs that account out. If no code is left to use, see *When someone is locked out* below: every case has an administrator-run fix, including a sole owner's.
+
+**When someone is locked out.** Each case has a fix run by an administrator, or by whoever operates the machine:
+
+| Situation | Who fixes it | How |
+|---|---|---|
+| Lost the authenticator, still has a recovery code | the user | sign in with the recovery code, then `make totp-recovery` or `make totp-disable` |
+| Lost the authenticator and the codes: an administrator | an owner | `make totp-disable ADMIN=<owner> ACCOUNT=<them>` (or the owner's sidebar panel) |
+| Same, for an owner, when another owner exists | the other owner | the same command |
+| Same, for a sole owner | the machine operator | `make recover ACCOUNT=<them> RESET_TOTP=1` |
+| Forgot the password: a member or an administrator | any administrator | `make set-password ACCOUNT=<them> ADMIN=<admin>` |
+| Forgot the password: an owner | another owner | the same command (an administrator cannot reset an owner's password) |
+| Forgot the password: a sole owner | the machine operator | `make recover ACCOUNT=<them> RESET_PASSWORD=1` |
+| Locked out by five failed sign-ins | nobody needed | the lockout ends by itself within 15 minutes |
+| Lost the access or data key | nobody | the policy and sealed data cannot be read without it: restore the key from custody (see *Where the keys live*) |
+
+`make recover` is the break-glass: it needs no sign-in (the account cannot sign in), runs only from a terminal, asks you to type the account name back, resets the second factor and/or sets a new password, signs the account out everywhere, and writes `account_recovered_local` to the audit log. It exists on the command line only, never in the UI. It is not a new weakness: the key that signs the policy is readable only by the OS user running it, so anyone who can run it could already rewrite the policy by hand, without a trace. Restoring an old policy backup instead is a bad recovery plan, because it brings back deleted accounts and revoked sessions. On a shared host where the machine's operators are not all trusted, set `LOCAL_RECOVERY=off`; a sole owner's lockout then has no remedy.
+
+**Where the keys live.** The access key (signs the policy and session tokens) and the data key (seals audit payloads, checkpoints and the cache, and keys the audit chain) go into the OS keychain when one is usable (macOS Keychain, Windows Credential Locker, Secret Service or KWallet); the key file then holds only a pointer. Where there is no keychain (headless Linux, containers, CI) they stay in owner-only files, and `make status` says so. Existing key files stay files until you run `make migrate-keys` (`REVERSE=1` moves them back). **`make backup` excludes keys, and a key held only in the keychain is lost with it (an OS reinstall, a keychain reset), taking the audit log, checkpoints and policy with it: keep a copy in custody** (`make migrate-keys REVERSE=1` writes the key files back). `KEY_STORE=auto|file|keyring` chooses the home of a new key; envelope encryption through Vault or a KMS has an interface and a stub (`rag_lab/security/keystore.py`) but no implementation. On macOS the keychain item belongs to the Python binary that created it: a rebuilt `venv`, or a different interpreter, can prompt or be refused, and a background process cannot answer a prompt (`KEY_STORE=file` avoids it).
+
+**Audit anchors.** Set `AUDIT_ANCHOR_COPY_DIR` to a second location and every anchor is written to both; `make audit-verify` checks both and compares them (see the audit section).
 
 All operations can be managed directly via `make` commands without activating the virtual environment:
 
@@ -285,7 +307,10 @@ make audit-tail N=50 WS=accounting
 make audit-feedback
 make audit-feedback N=20 WS=accounting
 
-# Anchor the audit head hash (run periodically to detect truncation)
+# Anchor the audit head hash (run periodically to detect truncation). Set AUDIT_ANCHOR_COPY_DIR to a second
+# location (another disk, a mounted share): every anchor is written to both, `make audit-verify` checks both and
+# compares them, so deleting or rewinding the anchor file on this host is detected. If the copy cannot be
+# updated (an unmounted drive), the command exits non-zero; the primary anchor is still recorded.
 make audit-anchor
 
 # Export decrypted audit trail as JSONL (to stdout or OUT=<file>)
@@ -344,6 +369,12 @@ The engine supports two storage topologies for persisting LangGraph conversation
 
 #### Optional Mode: PostgreSQL via Docker Compose (`make up`)
 The repository includes a `docker-compose.yml` to run PostgreSQL (`postgres:16-alpine`) as an external checkpointer (`DB_URI=postgresql://...`).
+
+**Credentials.** There is no password in the repository. `make up` creates `.env` (mode 600, git-ignored) with a random `POSTGRES_PASSWORD` the first time; `docker-compose.yml` reads it through `${POSTGRES_PASSWORD}` and refuses to start without one. The server listens on `127.0.0.1` only. To use it as the checkpoint store, uncomment the `DB_URI` line in `.env` (it expands `${POSTGRES_USER}` and `${POSTGRES_PASSWORD}`). The PostgreSQL tests use `POSTGRES_TEST_URI`, or the credentials in `.env`.
+
+**HTTPS on a LAN.** `make ui` serves plain HTTP. For colleagues on a network there is an optional Caddy proxy with a local CA (`make lan-tls`, a compose profile that `make up` never starts): see [docs/lan-tls.md](docs/lan-tls.md).
+
+**Upgrading from an earlier version.** The old compose file used a fixed password, and PostgreSQL applies `POSTGRES_PASSWORD` only when a volume is first created. After `make up` has created `.env`, run `make db-password` once: it sets the existing role's password to the one in `.env` over the container's local socket (the data is untouched). Starting fresh instead (`docker compose down -v`) deletes the volume and its checkpoints.
 
 **Is Dockerized PostgreSQL "Enterprise-Ready"?**
 * **For Small Teams (1 to ~30 people / Internal Air-Gapped Labs):**
