@@ -1,3 +1,0 @@
-FROM qwen3:8b
-PARAMETER temperature 0.0
-PARAMETER stop "<|im_end|>"
