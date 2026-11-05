@@ -782,4 +782,65 @@ def test_reviewer_clearance_hierarchy_and_auto_approve_safety_gates(mocker):
         set_user_clearance("alice", "public")
 
 
+def _abstention_state(degraded: list[str]) -> dict:
+    from rag_lab.pipeline.state import ABSTAIN_MESSAGE
+
+    return {
+        "workspace_id": "default",
+        "principal": "carol",
+        "principal_clearance": "public",
+        "original_question": "Unanswerable question?",
+        "sanitized_question": "unanswerable question?",
+        "generation": ABSTAIN_MESSAGE,
+        "citations": [],
+        "hallucination_status": "grounded",
+        "relevance_status": "relevant",
+        "degraded": degraded,
+        "history": [],
+        "telemetry": {"abstained": True},
+    }
+
+
+def test_clean_abstention_still_releases_for_an_auto_approve_account(mocker):
+    from rag_lab.pipeline.review import human_in_the_loop_node
+    from rag_lab.pipeline.state import ABSTAIN_MESSAGE
+    from rag_lab.security.access import set_grant
+
+    set_grant("carol", "default", ["query", "auto_approve"])
+    try:
+        interrupt = mocker.patch("rag_lab.pipeline.review.interrupt")
+        # A workspace that was never indexed is only labelled, not blocking: it still releases on its own.
+        result = human_in_the_loop_node(_abstention_state(["not_indexed: this workspace has no vector index yet"]))
+        interrupt.assert_not_called()
+        assert result["generation"] == ABSTAIN_MESSAGE
+    finally:
+        set_grant("carol", "default", ["query"])
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "dense_retrieval_unavailable: RuntimeError",
+        "sparse_retrieval_unavailable: the keyword index is missing; re-index the workspace",
+        "security_warning: a retrieved chunk carried injected instructions",
+    ],
+)
+def test_abstention_after_broken_retrieval_goes_to_a_person(mocker, note):
+    """'Nothing found' from a search that was broken or tampered with must not release on auto_approve alone."""
+    from rag_lab.pipeline.review import human_in_the_loop_node
+    from rag_lab.security.access import set_grant
+
+    set_grant("carol", "default", ["query", "auto_approve"])
+    try:
+        interrupt = mocker.patch(
+            "rag_lab.pipeline.review.interrupt",
+            return_value={"decision": "approved", "approver_token": token_for("alice")},
+        )
+        human_in_the_loop_node(_abstention_state([note]))
+        interrupt.assert_called_once()
+        assert note in interrupt.call_args.args[0]["review_reasons"]
+    finally:
+        set_grant("carol", "default", ["query"])
+
+
 

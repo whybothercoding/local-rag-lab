@@ -29,8 +29,6 @@ def _normalize_decision(raw: Any) -> dict[str, str]:
 
 def _review_reasons(state: StateInput) -> list[str]:
     """Why an answer must be looked at by a person even for an account on auto_approve."""
-    gen = state.get("generation", "")
-    abstained = gen == ABSTAIN_MESSAGE or bool(state.get("telemetry", {}).get("abstained"))
     reasons: list[str] = []
     hallucination = state.get("hallucination_status", "") or "grounded"
     relevance = state.get("relevance_status", "") or "relevant"
@@ -46,10 +44,9 @@ def _review_reasons(state: StateInput) -> list[str]:
             reasons.append(f"not regenerated: {telemetry['generation_retry_skipped']}")
     if relevance != "relevant":
         reasons.append(f"relevance check did not pass ({relevance})")
-    if not abstained:
-        reasons.extend(
-            note for note in state.get("degraded", []) if note.startswith(BLOCKING_DEGRADED_PREFIXES)
-        )
+    # An abstention is no exception: "nothing found" from a search that was broken or tampered with is exactly the
+    # answer a person must look at. A clean abstention still releases like any other grounded, relevant answer.
+    reasons.extend(note for note in state.get("degraded", []) if note.startswith(BLOCKING_DEGRADED_PREFIXES))
     return reasons
 
 
