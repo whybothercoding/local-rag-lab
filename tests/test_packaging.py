@@ -74,7 +74,8 @@ def test_package_modules_import_and_ship_their_data():
 
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert data["tool"]["setuptools"]["packages"]["find"]["include"] == ["rag_lab*"]
-    assert "common_passwords.txt" in data["tool"]["setuptools"]["package-data"]["rag_lab.security"]
+    assert {"common_passwords.txt", "injection_patterns.tsv"} <= set(data["tool"]["setuptools"]["package-data"]["rag_lab.security"])
+    assert "data/*.json" in data["tool"]["setuptools"]["package-data"]["rag_lab.lang"]
 
     names = [m.name for m in pkgutil.walk_packages(rag_lab.__path__, "rag_lab.")]
     assert len(names) >= 30

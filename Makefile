@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-default team-mode set-password revoke-sessions delete-user users reset-users factory-reset eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -7,8 +7,9 @@ help:
 	@echo ""
 	@echo "Setup & Health:"
 	@echo "  make setup                                     Create venv and install Python dependencies"
-	@echo "  make models                                    Download & verify pinned ONNX models (one-time)"
-	@echo "  make verify-models                             Verify cached ONNX model SHA-256 hashes offline"
+	@echo "  make models [PROFILE=multilingual|multilingual-large|en]  Download & verify the profile's pinned models"
+	@echo "  make verify-models [PROFILE=...]               Verify cached ONNX model SHA-256 hashes offline"
+	@echo "  make calibrate-models [PROFILE=...]            Suggest the profile's thresholds from the eval calibration split"
 	@echo "  make rust-build                                Compile optional Rust PyO3 accelerator (rag_accel)"
 	@echo "  make ollama-pull                               Pull optional Ollama chat + embedding models"
 	@echo "  make up / make down                            Start / stop the optional PostgreSQL checkpointer (Docker)"
@@ -90,11 +91,16 @@ rust-build:
 
 # 2. One-time, network-enabled: download the pinned embedding model and verify its SHA-256
 models:
-	./venv/bin/python -m rag_lab.ops.fetch_models
+	$(if $(PROFILE),MODEL_PROFILE=$(PROFILE) ,)./venv/bin/python -m rag_lab.ops.fetch_models
 
 # 3. Check the cached model against its pins without any network access
 verify-models:
-	./venv/bin/python -m rag_lab.ops.fetch_models --verify-only
+	$(if $(PROFILE),MODEL_PROFILE=$(PROFILE) ,)./venv/bin/python -m rag_lab.ops.fetch_models --verify-only
+
+# Suggest the model-dependent thresholds for a profile from the eval calibration split (runs make eval first)
+calibrate-models:
+	$(if $(PROFILE),MODEL_PROFILE=$(PROFILE) ,)./venv/bin/python -m rag_lab.ops.eval > /dev/null || true
+	$(if $(PROFILE),MODEL_PROFILE=$(PROFILE) ,)./venv/bin/python -m rag_lab.ops.calibrate
 
 # 4. Optional PostgreSQL checkpointer (set DB_URI=postgresql://... to use it)
 up:

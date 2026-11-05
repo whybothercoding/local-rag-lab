@@ -35,6 +35,7 @@ from typing import Any, Generator, Optional
 
 from rag_lab.security.access import allowed_clearances as get_allowed_clearances
 from rag_lab.config import settings
+from rag_lab.lang import NEGATIONS, detect_language, fold, words
 from rag_lab.security.vault import InvalidTag, open_bytes, open_text, seal_bytes, seal_text
 
 logger = logging.getLogger("semantic_cache")
@@ -52,7 +53,7 @@ _COLUMNS = (
     "query_vector, reviewed, approved_by, created_at"
 )
 _NUMBER = re.compile(r"\d+(?:[.,:/-]\d+)*")
-_NEGATIONS = frozenset({"not", "no", "never", "without", "except", "cannot", "isnt", "dont", "doesnt", "wont"})
+# Negations in every supported language (rag_lab.lang): "nicht", "pas", "δεν" change a question as much as "not".
 
 
 def _sha256(text: str) -> str:
@@ -60,14 +61,25 @@ def _sha256(text: str) -> str:
 
 
 def _index_version(ws_id: str) -> str:
-    """Fingerprint of a workspace's indexed content. Changes whenever the workspace is re-indexed."""
+    """Fingerprint of a workspace's indexed content and of the model that embeds questions now.
+
+    Changes whenever the workspace is re-indexed, and whenever the embedding model changes: two models
+    can share a vector size (bge-small and MiniLM both use 384), so old query vectors would otherwise be
+    compared with new ones without any error.
+    """
+    from rag_lab.retrieval.embedding_provider import embedding_fingerprint
+
     manifest = Path(settings.bm25_dir) / f"{ws_id}_manifest.json"
-    if not manifest.is_file():
-        return "none"
     try:
-        return hashlib.sha256(manifest.read_bytes()).hexdigest()
+        model = embedding_fingerprint()
+    except Exception:
+        model = "unknown"
+    if not manifest.is_file():
+        return f"none:{model}"
+    try:
+        return hashlib.sha256(manifest.read_bytes() + model.encode("utf-8")).hexdigest()
     except OSError:
-        return "none"
+        return f"none:{model}"
 
 
 def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
@@ -75,12 +87,16 @@ def cache_key(ws_id: str, query: str, clearance: str = "public") -> str:
     return _sha256(f"{ws_id}:{clearance}:{_index_version(ws_id)}:{query.strip().lower()}")
 
 
-def _signature(text: str) -> tuple[frozenset[str], frozenset[str]]:
-    """The numbers and negations in a question. Two questions that differ in either are not the same question."""
-    lowered = text.lower().replace("'", "")
+def _signature(text: str) -> tuple[frozenset[str], frozenset[str], str]:
+    """The numbers, negations, and language of a question.
+
+    Two questions that differ in any of them are not the same question: "VAT in 2024" never answers
+    "VAT in 2025", "nicht erlaubt" never answers "erlaubt", and an answer cached for a German question is
+    not served to the same question asked in English.
+    """
+    lowered = fold(text).replace("'", "").replace("\u2019", "")
     numbers = frozenset(m.group(0) for m in _NUMBER.finditer(lowered))
-    words = frozenset(re.findall(r"[a-z]+", lowered))
-    return numbers, words & _NEGATIONS
+    return numbers, frozenset(words(lowered)) & NEGATIONS, detect_language(text)
 
 
 def _pack_vector(vec: list[float]) -> bytes:

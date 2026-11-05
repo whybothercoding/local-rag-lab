@@ -69,8 +69,7 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
 
 # Pass/fail gates per suite, measured on that suite's held-out test split. Thresholds were chosen from
 # the calibration split. None means measured and reported, not gated yet:
-#   multilingual -> gated once Phase 2 (multilingual models, patterns, and language data) lands
-#   conversation -> gated once Phase 3 (follow-up questions use the conversation history) lands
+#   conversation -> gated once follow-up questions use the conversation history
 DEFAULT_THRESHOLDS = {
     "answer_rate": 0.9,
     "retrieval_recall": 0.9,
@@ -80,9 +79,20 @@ DEFAULT_THRESHOLDS = {
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
 }
+# German, French, Greek, and cross-lingual questions. Keyword recall is lower than English because the
+# deterministic synthesizer quotes the document's language while some facts are checked in either language.
+MULTILINGUAL_THRESHOLDS = {
+    "answer_rate": 0.9,
+    "retrieval_recall": 0.9,
+    "keyword_recall": 0.75,
+    "groundedness": 0.5,
+    "abstention_accuracy": 0.9,
+    "security_accuracy": 1.0,
+    "cache_accuracy": 1.0,
+}
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
-    "multilingual": None,
+    "multilingual": MULTILINGUAL_THRESHOLDS,
     "conversation": None,
 }
 # Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
@@ -201,6 +211,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "cache_hit": cache_hit,
         "best_similarity": telemetry.get("best_similarity"),
         "best_coverage": telemetry.get("best_coverage"),
+        "best_rerank_score": telemetry.get("best_rerank_score"),
         "relevant": telemetry.get("relevant"),
         "degraded": values.get("degraded", []),
         "judge_supported": None,
@@ -214,9 +225,10 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
     elif expect == "cached":
         result["passed"] = cache_hit
     elif expect == "fresh":
-        # Only meaningful when the earlier answer was cached; otherwise nothing could have been reused.
+        # Only meaningful when the earlier answer was cached; otherwise nothing could have been reused, and
+        # the case is inconclusive (None). A real model's answer may go to review instead of the cache.
         result["setup_cached"] = setup_cached
-        result["passed"] = setup_cached and not cache_hit
+        result["passed"] = (not cache_hit) if setup_cached else None
     else:
         expected_sources = case.get("expected_sources", [])
         keywords = case.get("expected_keywords", [])
@@ -252,7 +264,7 @@ def print_table(results: list[dict], summary: dict, title: str) -> None:
         print(
             f"{r['id']:<28}{r['lang']:<5}{r['expect']:<9}{fmt(r.get('context_recall')):>8}"
             f"{fmt(r.get('context_precision')):>7}{fmt(r.get('keyword_recall')):>7}"
-            f"{fmt(r.get('groundedness')):>8}{'yes' if r['passed'] else 'NO':>6}"
+            f"{fmt(r.get('groundedness')):>8}{('n/a' if r['passed'] is None else 'yes' if r['passed'] else 'NO'):>6}"
         )
     print("-" * 78)
     for key, value in summary.items():
@@ -263,7 +275,7 @@ def print_language_breakdown(results: list[dict]) -> None:
     """Pass rate per question language across every suite's test split."""
     print(f"\n{'language':<10}{'cases':>7}{'passed':>8}{'rate':>7}")
     for lang in sorted({r["lang"] for r in results}):
-        rows = [r for r in results if r["lang"] == lang]
+        rows = [r for r in results if r["lang"] == lang and r["passed"] is not None]
         passed = sum(1 for r in rows if r["passed"])
         print(f"{lang:<10}{len(rows):>7}{passed:>8}{passed / len(rows):>7.2f}")
 
@@ -275,6 +287,9 @@ def suite_gates(suite: str, overrides: dict[str, float], llm_mode: bool) -> dict
     gates = {**gates, **(overrides if suite == "en" else {})}
     if llm_mode:
         gates["judge_support"] = LLM_JUDGE_MIN
+    elif "cache_accuracy" in gates:
+        # Deterministic answers are always released, so every cache case must actually test the cache.
+        gates["cache_conclusive_rate"] = 1.0
     return gates
 
 

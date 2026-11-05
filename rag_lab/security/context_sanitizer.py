@@ -7,79 +7,30 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any
 
-# Compiled heuristic patterns for indirect prompt injection
-_INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    # 1. Direct instruction overrides & directive wipes
-    (
-        re.compile(
-            r"\bignore\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules|guidelines|prompts)\b",
-            re.IGNORECASE,
-        ),
-        "instruction_override",
-    ),
-    (
-        re.compile(
-            r"\bdisregard\s+(all\s+)?(prior|previous|above)\s+(directives|instructions|rules|prompts)\b",
-            re.IGNORECASE,
-        ),
-        "directive_wipe",
-    ),
-    (
-        re.compile(r"\bsystem\s+prompt\s+override\b", re.IGNORECASE),
-        "system_override",
-    ),
-    (
-        re.compile(r"\bbypass\s+(all\s+)?security\s+(rules|filters|guidelines)\b", re.IGNORECASE),
-        "security_bypass",
-    ),
-    (
-        re.compile(r"\bnew\s+(system\s+)?instruction\s*:", re.IGNORECASE),
-        "new_instruction",
-    ),
-    (
-        re.compile(
-            r"\bdo\s+not\s+follow\s+(the\s+)?(original|initial|prior)\s+instructions\b",
-            re.IGNORECASE,
-        ),
-        "instruction_rejection",
-    ),
-    (
-        re.compile(r"\byou\s+are\s+now\s+in\s+([a-z0-9_-]+\s+)?mode\b", re.IGNORECASE),
-        "role_override",
-    ),
-    (
-        re.compile(r"\b(jailbreak|unfiltered\s+mode|dan\s+mode)\b", re.IGNORECASE),
-        "jailbreak_signature",
-    ),
-    # 2. Role spoofing and delimiter manipulation
-    (
-        re.compile(r"<\|im_(start|end)\|>", re.IGNORECASE),
-        "chatml_delimiter_spoofing",
-    ),
-    (
-        re.compile(r"\[(?:SYSTEM|ADMIN|DEVELOPER)[^\]]*\]", re.IGNORECASE),
-        "role_bracket_spoofing",
-    ),
-    (
-        re.compile(r"</?SYS>>", re.IGNORECASE),
-        "llama_sys_delimiter_spoofing",
-    ),
-    (
-        re.compile(r"###\s*(?:System|Instruction):", re.IGNORECASE),
-        "markdown_role_spoofing",
-    ),
-    # 3. Data exfiltration and malicious markup
-    (
-        re.compile(r"!\[.*?\]\(https?://[^\s)]+\?[^\s)]*=(?:key|token|secret|password|history|context)", re.IGNORECASE),
-        "image_exfiltration_beacon",
-    ),
-    (
-        re.compile(r"<script\b|javascript:", re.IGNORECASE),
-        "script_payload",
-    ),
-]
+# The one pattern list both scanners use: this module reads it; crates/rag_accel compiles it in.
+PATTERNS_PATH = Path(__file__).resolve().parent / "injection_patterns.tsv"
+
+
+def _load_patterns(path: Path = PATTERNS_PATH) -> tuple[list[tuple[re.Pattern[str], str]], frozenset[str]]:
+    """Compile scope<TAB>reason<TAB>regex lines. Returns (patterns in file order, document-only reasons)."""
+    patterns: list[tuple[re.Pattern[str], str]] = []
+    document_only: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        scope, reason, regex = line.split("\t")
+        if scope not in ("any", "document"):
+            raise ValueError(f"unknown pattern scope {scope!r} for {reason}")
+        patterns.append((re.compile(regex, re.IGNORECASE), reason))
+        if scope == "document":
+            document_only.add(reason)
+    return patterns, frozenset(document_only)
+
+
+_INJECTION_PATTERNS, _DOCUMENT_ONLY_REASONS = _load_patterns()
 
 
 # Try importing native Rust accelerator, fallback to pure Python
@@ -95,18 +46,22 @@ _INVISIBLE = dict.fromkeys(
     + list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)),
 )
 
-# Reasons that only make sense for retrieved documents. A person asking about web markup in a
-# question is not attacking the model, so these are not applied to user input.
-_DOCUMENT_ONLY_REASONS = frozenset({"script_payload", "image_exfiltration_beacon"})
+# Reasons scoped 'document' in the pattern file only make sense for retrieved documents: a person
+# asking about web markup in a question is not attacking the model.
 
 
 def normalize_for_scan(text: str) -> str:
     """Fold look-alike characters, drop invisible ones, and collapse whitespace before pattern matching.
 
-    Without this, "ignore  previous\u200b instructions" or full-width letters slip past the patterns.
+    Without this, "ignore  previous\u200b instructions", full-width letters, or accented spellings slip
+    past the patterns.
     """
     folded = unicodedata.normalize("NFKC", text or "").translate(_INVISIBLE)
-    return re.sub(r"\s+", " ", folded)
+    # Strip accents so "PRÉCÉDENTES" and "Αγνόησε" meet the accent-free patterns. Case is kept: the
+    # patterns are case-insensitive, and the matched text is reported back as written.
+    decomposed = unicodedata.normalize("NFKD", folded)
+    stripped = unicodedata.normalize("NFC", "".join(c for c in decomposed if not unicodedata.combining(c)))
+    return re.sub(r"\s+", " ", stripped)
 
 
 def scan_user_input(text: str) -> tuple[bool, str | None]:

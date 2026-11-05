@@ -92,7 +92,8 @@ Documentation = "https://github.com/whybothercoding/local-rag-lab#readme"
 include = ["rag_lab*"]
 
 [tool.setuptools.package-data]
-"rag_lab.security" = ["common_passwords.txt"]
+"rag_lab.security" = ["common_passwords.txt", "injection_patterns.tsv"]
+"rag_lab.lang" = ["data/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

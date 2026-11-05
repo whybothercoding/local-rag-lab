@@ -293,7 +293,8 @@ def test_hybrid_retrieval_chroma_where_fallback_still_filters_clearance(tmp_path
     out = hybrid_retrieval_node({
         "workspace_id": "legacy_ws",
         "principal": "bob",
-        "sanitized_question": "What is the secret master key or office hours?",
+        # One question about the public document; the secret one is returned by the unfiltered fallback query.
+        "sanitized_question": "What are the general office hours?",
     })
     for doc in out["documents"]:
         assert "XYZ-999" not in doc

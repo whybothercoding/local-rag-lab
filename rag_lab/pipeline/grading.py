@@ -8,7 +8,8 @@ from rag_lab.retrieval.reranker import score_pairs
 from rag_lab.security.audit import record as audit_record
 
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
-from rag_lab.pipeline.text import STOPWORDS, _WORD, _unsupported_numbers
+from rag_lab.lang import fold, words
+from rag_lab.pipeline.text import STOPWORDS, _unsupported_numbers
 
 
 _FEEDBACK_UNSUPPORTED = (
@@ -67,8 +68,8 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
         )
         status, update = _generation_failure(state, telemetry, feedback)
     elif docs:
-        doc_words = set(_WORD.findall(" ".join(docs).lower()))
-        gen_words = [w for w in _WORD.findall(gen.lower()) if len(w) > 3]
+        doc_words = set(words(" ".join(docs)))
+        gen_words = [w for w in words(gen) if len(w) > 3]
         if gen_words:
             ratio = sum(1 for w in gen_words if w in doc_words) / len(gen_words)
             if ratio < settings.groundedness_min_ratio:
@@ -121,12 +122,12 @@ def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
             return {"relevance_status": "circuit_break", "telemetry": telemetry}
         return {"relevance_status": "irrelevant", "retry_count": state.get("retry_count", 0) + 1, "telemetry": telemetry}
 
-    gen_lower = gen.lower()
-    gen_words = set(_WORD.findall(gen_lower))
+    gen_lower = fold(gen)
+    gen_words = set(words(gen))
     q = state.get("original_question") or state.get("sanitized_question", "")
     retries = state.get("retry_count", 0)
 
-    q_tokens = [t for t in _WORD.findall(q.lower()) if len(t) > 3 and t not in STOPWORDS]
+    q_tokens = [t for t in words(q) if len(t) > 3 and t not in STOPWORDS]
     has_lexical_overlap = bool(not q_tokens or any(t in gen_words or t in gen_lower for t in q_tokens))
 
     status = "relevant"

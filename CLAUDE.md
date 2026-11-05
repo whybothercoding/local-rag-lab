@@ -9,7 +9,7 @@ Instructions and engineering standards for AI assistants and coding agents worki
 Local Enterprise RAG Lab is a fully local, air-gapped Compound AI retrieval and compliance engine.
 
 * **No External Network**: Inference and pipelines run 100% offline (`HF_HUB_OFFLINE=1`). Network access is permitted only during initial model download (`make models`).
-* **Core Stack**: Python 3.11–3.14, LangGraph, Ollama (`qwen2.5-coder:7b`), ONNX FastEmbed (`bge-small-en-v1.5`) & Cross-Encoder Reranker (`ms-marco-MiniLM-L-6-v2`), ChromaDB, SQLite FTS5 / BM25, SQLite / PostgreSQL (`psycopg-pool`), Streamlit, and an optional Rust PyO3 accelerator (`crates/rag_accel`).
+* **Core Stack**: Python 3.11–3.14, LangGraph, Ollama (`qwen2.5-coder:7b`), ONNX FastEmbed + cross-encoder reranker chosen by `MODEL_PROFILE` (default `multilingual`: `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`; also `multilingual-large`, `en`), languages EN/DE/FR/EL (`rag_lab/lang/`), ChromaDB, SQLite FTS5 / BM25, SQLite / PostgreSQL (`psycopg-pool`), Streamlit, and an optional Rust PyO3 accelerator (`crates/rag_accel`).
 * **Fail-Closed Security**: Policy v2 RBAC authorization with out-of-the-box `query` + `auto_approve` defaults, admin-only user/workspace management (`--as <admin>`), hierarchical document clearance (`public`, `internal`, `confidential`, `secret`), revocable signed session tokens (`principal_token` bound to `uid` + `token_version`), tamper-evident HMAC hash-chained audit logging, and thread-bound AES-256-GCM state and cache encryption at rest (`ENC2` / `SEAL1`).
 
 ---
@@ -23,8 +23,9 @@ Always use `make` targets (and `WS` for workspace arguments, never `WORKSPACE`).
 make help                   # Show categorized command reference (default target)
 make status                 # End-to-end health check (models, accelerator, LLM, RBAC, workspaces, audit)
 make setup                  # Create venv and install Python dependencies
-make models                 # Download & verify pinned ONNX models (requires network once)
+make models [PROFILE=...]   # Download & verify the profile's pinned ONNX models (requires network once)
 make verify-models          # Verify model SHA-256 integrity offline
+make calibrate-models       # Suggest a profile's thresholds from the eval calibration split
 make rust-build             # (Optional) Build native Rust PyO3 accelerator (rag_accel)
 
 # RBAC & User Management (Admin-Gated)
@@ -115,7 +116,7 @@ Graph wiring is in [`rag_lab/pipeline/graph.py`](rag_lab/pipeline/graph.py); sta
 * **Workspaces**: Sanitized slugs (`ws_<workspace_id>`). Each workspace deterministically merges `knowledge_base/<ws>` and `uploads/<ws>` (with `knowledge_base` taking precedence on filename collisions) and performs an atomic Chroma collection swap (`__build` -> live) during `FORCE=1` re-syncs. Deleting a workspace requires admin privileges, escapes SQL `LIKE` wildcards, and prunes its grants from `access_policy.json`.
 * **Human-in-the-Loop & Safety Escalation**: Answers release automatically when the user holds `auto_approve` **and** the generation is grounded, relevant, non-abstaining, and free of blocking degradation (`security_warning`, `dense_retrieval_unavailable`, `sparse_retrieval_unavailable`). Otherwise, execution pauses at `interrupt()` for a reviewer who holds `review` permission, is not the requester (`requester != approver`), and whose clearance dominates (`clearance_covers`) the thread's `principal_clearance`.
 * **Hybrid Self-RAG Graders**: [`grade_hallucination_node`](rag_lab/pipeline/grading.py) and [`grade_answer_relevance_node`](rag_lab/pipeline/grading.py) combine lexical/numeric grounding checks (`_unsupported_numbers` rejects fabricated digits or number words) with an in-process pinned ONNX cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) via [`reranker.py`](rag_lab/retrieval/reranker.py).
-* **Rust Accelerator Parity & Graceful Degradation**: `crates/rag_accel` strips zero-width Unicode obfuscation and runs a single-pass `RegexSet` automaton with 100% verdict and reason parity with [`context_sanitizer.py`](rag_lab/security/context_sanitizer.py). If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently. Never switch embedding models automatically: indexes store their `embedding_fingerprint`, and a mismatch skips dense retrieval until re-index.
+* **Rust Accelerator Parity & Graceful Degradation**: `crates/rag_accel` strips zero-width Unicode obfuscation and runs a single-pass `RegexSet` automaton with 100% verdict and reason parity with [`context_sanitizer.py`](rag_lab/security/context_sanitizer.py). If dense search, cross-encoder reranking, Rust acceleration, or the local LLM is unavailable, fall back deterministically with labeled warnings; never fail silently. Never switch embedding models automatically: indexes store their `embedding_fingerprint`, and a mismatch skips dense retrieval until re-index. Thresholds are per model profile (`rag_lab/config.py`), calibrated with `make calibrate-models`; changing a model means recalibrating, never reusing another model's numbers. Injection patterns live in one file (`rag_lab/security/injection_patterns.tsv`) that Rust compiles in: rebuild `make rust-build` after editing it.
 
 ---
 

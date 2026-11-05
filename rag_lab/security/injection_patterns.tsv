@@ -1,0 +1,31 @@
+# Prompt-injection patterns: the one list both scanners use (Python reads it; Rust compiles it in).
+# Format: scope<TAB>reason<TAB>regex. scope 'any' = questions and documents; 'document' = documents only.
+# Regexes run case-insensitively on text with accents and invisible characters removed, so write them
+# without accents. Use syntax both Python re and Rust regex accept: no lookaround, no backreferences.
+# Match phrases, never single verbs: a false positive silently drops a legitimate document chunk.
+any	instruction_override	\bignore\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules|guidelines|prompts)\b
+any	directive_wipe	\bdisregard\s+(all\s+)?(prior|previous|above)\s+(directives|instructions|rules|prompts)\b
+any	system_override	\bsystem\s+prompt\s+override\b
+any	security_bypass	\bbypass\s+(all\s+)?security\s+(rules|filters|guidelines)\b
+any	new_instruction	\bnew\s+(system\s+)?instruction\s*:
+any	instruction_rejection	\bdo\s+not\s+follow\s+(the\s+)?(original|initial|prior)\s+instructions\b
+any	role_override	\byou\s+are\s+now\s+in\s+([a-z0-9_-]+\s+)?mode\b
+any	jailbreak_signature	\b(jailbreak|unfiltered\s+mode|dan\s+mode)\b
+any	chatml_delimiter_spoofing	<\|im_(start|end)\|>
+any	role_bracket_spoofing	\[(?:SYSTEM|ADMIN|DEVELOPER)[^\]]*\]
+any	llama_sys_delimiter_spoofing	</?SYS>>
+any	markdown_role_spoofing	###\s*(?:System|Instruction):
+document	image_exfiltration_beacon	!\[.*?\]\(https?://[^\s)]+\?[^\s)]*=(?:key|token|secret|password|history|context)
+document	script_payload	<script\b|javascript:
+any	instruction_override_de	\b(ignorier(e|en|t)?|missachte(n)?|vergiss|vergessen\s+sie)\s+(alle\s+|die\s+|samtliche\s+)?(vorherigen|bisherigen|obigen|fruheren|vorigen)\s+(anweisungen|instruktionen|regeln|vorgaben|befehle)\b
+any	directive_wipe_de	\b(vergiss|vergessen\s+sie)\s+(alle\s+)?(deine|ihre|die|eure)\s+(regeln|anweisungen|vorgaben|richtlinien)\b
+any	security_bypass_de	\b(umgehe|umgehen\s+sie|ignoriere)\s+(alle\s+|die\s+)?(sicherheitsregeln|sicherheitsrichtlinien|sicherheitsfilter|sicherheitsvorgaben)\b
+any	role_override_de	\b(du\s+bist|sie\s+sind)\s+(jetzt|nun|ab\s+sofort)\s+im\s+[\w-]*\s*modus\b
+any	instruction_override_fr	\b(ignore|ignorez|oublie|oubliez)\s+(toutes\s+|tous\s+)?(les\s+)?(instructions|consignes|regles|directives)\s+(precedentes|anterieures|ci-dessus)\b
+any	directive_wipe_fr	\b(oublie|oubliez)\s+(toutes\s+)?(tes|vos|les)\s+(regles|instructions|consignes|directives)\b
+any	security_bypass_fr	\b(contourne|contournez|ignore|ignorez)\s+(les\s+)?(regles|filtres|consignes)\s+de\s+securite\b
+any	role_override_fr	\b(tu\s+es|vous\s+etes)\s+(maintenant|desormais)\s+en\s+mode\b
+any	instruction_override_el	\b(αγνοη[σς]ε|αγνοη[σς]τε|ξεχα[σς]ε|ξεχα[σς]τε)\s+(ολε[σς]\s+)?(τι[σς]\s+)?(προηγουμενε[σς]|παραπανω)\s+(οδηγιε[σς]|εντολε[σς]|κανονε[σς])\b
+any	directive_wipe_el	\b(ξεχνα|ξεχνατε|ξεχα[σς]ε|ξεχα[σς]τε)\s+(ολου[σς]\s+)?(του[σς]\s+)?κανονε[σς]\s+(σου|σα[σς])\b
+any	security_bypass_el	\b(παρακαμψε|παρακαμψτε)\s+(ολου[σς]\s+)?(του[σς]\s+)?κανονε[σς]\s+α[σς]φαλεια[σς]\b
+any	role_override_el	\b(ει[σς]αι|ει[σς]α[σς]τε)\s+(πλεον|τωρα)\s+[σς]ε\s+λειτουργια\b

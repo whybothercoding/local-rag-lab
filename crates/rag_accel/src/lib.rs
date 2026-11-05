@@ -45,11 +45,17 @@ fn split_text(text: &str, chunk_size: usize, chunk_overlap: usize) -> Vec<String
     chunker::split_text(text, chunk_size, chunk_overlap)
 }
 
+#[pyfunction]
+fn pattern_reasons() -> Vec<String> {
+    sanitizer::pattern_reasons()
+}
+
 #[pymodule]
 fn rag_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_chunk, m)?)?;
     m.add_function(wrap_pyfunction!(scan_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(split_text, m)?)?;
+    m.add_function(wrap_pyfunction!(pattern_reasons, m)?)?;
     Ok(())
 }
 

@@ -15,7 +15,8 @@ from rag_lab.security.context_sanitizer import scan_user_input
 from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.state import StateInput, _sha256
-from rag_lab.pipeline.text import _WORD, _content_terms
+from rag_lab.lang import CHITCHAT_PHRASES, CHITCHAT_WORDS, words
+from rag_lab.pipeline.text import _content_terms
 
 
 SEMANTIC_CACHE = PersistentSemanticCache()
@@ -142,16 +143,12 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
 
 
 def router_node(state: StateInput) -> dict[str, Any]:
-    raw_query = state.get("sanitized_question", "").lower()
-    cleaned = " ".join(_WORD.findall(raw_query))
-    words = cleaned.split()
-    chitchat_phrases = ("who are you", "what can you do", "thank you")
-    chitchat_words = {"hello", "hi", "hey", "thanks"}
-
-    if any(phrase in cleaned for phrase in chitchat_phrases):
+    tokens = words(state.get("sanitized_question", ""))
+    cleaned = " ".join(tokens)
+    if any(phrase in cleaned for phrase in CHITCHAT_PHRASES):
         return {"intent": "chitchat"}
-    domain_terms = _content_terms(cleaned) - chitchat_words
-    if any(w in chitchat_words for w in words) and not domain_terms:
+    domain_terms = _content_terms(cleaned) - CHITCHAT_WORDS
+    if any(w in CHITCHAT_WORDS for w in tokens) and not domain_terms:
         return {"intent": "chitchat"}
     return {"intent": "rag"}
 

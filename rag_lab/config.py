@@ -30,6 +30,60 @@ DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_LOCAL_LLM_URL = "http://localhost:1234/v1"
 
 
+# Model profiles: each fixes the embedding model, the reranker, the prefixes the embedder expects, and the
+# thresholds calibrated for those models' score scales with `make calibrate-models` on the eval
+# calibration split (distributions in eval/README.md). MODEL_PROFILE picks one;
+# any single variable (FASTEMBED_MODEL, RELEVANCE_MIN_SIMILARITY, ...) still overrides its field.
+# Every model must be pinned in rag_lab/security/model_integrity.py; `make models` fetches the profile's.
+MODEL_PROFILES: dict[str, dict[str, str]] = {
+    "en": {
+        "fastembed_model": "BAAI/bge-small-en-v1.5",
+        "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+        "embedding_query_prefix": "",
+        "embedding_passage_prefix": "",
+        "relevance_min_similarity": "0.65",
+        "relevance_min_rerank_score": "0.0",
+        "groundedness_cross_encoder_threshold": "-3.5",
+        "relevance_cross_encoder_threshold": "-6.0",
+        "semantic_cache_similarity_threshold": "0.92",
+        "relevance_gate": "similarity",
+    },
+    "multilingual": {
+        "fastembed_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "reranker_model": "BAAI/bge-reranker-v2-m3-int8",
+        "embedding_query_prefix": "",
+        "embedding_passage_prefix": "",
+        "relevance_min_similarity": "0.30",
+        "relevance_min_rerank_score": "-4.5",
+        "groundedness_cross_encoder_threshold": "-3.0",
+        "relevance_cross_encoder_threshold": "-6.0",
+        "semantic_cache_similarity_threshold": "0.92",
+        "relevance_gate": "reranker",
+    },
+    "multilingual-large": {
+        "fastembed_model": "intfloat/multilingual-e5-large",
+        "reranker_model": "BAAI/bge-reranker-v2-m3",
+        # e5 was trained with these prefixes; without them its similarities are not meaningful.
+        "embedding_query_prefix": "query: ",
+        "embedding_passage_prefix": "passage: ",
+        "relevance_min_similarity": "0.81",
+        "relevance_min_rerank_score": "-4.5",
+        "groundedness_cross_encoder_threshold": "-3.0",
+        "relevance_cross_encoder_threshold": "-6.0",
+        "semantic_cache_similarity_threshold": "0.94",
+        "relevance_gate": "reranker",
+    },
+}
+DEFAULT_MODEL_PROFILE = "multilingual"
+
+
+def _profile() -> dict[str, str]:
+    name = os.getenv("MODEL_PROFILE", DEFAULT_MODEL_PROFILE)
+    if name not in MODEL_PROFILES:
+        raise ValueError(f"Unknown MODEL_PROFILE {name!r}. Use one of: {', '.join(MODEL_PROFILES)}.")
+    return MODEL_PROFILES[name]
+
+
 def _env(name: str, default: str) -> str:
     return os.getenv(name, default)
 
@@ -60,6 +114,8 @@ class Settings:
     retention_days: int
     # Keep source files bounded so one huge upload cannot exhaust memory.
     max_source_bytes: int
+    # Keyword-index tokenizer (sparse_search.TOKENIZERS). Changing it re-indexes on the next sync.
+    sparse_tokenizer: str
 
     # --- models ----------------------------------------------------------------------------------
     llm_provider: str
@@ -70,8 +126,11 @@ class Settings:
     # A hung model server must not hang the app: every chat request gives up after this many seconds.
     ollama_timeout_sec: float
     embedding_provider: str
+    model_profile: str
     fastembed_model: str
     reranker_model: str
+    embedding_query_prefix: str
+    embedding_passage_prefix: str
     enable_reranker: bool
     models_dir: str
 
@@ -81,6 +140,11 @@ class Settings:
     # eval calibration split (see eval/README.md): answerable questions scored similarity 0.72-0.91 and
     # coverage 0.50-1.00; out-of-scope ones 0.42-0.54 and 0.00-0.25. The thresholds sit in those gaps.
     relevance_min_similarity: float
+    # Relevance gate: "reranker" (the best passage's cross-encoder logit, used when the reranker runs) or
+    # "similarity" (vector similarity or word coverage). The English profile's reranker cannot judge other
+    # languages, so it keeps the similarity gate.
+    relevance_gate: str
+    relevance_min_rerank_score: float
     relevance_min_coverage: float
     # Self-RAG graders: fast lexical screening first, ONNX cross-encoder fallback for paraphrases.
     groundedness_min_ratio: float
@@ -93,6 +157,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
+        profile = _profile()
         return cls(
             db_uri=_env("DB_URI", DEFAULT_DB_URI),
             checkpoint_pool_size=int(_env("CHECKPOINT_POOL_SIZE", "5")),
@@ -109,6 +174,7 @@ class Settings:
             backup_dir=_env("BACKUP_DIR", str(ROOT / "backups")),
             retention_days=int(_env("RETENTION_DAYS", "183")),
             max_source_bytes=int(_env("MAX_SOURCE_BYTES", str(25 * 1024 * 1024))),
+            sparse_tokenizer=_env("SPARSE_TOKENIZER", "trigram"),
             llm_provider=_env("LLM_PROVIDER", "auto"),
             ollama_base_url=_env("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
             local_llm_url=_env("LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL),
@@ -116,16 +182,21 @@ class Settings:
             embed_model=_env("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL),
             ollama_timeout_sec=float(_env("OLLAMA_TIMEOUT_SEC", "120")),
             embedding_provider=_env("EMBEDDING_PROVIDER", "fastembed"),
-            fastembed_model=_env("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5"),
-            reranker_model=_env("RERANKER_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2"),
+            model_profile=_env("MODEL_PROFILE", DEFAULT_MODEL_PROFILE),
+            fastembed_model=_env("FASTEMBED_MODEL", profile["fastembed_model"]),
+            reranker_model=_env("RERANKER_MODEL", profile["reranker_model"]),
+            embedding_query_prefix=_env("EMBEDDING_QUERY_PREFIX", profile["embedding_query_prefix"]),
+            embedding_passage_prefix=_env("EMBEDDING_PASSAGE_PREFIX", profile["embedding_passage_prefix"]),
             enable_reranker=_flag("ENABLE_RERANKER", "true"),
             models_dir=_env("MODELS_DIR", str(ROOT / "models")),
-            semantic_cache_similarity_threshold=float(_env("SEMANTIC_CACHE_SIMILARITY_THRESHOLD", "0.92")),
-            relevance_min_similarity=float(_env("RELEVANCE_MIN_SIMILARITY", "0.65")),
+            semantic_cache_similarity_threshold=float(_env("SEMANTIC_CACHE_SIMILARITY_THRESHOLD", profile["semantic_cache_similarity_threshold"])),
+            relevance_min_similarity=float(_env("RELEVANCE_MIN_SIMILARITY", profile["relevance_min_similarity"])),
+            relevance_gate=_env("RELEVANCE_GATE", profile["relevance_gate"]),
+            relevance_min_rerank_score=float(_env("RELEVANCE_MIN_RERANK_SCORE", profile["relevance_min_rerank_score"])),
             relevance_min_coverage=float(_env("RELEVANCE_MIN_COVERAGE", "0.40")),
             groundedness_min_ratio=float(_env("GROUNDEDNESS_MIN_RATIO", "0.25")),
-            groundedness_cross_encoder_threshold=float(_env("GROUNDEDNESS_CROSS_ENCODER_THRESHOLD", "-3.5")),
-            relevance_cross_encoder_threshold=float(_env("RELEVANCE_CROSS_ENCODER_THRESHOLD", "-6.0")),
+            groundedness_cross_encoder_threshold=float(_env("GROUNDEDNESS_CROSS_ENCODER_THRESHOLD", profile["groundedness_cross_encoder_threshold"])),
+            relevance_cross_encoder_threshold=float(_env("RELEVANCE_CROSS_ENCODER_THRESHOLD", profile["relevance_cross_encoder_threshold"])),
             max_retrieval_retries=int(_env("MAX_RETRIEVAL_RETRIES", "2")),
             max_generation_retries=int(_env("MAX_GENERATION_RETRIES", "1")),
         )
