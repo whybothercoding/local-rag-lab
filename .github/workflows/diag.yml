@@ -1,0 +1,18 @@
+name: tmp-embed-diag
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: "pip"
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+      - run: python -c "from rag_lab.ops.fetch_models import fetch_model; from rag_lab.config import settings; print(fetch_model(settings.fastembed_model))"
+      - run: PYTHONPATH=. python tmp_embed_battery.py out.json
