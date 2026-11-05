@@ -60,6 +60,7 @@ make typecheck              # mypy gate on the rag_lab package
 make coverage               # Test suite with per-module coverage report
 make eval                   # Run offline RAG benchmark evaluation (eval/golden.json)
 make eval-judge             # Evaluation with local Ollama LLM-as-a-judge support checks
+make eval-llm [SUITE=en]    # Answers from the local Ollama model; judge support gated
 make eval-calibrate         # Print retrieval similarity and coverage signals on calibration split
 make graph                  # Export LangGraph topology to docs/architecture.mmd
 make audit-verify           # Verify append-only HMAC audit hash chain and anchors
