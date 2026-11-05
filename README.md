@@ -258,8 +258,9 @@ Launch the Streamlit web interface:
 
 ```bash
 make ui ADMIN=alice
-# Or launch without re-indexing:
+# Or launch without re-indexing (binds to 127.0.0.1 by default; LAN=1 to expose to network):
 make ui
+make ui LAN=1
 ```
 
 Open `http://localhost:8501` in your browser:
@@ -308,6 +309,10 @@ make audit-tail N=50 WS=accounting
 # Inspect answers rejected by human reviewers along with reasons
 make audit-feedback
 make audit-feedback N=20 WS=accounting
+
+# Export rejected answers as candidate eval cases for eval/golden.json (feedback loop)
+make audit-harvest
+make audit-harvest N=50 OUT=eval/feedback_candidates.json
 
 # Anchor the audit head hash (run periodically to detect truncation). Set AUDIT_ANCHOR_COPY_DIR to a second
 # location (another disk, a mounted share): every anchor is written to both, `make audit-verify` checks both and
@@ -382,7 +387,7 @@ The repository includes a `docker-compose.yml` to run PostgreSQL (`postgres:16-a
 
 **Scaling options (all off by default).** Qdrant or pgvector as the vector store, vLLM or any OpenAI-compatible server as the chat model, a PostgreSQL-backed semantic cache shared by several UI processes, each a compose profile started with `make scale-up SERVICE=<name>` that `make up` never starts: see [docs/scaling.md](docs/scaling.md), including the measurements and what does **not** scale (the keyword index, the audit log and the policy stay local files).
 
-**HTTPS on a LAN.** `make ui` serves plain HTTP. For colleagues on a network there is an optional Caddy proxy with a local CA (`make lan-tls`, a compose profile that `make up` never starts): see [docs/lan-tls.md](docs/lan-tls.md).
+**HTTPS on a LAN.** `make ui` serves plain HTTP and binds to `127.0.0.1` by default (opt-in for the network with `make ui LAN=1`). For colleagues on a network there is an optional Caddy proxy with a local CA (`make lan-tls`, a compose profile that `make up` never starts): see [docs/lan-tls.md](docs/lan-tls.md).
 
 **Upgrading from an earlier version.** The old compose file used a fixed password, and PostgreSQL applies `POSTGRES_PASSWORD` only when a volume is first created. After `make up` has created `.env`, run `make db-password` once: it sets the existing role's password to the one in `.env` over the container's local socket (the data is untouched). Starting fresh instead (`docker compose down -v`) deletes the volume and its checkpoints.
 

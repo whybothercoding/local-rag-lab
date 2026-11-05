@@ -27,7 +27,7 @@ make graph                   # regenerate docs/architecture.mmd after editing gr
 make add-user ACCOUNT=<u> [ADMIN=1] [ROLE=<owner|admin|reviewer|trusted|member|none>] [CLEARANCE=<level>] [AS=<admin>]
 make set-role | grant | revoke | create-group | grant-group | set-clearance | team-mode | totp-enroll | recover ...   # see `make help`
 make sync ADMIN=<admin> [WS=<ws>] [FORCE=1]   # index knowledge_base/ + uploads/
-make ui [ADMIN=<admin>]
+make ui [ADMIN=<admin>] [LAN=1]
 make up | down | db-password   # PostgreSQL on 127.0.0.1 (password in .env, created by `make up`)
 make scale-up | scale-down SERVICE=<qdrant|pgvector|vllm>   # opt-in services; `make up` starts none
 make clean | factory-reset [CONFIRM=yes]   # factory-reset also purges configured external stores
