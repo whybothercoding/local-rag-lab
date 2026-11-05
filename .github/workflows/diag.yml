@@ -15,4 +15,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.lock
       - run: PYTHONPATH=. python tmp_nli_battery.py /tmp/hf out.json
-      - run: python -c "import json; d=json.load(open('out.json')); print('SCORES_JSON', json.dumps({k: [round(x,4) for x in v['scores']] for k, v in d['variants'].items()}))"
+      - run: |
+          python - <<'PY'
+          import json
+          d = json.load(open("out.json"))
+          print("SCORES_JSON", json.dumps({k: [round(x, 4) for x in v["scores"]] for k, v in d["variants"].items()}))
+          PY
