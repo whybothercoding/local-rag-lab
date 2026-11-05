@@ -68,8 +68,7 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
 
 
 # Pass/fail gates per suite, measured on that suite's held-out test split. Thresholds were chosen from
-# the calibration split. None means measured and reported, not gated yet:
-#   conversation -> gated once follow-up questions use the conversation history
+# the calibration split. None would mean measured and reported, not gated.
 DEFAULT_THRESHOLDS = {
     "answer_rate": 0.9,
     "retrieval_recall": 0.9,
@@ -78,6 +77,7 @@ DEFAULT_THRESHOLDS = {
     "abstention_accuracy": 0.8,
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
+    "chitchat_accuracy": 1.0,
 }
 # German, French, Greek, and cross-lingual questions. Keyword recall is lower than English because the
 # deterministic synthesizer quotes the document's language while some facts are checked in either language.
@@ -89,11 +89,20 @@ MULTILINGUAL_THRESHOLDS = {
     "abstention_accuracy": 0.9,
     "security_accuracy": 1.0,
     "cache_accuracy": 1.0,
+    "chitchat_accuracy": 1.0,
+}
+# Follow-ups that only make sense with the earlier turn. Keyword recall is the extractive synthesizer's
+# limit (it cannot infer "business class" from "longer flights"); retrieval finds every expected source.
+CONVERSATION_THRESHOLDS = {
+    "answer_rate": 0.9,
+    "retrieval_recall": 0.9,
+    "keyword_recall": 0.7,
+    "groundedness": 0.5,
 }
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
     "multilingual": MULTILINGUAL_THRESHOLDS,
-    "conversation": None,
+    "conversation": CONVERSATION_THRESHOLDS,
 }
 # Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
 LLM_JUDGE_MIN = float(os.getenv("EVAL_LLM_JUDGE_MIN", "0.8"))
@@ -181,9 +190,21 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
     for i, earlier in enumerate(case.get("setup", [])):
         _ask(engine, case, earlier, f"{thread_id}-setup-{i}")
     setup_cached = cache_stats()["total_entries"] > 0
-    # Conversation cases: earlier turns in the same thread as the follow-up.
+    # Conversation cases: earlier turns in the same thread as the follow-up. A turn that was not released
+    # (a real model's answer sent to review) gives the follow-up no context: that case is inconclusive.
+    context_released = True
     for earlier in case.get("history", []):
-        _ask(engine, case, earlier, thread_id)
+        turn = _ask(engine, case, earlier, thread_id)
+        last = (turn.get("history") or [{}])[-1]
+        pending = engine.get_state({"configurable": {"thread_id": thread_id}}).next
+        context_released = context_released and not pending and isinstance(last, dict) and bool(last.get("released"))
+    if not context_released:
+        return {"id": case["id"], "split": case.get("split", "test"), "suite": case.get("suite", "en"),
+                "lang": case.get("lang", "en"), "workspace": case["workspace"], "expect": case.get("expect", "answer"),
+                "question": case["question"], "answer": "", "citations": [], "latency_ms": 0.0, "abstained": False,
+                "cache_hit": False, "best_similarity": None, "best_coverage": None, "best_rerank_score": None,
+                "relevant": None, "degraded": [], "judge_supported": None, "passed": None,
+                "note": "earlier turn not released"}
 
     started = time.perf_counter()
     values = _ask(engine, case, case["question"], thread_id)
@@ -204,8 +225,10 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "workspace": case["workspace"],
         "expect": expect,
         "question": case["question"],
+        "standalone_question": values.get("original_question", case["question"]),
         "answer": answer,
         "citations": citations,
+        "documents": values.get("documents", []),
         "latency_ms": latency_ms,
         "abstained": "could not find" in answer.lower(),
         "cache_hit": cache_hit,
@@ -222,6 +245,8 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         result["passed"] = values.get("is_safe") is False and "SECURITY VIOLATION" in answer
     elif expect == "abstain":
         result["passed"] = result["abstained"]
+    elif expect == "chitchat":
+        result["passed"] = values.get("intent") == "chitchat"
     elif expect == "cached":
         result["passed"] = cache_hit
     elif expect == "fresh":
@@ -280,6 +305,29 @@ def print_language_breakdown(results: list[dict]) -> None:
         print(f"{lang:<10}{len(rows):>7}{passed:>8}{passed / len(rows):>7.2f}")
 
 
+def judge_report(path: Path) -> int:
+    """Add judge verdicts to a saved report and print judge support per suite (test split)."""
+    from langchain_ollama import ChatOllama
+
+    model = os.getenv("EVAL_JUDGE_MODEL")
+    if not model:
+        print("--judge-only needs EVAL_JUDGE_MODEL: a model from another family than the one that answered.")
+        return 2
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    judge = ChatOllama(model=model, base_url=base_url, temperature=0.0, reasoning=False)
+    report = json.loads(path.read_text(encoding="utf-8"))
+    for row in report["results"]:
+        if row["expect"] == "answer" and row.get("passed") is not None and not row["abstained"] and row.get("documents"):
+            row["judge_supported"] = judge_support(judge, row["documents"], row["answer"])
+    report["judge_model"] = model
+    for suite in report["suites"]:
+        test = [r for r in report["results"] if r["suite"] == suite and r["split"] == "test"]
+        report["suites"][suite]["test"] = summarize(test)
+        print(f"{suite:<13} judge_support={report['suites'][suite]['test']['judge_support']}")
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
 def suite_gates(suite: str, overrides: dict[str, float], llm_mode: bool) -> dict[str, float] | None:
     gates = SUITE_GATES.get(suite)
     if gates is None:
@@ -302,10 +350,16 @@ def main() -> int:
     parser.add_argument("--judge", action="store_true", help="Also score answer support with the local Ollama model")
     parser.add_argument("--llm", action="store_true",
                         help="Answer with the local Ollama model and gate the LLM judge (needs 'ollama serve')")
+    parser.add_argument("--judge-only", type=Path, metavar="REPORT",
+                        help="Judge the answers saved in REPORT with EVAL_JUDGE_MODEL, in one pass (the judge "
+                             "loads once instead of swapping with the answering model on every case)")
     parser.add_argument("--suite", action="append", choices=sorted(SUITE_GATES),
                         help="Run only these suites (repeatable); default all")
     args = parser.parse_args()
     overrides = {metric: getattr(args, f"min_{metric}") for metric in DEFAULT_THRESHOLDS}
+
+    if args.judge_only:
+        return judge_report(args.judge_only)
 
     redirect_stores(OUT_DIR, args.llm)
     from langchain_core.language_models import BaseChatModel

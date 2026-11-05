@@ -1,6 +1,6 @@
 # Local Enterprise RAG Lab
 
-An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen2.5-coder:7b`)**, **ChromaDB**, **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
+An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen3:8b`)**, **ChromaDB**, **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
 
 Designed for complete data sovereignty, this system operates **100% air-gapped** with zero external network requests during inference. It integrates multi-tenant knowledge workspaces, self-reflective corrective RAG loops, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
 
@@ -81,6 +81,8 @@ An offline evaluation suite (`rag_lab/ops/eval.py`, `rag_lab/ops/eval_metrics.py
    │
 [guardrail] ──(fail)──> [END] (Adversarial Prompt Violation)
    │ (pass)
+[contextualize] (Follow-up questions rewritten as standalone questions)
+   │
 [cache_lookup] ──(hit)──> [END] (Direct Semantic Cache Hit)
    │ (miss)
 [router] ──(chitchat)──> [chitchat] ──> [END]
@@ -111,7 +113,7 @@ The generated topology is [`docs/architecture.mmd`](docs/architecture.mmd) (`mak
 ### 1. Prerequisites & Environment Setup
 
 * **Python**: `>= 3.11` (tested up to 3.14)
-* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen2.5-coder:7b`) and the alternative embedding model (`nomic-embed-text`)
+* **Ollama** (optional, recommended for local generative LLM): `make ollama-pull` pulls the chat model (`qwen3:8b`, about 5 GB) and the alternative embedding model (`nomic-embed-text`)
 * **Rust Toolchain** (optional, for compiling the native `rag_accel` PyO3 extension)
 * **Docker** (optional, only if using PostgreSQL checkpointer instead of default SQLite)
 
@@ -359,7 +361,7 @@ While **Local Enterprise RAG Lab** is engineered as a zero-cost, self-contained 
    - *Cloud Driver*: Containerized microservices running behind cloud load balancers auto-scale pod replicas horizontally (using KEDA based on request queue depth or CPU/GPU utilization), delivering steady sub-second p95 latencies under peak traffic.
 
 3. **Frontier Models & Multi-GPU Infrastructure**
-   - *Local Constraint*: Local inference is constrained to compact quantized models (e.g. `qwen2.5-coder:7b`, `llama-3.1:8b`) running on CPU or consumer GPU memory.
+   - *Local Constraint*: Local inference is constrained to compact quantized models (e.g. `qwen3:8b`, `gemma4:12b`) running on CPU or consumer GPU memory.
    - *Cloud Driver*: Dedicated GPU node pools (e.g. NVIDIA H100, A100, L4) running high-throughput inference engines (**vLLM**, **TensorRT-LLM**, **Triton**) enable deploying 70B+ open models or privately proxying frontier LLMs (Claude 3.5 Sonnet, GPT-4o) with advanced multi-step reasoning.
 
 4. **High Availability (HA), Multi-AZ Redundancy & 99.99% SLAs**
@@ -391,7 +393,7 @@ To preserve this project's security invariants (Zero Trust clearance isolation, 
 | **Sparse Lexical Search** | SQLite FTS5 with BM25 ranking | **OpenSearch / Elasticsearch Cluster** | Distributed inverted index, cross-region search, tokenizers for all languages |
 | **State & Checkpoints** | Embedded SQLite WAL (`checkpoints.db`) | **Managed PostgreSQL (Aurora Serverless / Cloud SQL)** | Multi-AZ failover, automated continuous backup (PITR), connection pooling |
 | **Semantic & Response Cache** | SQLite float32 packed vector cache | **Valkey / Redis Cluster with Vector Search** | Distributed sub-millisecond LRU cache with multi-node clearance isolation |
-| **Model Inference Engine** | Local Ollama (`qwen2.5-coder:7b`) / CPU ONNX | **vLLM / TensorRT-LLM on GPU Pools (A100/H100)** | Continuous batching, PagedAttention, 20x higher throughput, 70B+ models |
+| **Model Inference Engine** | Local Ollama (`qwen3:8b`) / CPU ONNX | **vLLM / TensorRT-LLM on GPU Pools (A100/H100)** | Continuous batching, PagedAttention, 20x higher throughput, 70B+ models |
 | **Ingestion Pipeline** | Batch CLI (`rag_lab/ingestion/ingest.py`) & child processes | **Temporal.io / Celery + Apache Kafka / SQS** | Distributed asynchronous parsing, rate-limited chunking, dead-letter queues |
 | **Identity & Access** | Local `access_policy.json` (scrypt + HMAC) | **Okta / Microsoft Entra ID (OIDC / SAML 2.0)** | Enterprise SSO, SCIM automated provisioning, MFA enforcement |
 | **Audit & Observability** | Tamper-evident HMAC SQLite log + anchors | **OpenTelemetry + Splunk / Datadog / CloudWatch** | Immutable cloud audit vaults (S3 Object Lock / WORM), distributed tracing |

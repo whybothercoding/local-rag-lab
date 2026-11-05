@@ -53,8 +53,10 @@ def mean(values: list[float | None]) -> float | None:
 
 
 def summarize(results: list[dict]) -> dict:
-    answerable = [r for r in results if r["expect"] == "answer"]
+    # Inconclusive rows (passed None: an earlier turn was never released) are reported, not scored.
+    answerable = [r for r in results if r["expect"] == "answer" and r.get("passed") is not None]
     security = [r for r in results if r["expect"] in ("denied", "blocked")]
+    chitchat = [r for r in results if r["expect"] == "chitchat"]
     cache_all = [r for r in results if r["expect"] in ("fresh", "cached")]
     cache = [r for r in cache_all if r["passed"] is not None]
     abstain = [r for r in results if r["expect"] == "abstain"]
@@ -62,6 +64,7 @@ def summarize(results: list[dict]) -> dict:
     latencies = [r["latency_ms"] for r in results]
     return {
         "cases": len(results),
+        "inconclusive": sum(1 for r in results if r.get("passed") is None),
         "answer_rate": mean([0.0 if r["abstained"] else 1.0 for r in answerable]),
         "retrieval_recall": mean([r.get("context_recall") for r in answerable]),
         "context_precision": mean([r.get("context_precision") for r in answerable]),
@@ -70,6 +73,7 @@ def summarize(results: list[dict]) -> dict:
         "abstention_accuracy": mean([1.0 if r["passed"] else 0.0 for r in abstain]),
         "security_accuracy": mean([1.0 if r["passed"] else 0.0 for r in security]),
         "cache_accuracy": mean([1.0 if r["passed"] else 0.0 for r in cache]),
+        "chitchat_accuracy": mean([1.0 if r["passed"] else 0.0 for r in chitchat]),
         "cache_conclusive_rate": round(len(cache) / len(cache_all), 4) if cache_all else None,
         "judge_support": mean([1.0 if r["judge_supported"] else 0.0 for r in judged]),
         "degraded_cases": sum(1 for r in results if r.get("degraded")),
@@ -81,7 +85,7 @@ def check_thresholds(summary: dict, thresholds: dict[str, float]) -> list[str]:
     failures = []
     for metric, minimum in thresholds.items():
         value = summary.get(metric)
-        if value is None and metric in ("cache_accuracy", "cache_conclusive_rate"):
+        if value is None and metric in ("cache_accuracy", "cache_conclusive_rate", "chitchat_accuracy"):
             continue  # a suite without cache cases has nothing to gate there
         if value is None or value < minimum:
             failures.append(f"{metric} = {value} (required >= {minimum})")

@@ -1,7 +1,7 @@
 """Pluggable LLM factory supporting Ollama, local OpenAI-compatible engines, and in-process synthesizer.
 
 Ensures the Local Enterprise Hub operates seamlessly:
-- Uses local Ollama (`qwen2.5-coder:7b`) when the daemon is active.
+- Uses local Ollama (default `qwen3:8b`, settings.chat_model) when the daemon is active.
 - Connects to local OpenAI-compatible endpoints (vLLM, LM Studio, llama.cpp server) when configured.
 - Gracefully falls back to an in-process grounded context synthesizer when no external daemon is running.
 """
@@ -20,6 +20,21 @@ from pydantic import Field
 
 from rag_lab.config import settings
 from rag_lab.lang import STOPWORDS, words
+
+def _same_word(a: str, b: str) -> bool:
+    """Inflection-tolerant match: "γαμο" ~ "γαμου", "reporter" ~ "reportes", "flight" ~ "flights"."""
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    if len(shorter) >= 4 and longer.startswith(shorter):
+        return True
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return common >= 5
+
 
 # Words the extractive synthesizer ignores when matching a question to context sentences.
 _EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"}
@@ -48,9 +63,11 @@ class DeterministicContextLLM(BaseChatModel):
                 ctx_part = ctx_part[len("Context:"):].strip()
             else:
                 ctx_part = ctx_part.replace("Context:", "", 1).strip()
-            # Remove separator markers
-            chunks = [c.strip() for c in ctx_part.split("---") if c.strip()]
-            context = " ".join(chunks)
+            # Remove document tags, separators, and markdown headings: only document sentences may be quoted.
+            ctx_part = re.sub(r"</?documents?\b[^>]*>", "\n", ctx_part)
+            ctx_part = re.sub(r"(?m)^\s*#.*$", "", ctx_part)
+            chunks = [c.strip() for c in re.split(r"\n\s*---\s*\n|\n{2,}", ctx_part) if c.strip()]
+            context = " ".join(" ".join(c.split()) for c in chunks)
 
             if "\n\nAnswer" in q_part:
                 question = q_part.rsplit("\n\nAnswer", 1)[0].strip()
@@ -75,7 +92,7 @@ class DeterministicContextLLM(BaseChatModel):
             if not s_clean:
                 continue
             s_tokens = set(words(s_clean))
-            overlap = len(q_tokens & s_tokens)
+            overlap = sum(1 for q in q_tokens if any(_same_word(q, t) for t in s_tokens))
             if overlap > 0:
                 matched_sentences.append((overlap, s_clean))
 
@@ -124,7 +141,7 @@ class OpenAICompatibleChat(BaseChatModel):
     """
 
     base_url: str
-    model_name: str = "qwen2.5-coder:7b"
+    model_name: str = "qwen3:8b"
     api_key: str = "local"
     # Read when the client is created, so a settings override applies.
     timeout_sec: float = Field(default_factory=lambda: settings.ollama_timeout_sec)
@@ -198,6 +215,9 @@ def _ollama_chat() -> BaseChatModel:
         model=settings.chat_model,
         base_url=settings.ollama_base_url,
         temperature=0.0,
+        # Reasoning models answer directly: a thinking pass multiplies latency for short policy answers, and
+        # its text must never reach the graders. Models without a thinking mode ignore the flag.
+        reasoning=False,
         client_kwargs={"timeout": settings.ollama_timeout_sec},
     )
 

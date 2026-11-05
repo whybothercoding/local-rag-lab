@@ -114,8 +114,8 @@ down:
 
 # 5. Optional: pull the Ollama chat and embedding models (names resolved by config.py, so .env applies)
 ollama-pull:
-	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.CHAT_MODEL)')"
-	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.EMBED_MODEL)')"
+	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.chat_model)')"
+	ollama pull "$$(./venv/bin/python -c 'from rag_lab import config; print(config.settings.embed_model)')"
 
 # 6. Run the test suite
 test:

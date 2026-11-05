@@ -6,6 +6,7 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	guardrail(guardrail)
+	contextualize(contextualize)
 	cache_lookup(cache_lookup)
 	router(router)
 	chitchat(chitchat)
@@ -21,6 +22,7 @@ graph TD;
 	__start__ --> guardrail;
 	cache_lookup -. &nbsp;hit&nbsp; .-> __end__;
 	cache_lookup -. &nbsp;miss&nbsp; .-> router;
+	contextualize --> cache_lookup;
 	generate --> grade_hallucination;
 	grade_docs -. &nbsp;approved&nbsp; .-> generate;
 	grade_docs -.-> rewrite;
@@ -30,7 +32,7 @@ graph TD;
 	grade_relevance -. &nbsp;circuit_break&nbsp; .-> human_approval;
 	grade_relevance -. &nbsp;irrelevant&nbsp; .-> rewrite;
 	guardrail -. &nbsp;fail&nbsp; .-> __end__;
-	guardrail -. &nbsp;pass&nbsp; .-> cache_lookup;
+	guardrail -. &nbsp;pass&nbsp; .-> contextualize;
 	retrieve --> sanitize_context;
 	rewrite --> retrieve;
 	router -.-> chitchat;

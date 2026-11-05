@@ -48,7 +48,7 @@ NUMBER_WORDS: dict[str, str] = {fold(k): v for lang in LANGUAGES for k, v in _lo
 # make every French or Greek answer look like it invents a number.
 ARTICLE_NUMBERS: frozenset[str] = _folded_set("article_numbers")
 STOPWORDS_BY_LANG: dict[str, frozenset[str]] = {
-    lang: frozenset(fold(w) for w in _load(lang)["stopwords"]) | frozenset(fold(w) for w in _load(lang)["negations"])
+    lang: frozenset(fold(w) for key in ("stopwords", "negations", "chitchat_words") for w in _load(lang)[key])
     for lang in LANGUAGES
 }
 _GREEK = re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]")
@@ -67,6 +67,13 @@ def detect_language(text: str) -> str:
     best = max(votes, key=lambda lang: votes[lang])
     tied = [lang for lang, n in votes.items() if n == votes[best]]
     return best if votes[best] > 0 and len(tied) == 1 else "und"
+
+
+CHITCHAT_EXAMPLES: tuple[str, ...] = tuple(t for lang in LANGUAGES for t in _load(lang)["chitchat_examples"])
+
+
+def chitchat_reply(lang: str) -> str:
+    return str(_load(lang if lang in LANGUAGES else "en")["chitchat_reply"])
 
 
 # Longest first, so "ungen" is tried before "en" and "n".

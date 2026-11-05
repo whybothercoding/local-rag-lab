@@ -14,6 +14,9 @@ class GraphState(TypedDict, total=False):
     principal_token: str
     principal: str
     question: str
+    # The user's literal (redacted) question, for the reviewer, the audit trail, and the UI.
+    asked_question: str
+    # The question in standalone form: a follow-up rewritten with its conversation (context.py).
     original_question: str
     sanitized_question: str
     documents: List[str]
@@ -30,7 +33,8 @@ class GraphState(TypedDict, total=False):
     generation_retry_count: int
     # Why the last answer failed a grader, added to the next generation prompt. Fixed text plus extracted figures only.
     grader_feedback: str
-    history: List[str]
+    # Released turns: {"question", "answer", "released"}; older threads may hold plain strings.
+    history: List[Any]
     telemetry: Dict[str, Any]
     degraded: List[str]
     principal_clearance: str

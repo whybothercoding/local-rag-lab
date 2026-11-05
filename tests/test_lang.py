@@ -156,3 +156,39 @@ def test_ordinary_figures_survive_redaction(text):
     from rag_lab.security.redaction import redact_pii
 
     assert redact_pii(text) == text
+
+
+@pytest.mark.parametrize(("question", "lang"), [
+    ("How are you doing today?", "en"), ("Guten Morgen, wie geht's?", "de"), ("Bonsoir !", "fr"), ("Τι κάνεις σήμερα;", "el"),
+])
+def test_chitchat_is_routed_and_answered_in_the_question_language(question, lang):
+    from rag_lab.lang import chitchat_reply
+    from rag_lab.pipeline.entry import chitchat_node
+
+    assert router_node({"sanitized_question": question})["intent"] == "chitchat"
+    assert chitchat_node({"asked_question": question, "sanitized_question": question})["generation"] == chitchat_reply(lang)
+
+
+def test_embedding_router_never_takes_a_real_question():
+    """Every golden question that is not chitchat must reach retrieval: a misroute is silent."""
+    import json
+    from pathlib import Path
+
+    golden = json.loads((Path(__file__).resolve().parent.parent / "eval" / "golden.json").read_text(encoding="utf-8"))
+    questions = {q for c in golden if c.get("expect") != "chitchat" for q in [c["question"], *c.get("history", [])]}
+    misrouted = [q for q in questions if router_node({"sanitized_question": q})["intent"] == "chitchat"]
+    assert misrouted == []
+
+
+@pytest.mark.parametrize(("question", "parts"), [
+    ("What is the office dress code, and how long is the rollback SLA?", 2),
+    ("Gibt es Parkplätze für Mitarbeitende und wie lange dauert die Probezeit?", 2),
+    ("Y a-t-il une salle de sport ou un parking pour les employés ?", 2),
+    ("Πόσες ημέρες τηλεργασίας επιτρέπονται και πόσα χρήματα δίνει η εταιρεία;", 2),
+    ("Are deployments on Tuesday and Thursday?", 0),   # one part has no two content words: not compound
+    ("What is the rollback SLA?", 0),
+])
+def test_compound_questions_split_into_answerable_parts(question, parts):
+    from rag_lab.pipeline.retrieval import _question_parts
+
+    assert len(_question_parts(question)) == parts

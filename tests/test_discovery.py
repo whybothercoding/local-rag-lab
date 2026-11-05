@@ -195,3 +195,38 @@ def test_ingest_reclassifies_when_clearance_changes_and_supports_folder_clearanc
     assert workspace_manager.get_workspace_stats("ops")["chunks"] == 0
 
 
+
+
+
+def test_chunks_carry_their_heading_path():
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    from rag_lab.ingestion.ingest import chunk_document
+
+    doc = ("# Travel Policy\nIntro line.\n\n## Flights\n" + "Economy class is the default. " * 12 +
+           "\n\n## Hotels\nHotel rates above 180 EUR need review.\n")
+    chunks = chunk_document(doc, RecursiveCharacterTextSplitter(chunk_size=120, chunk_overlap=0))
+    assert chunks[0] == "# Travel Policy\nIntro line."
+    flights = [c for c in chunks if "Economy" in c]
+    assert len(flights) > 1 and all(c.startswith("# Travel Policy\n## Flights\n") for c in flights)
+    assert chunks[-1] == "# Travel Policy\n## Hotels\nHotel rates above 180 EUR need review."
+
+
+def test_documents_without_headings_chunk_as_before():
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    from rag_lab.ingestion.ingest import chunk_document
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
+    text = "Plain text policy.\nSecond line."
+    assert chunk_document(text, splitter) == splitter.split_text(text)
+
+
+def test_a_new_chunker_version_re_indexes_unchanged_files(storage, monkeypatch):
+    ws_dir = storage / "ops"
+    ws_dir.mkdir()
+    (ws_dir / "a.md").write_text("# Ops\nThe deploy window is Tuesday evening.")
+    assert ingest_workspace("ops", str(ws_dir)).ok
+    assert ingest_workspace("ops", str(ws_dir)).unchanged is True
+    monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-v2")
+    assert ingest_workspace("ops", str(ws_dir)).unchanged is False
