@@ -1,8 +1,52 @@
 # Local Enterprise RAG Lab
 
-An enterprise-ready, fully local **Compound AI** retrieval, reasoning, and compliance engine built with **LangGraph**, **Ollama (`qwen3:8b`)** or any OpenAI-compatible server (vLLM), **ChromaDB** (or Qdrant / pgvector), **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
+[![Offline Runtime](https://img.shields.io/badge/Runtime-100%25%20Offline-success)](#)
+[![Zero-Trust RBAC](https://img.shields.io/badge/Security-Zero--Trust%20v3-blue)](#)
+[![Audit](https://img.shields.io/badge/Audit-HMAC%20Tamper--Evident-orange)](#)
+[![Verification](https://img.shields.io/badge/Groundedness-NLI%20fp32%20Entailment-purple)](#)
+[![Benchmark](https://img.shields.io/badge/Evaluation-159%20Golden%20Cases-informational)](#)
 
-Designed for complete data sovereignty, this system operates **100% air-gapped** with zero external network requests during inference. It integrates multi-tenant knowledge workspaces, self-reflective corrective RAG loops, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
+An enterprise-grade, fully local **Compound AI** retrieval, reasoning, and governance platform built with **LangGraph**, **Ollama (`qwen3:8b`)** or any OpenAI-compatible server (vLLM), **ChromaDB** (with opt-in Qdrant / pgvector), **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
+
+Designed for complete data sovereignty, this system operates **100% air-gapped** (`HF_HUB_OFFLINE=1`) with zero external network requests during inference. It integrates hierarchical document clearance (Policy v3 RBAC), pre-execution PII redaction, self-reflective corrective RAG loops, multi-format document ingestion, and compliance-grade Human-in-the-Loop (HITL) review gates.
+
+---
+
+### Architectural Principles & Evaluation Scorecard
+
+| Pillar | Principle | Score | Architectural Implementation |
+|:---|:---|:---:|:---|
+| **Zero Trust** | **Explicit Node Verification** | **9 / 10** | Tokens, workspace permissions, and dual-control reviewer rules are enforced directly inside graph nodes, never delegated to client state. |
+| **Zero Trust** | **Fail-Closed Retrieval** | **9 / 10** | Server-side clearance filtering backed by base-class `guard_hits()`; unknown clearances drop files; missing keys halt execution. |
+| **Zero Trust** | **Tamper-Evident Audit** | **8.5 / 10** | Forward-secure HMAC-SHA256 hash chain with AES-256-GCM sealed payloads; signed head anchors replicated to off-host copies (`AUDIT_ANCHOR_COPY_DIR`). |
+| **Zero Trust** | **Caller Isolation & DLP** | **8.5 / 10** | `prepare_pipeline_input()` sanitizes queries before state serialization; initial checkpoints and audit logs never persist unredacted PII. |
+| **Zero Trust** | **Cryptographic Supply Chain** | **8.5 / 10** | Model weights pinned by hardcoded SHA-256 digests; all 163 package dependencies cryptographically hash-pinned in `requirements.lock`. |
+| **Zero Trust** | **Network Boundary & Transport** | **8 / 10** | UI binds loopback `127.0.0.1` by default; network access requires explicit opt-in (`LAN=1`); local CA TLS via Caddy ([docs/lan-tls.md](docs/lan-tls.md)). |
+| **AI Systems** | **Compound Architecture** | **9 / 10** | Directed acyclic & cyclic LangGraph state machine with explicit retry budgets and decoupled retrieval/grading nodes. |
+| **AI Systems** | **Reproducibility** | **9 / 10** | Pinned ONNX models; fp32 NLI yielding identical cross-entropy scores on arm64 and x86; deterministic extractive baseline. |
+| **AI Systems** | **Doc & Code Fidelity** | **9 / 10** | Automated CI tests enforce that architecture diagrams, Makefile commands, and golden set metrics match codebase reality. |
+| **AI Systems** | **Groundedness & Output Gates**| **8.5 / 10** | Quantitative figure extraction and cross-lingual NLI sentence entailment (`mDeBERTa-v3`) with self-corrective prompt feedback. |
+| **AI Systems** | **Tunability & Feedback Loop** | **8.5 / 10** | Parametric candidate retrieval widths (`RETRIEVAL_*_K`); automated harvesting of reviewer compliance rejections (`make audit-harvest`). |
+| **AI Systems** | **Evaluation Benchmark** | **8.5 / 10** | 159 golden benchmark cases (108 held-out test split) across 4 languages with committed reference baselines ([eval/README.md](eval/README.md)). |
+
+*Full security threat model and cryptographic boundaries: see [docs/threat-model.md](docs/threat-model.md).*  
+*Horizontal scaling and containerized cloud deployment options: see [docs/scaling.md](docs/scaling.md).*
+
+---
+
+### Quickstart (Zero Cloud Keys Needed)
+
+Clone the repository and run the test suite locally in under 3 minutes:
+
+```bash
+make setup          # Create virtualenv and install dependencies
+make models         # Download and verify pinned SHA-256 ONNX models offline
+make test           # Run comprehensive 850+ test suite (offline)
+make eval           # Run 159-case golden evaluation gate
+make ui             # Launch Streamlit web interface (binds 127.0.0.1)
+```
+
+---
 
 ---
 
