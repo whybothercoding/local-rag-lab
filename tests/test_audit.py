@@ -159,3 +159,56 @@ def test_session_audit_log_verifies():
     ok, bad_seq, count = verify_chain()
     assert ok, f"audit chain broken at seq {bad_seq}"
     assert count > 0
+
+
+def test_harvest_feedback_creates_eval_candidates(tmp_path):
+    import json
+    from rag_lab.security.audit import harvest_feedback, main
+
+    path = str(tmp_path / "audit.db")
+    record(
+        "hitl_decision",
+        workspace_id="finance",
+        session_id="s-harvest",
+        data={
+            "question": "What is the reimbursement limit?",
+            "decision": "rejected",
+            "released": False,
+            "approver": "bob",
+            "reason": "Missing travel per-diem clause",
+            "citations": ["[chunk-1] expenses.md"],
+        },
+        path=path,
+    )
+    record(
+        "hitl_decision",
+        workspace_id="finance",
+        session_id="s-approved",
+        data={
+            "question": "What is the Q3 date?",
+            "decision": "approved",
+            "released": True,
+            "approver": "bob",
+            "reason": "",
+        },
+        path=path,
+    )
+
+    candidates = harvest_feedback(path=path)
+    assert len(candidates) == 1
+    case = candidates[0]
+    assert case["question"] == "What is the reimbursement limit?"
+    assert case["workspace"] == "finance"
+    assert case["expected_sources"] == ["expenses.md"]
+    assert case["reviewer_reason"] == "Missing travel per-diem clause"
+    assert case["split"] == "test"
+    assert case["suite"] == "en"
+
+    # Test CLI harvest --output
+    out_file = tmp_path / "candidates.json"
+    exit_code = main(["harvest", "-o", str(out_file)], path=path)
+    assert exit_code == 0
+    written = json.loads(out_file.read_text(encoding="utf-8"))
+    assert len(written) == 1
+    assert written[0]["id"] == case["id"]
+

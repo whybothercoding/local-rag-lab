@@ -240,6 +240,33 @@ def list_rejections(limit: int = 50, workspace_id: str | None = None, path: str 
     return rejected[:limit]
 
 
+def harvest_feedback(
+    limit: int = 50,
+    workspace_id: str | None = None,
+    path: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert reviewer rejections into candidate evaluation cases for eval/golden.json."""
+    rejections = list_rejections(limit=limit, workspace_id=workspace_id, path=path)
+    candidates = []
+    for item in rejections:
+        data = item.get("data", {})
+        q = data.get("question") or ""
+        seq = item.get("seq", 0)
+        cites = [c.split("] ")[-1] for c in data.get("citations", []) if "]" in c] or data.get("citations", [])
+        candidates.append({
+            "id": f"harvested-feedback-{seq}",
+            "split": "test",
+            "workspace": item.get("workspace_id") or "default",
+            "question": q,
+            "expected_sources": cites,
+            "expected_keywords": [],
+            "reviewer_reason": data.get("reason", ""),
+            "suite": "en",
+            "lang": "en",
+        })
+    return candidates
+
+
 def export_events(path: str | None = None) -> list[dict[str, Any]]:
     """Every event, oldest first, decrypted. For auditors. Exporting is itself audited by the caller."""
     return list(reversed(list_events(limit=10**9, path=path)))
@@ -496,7 +523,7 @@ def _print_event(event: dict[str, Any]) -> None:
     print(json.dumps(event, sort_keys=True))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, path: str | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify, anchor, and inspect the audit trail.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("verify", help="Recompute the hash chain and check every anchor")
@@ -508,6 +535,10 @@ def main(argv: list[str] | None = None) -> int:
     feedback = sub.add_parser("feedback", help="List answers reviewers rejected, with their reasons")
     feedback.add_argument("-n", type=int, default=20)
     feedback.add_argument("--workspace")
+    harvest = sub.add_parser("harvest", help="Extract reviewer rejections as candidate eval cases")
+    harvest.add_argument("-n", type=int, default=50)
+    harvest.add_argument("--workspace")
+    harvest.add_argument("-o", "--output", help="Optional file path to write candidate cases to")
     export_p = sub.add_parser("export", help="Print every event, oldest first, as JSON lines (decrypted)")
     export_p.add_argument("-o", "--output", help="Optional file path to write JSONL export to")
     args = parser.parse_args(argv)
@@ -541,15 +572,29 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "feedback":
-        rejections = list_rejections(limit=args.n, workspace_id=args.workspace)
+        rejections = list_rejections(limit=args.n, workspace_id=args.workspace, path=path)
         if not rejections:
             print("No rejected answers recorded.")
         for item in rejections:
             data = item["data"]
             print(f"{item['ts']} [{item['workspace_id']}] approver={data.get('approver') or '-'}")
+            if data.get("question"):
+                print(f"  question: {data['question']}")
             print(f"  reason: {data.get('reason') or '(none given)'}")
             print(f"  groundedness: {data.get('groundedness_ratio')}  degraded: {data.get('degraded') or 'no'}")
             print(f"  citations: {', '.join(data.get('citations', [])) or 'none'}")
+        return 0
+
+    if args.command == "harvest":
+        candidates = harvest_feedback(limit=args.n, workspace_id=args.workspace, path=path)
+        formatted = json.dumps(candidates, indent=2, ensure_ascii=False)
+        if args.output:
+            out_path = Path(args.output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(formatted + "\n", encoding="utf-8")
+            print(f"Harvested {len(candidates)} candidate eval case(s) to {out_path}")
+        else:
+            print(formatted)
         return 0
 
     if args.command == "export":

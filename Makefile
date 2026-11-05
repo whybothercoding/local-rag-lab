@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password scale-up scale-down lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-harvest audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password scale-up scale-down lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -66,6 +66,7 @@ help:
 	@echo "  make audit-verify                              Verify HMAC audit hash chain and anchors"
 	@echo "  make audit-tail [N=20] [WS=<ws>]               Show most recent audit events"
 	@echo "  make audit-feedback [N=20] [WS=<ws>]           Show rejected answers and reviewer reasons"
+	@echo "  make audit-harvest [N=50] [WS=<ws>] [OUT=path] Export rejected answers as candidate eval cases"
 	@echo "  make audit-anchor                              Record signed audit head hash anchor (+ AUDIT_ANCHOR_COPY_DIR copy)"
 	@echo "  make audit-export [OUT=audit-export.jsonl]     Export decrypted audit trail as JSONL"
 	@echo "  make retention [DAYS=183]                      Prune expired audit records and idle checkpoints"
@@ -386,6 +387,10 @@ graph:
 # List answers reviewers rejected, with their reasons (defaults to N=20, optional WS=<workspace>)
 audit-feedback:
 	./venv/bin/python -m rag_lab.security.audit feedback -n $(or $(N),20) $(if $(WS),--workspace $(WS),)
+
+# Export reviewer rejections as candidate golden eval cases (feedback loop)
+audit-harvest:
+	./venv/bin/python -m rag_lab.security.audit harvest -n $(or $(N),50) $(if $(WS),--workspace $(WS),) $(if $(OUT),--output $(OUT),)
 
 # 14. Clean caches and test artifacts
 clean:

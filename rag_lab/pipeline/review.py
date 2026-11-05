@@ -99,12 +99,15 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             approved = False
             review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: approver clearance is below the requester's"]))
 
+    asked = state.get("asked_question") or display_q
+
     # Written before the answer is released, so a failed write releases nothing.
     audit_record(
         "hitl_decision",
         workspace_id=state.get("workspace_id", "default"),
         session_id=state.get("session_id", ""),
         data={
+            "question": asked,
             "decision": "approved" if approved else "rejected",
             "requested": review["decision"],
             "approver": review["approver"],
@@ -121,8 +124,6 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             "degraded": state.get("degraded", []),
         },
     )
-
-    asked = state.get("asked_question") or display_q
     if approved:
         # Only released answers become conversation context for later follow-ups.
         history = (history + [{"question": display_q, "asked": asked, "answer": gen, "released": True}])[-MAX_HISTORY_TURNS:]
