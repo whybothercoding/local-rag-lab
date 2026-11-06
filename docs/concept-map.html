@@ -251,7 +251,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
       <span><b>5 + 5 → 8 → 3</b> search funnel (configurable)</span>
       <span><b>2 / 1</b> search / write retries</span>
       <span><b>159</b> golden test cases</span>
-      <span><b>937</b> tests</span>
+      <span><b>957</b> tests</span>
     </div>
   </div>
 
@@ -314,7 +314,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
           <text class="bs" x="480" y="415" text-anchor="middle">Around every step: sign-in &amp; roles · caller PII masking · clearance filter · audit log · encryption · pinned models</text>
         </svg>
       </div>
-      <figcaption>Both paths meet in the two indexes. Ingest writes them when documents change. The pipeline only reads them, and it filters every read by the asker's clearance.</figcaption>
+      <figcaption>Both paths meet in the indexes (vectors, keywords, and knowledge graph). Ingest writes them when documents change. The pipeline only reads them, and it filters every read by the asker's clearance.</figcaption>
     </figure>
     <p class="oneliner"><b>For dummies, the buzzword:</b> this is a <em>compound AI system</em>. Not one giant brain, but a team of small specialists wired together, each doing one job you can test on its own.</p>
   </section>
@@ -464,7 +464,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
           <tr><td>contextualize</td><td class="dum">Turns "and for contractors?" into a full question.</td><td>Rewrites follow-ups using released turns only, then re-scans and re-masks the result.</td><td class="file">pipeline/context.py</td></tr>
           <tr><td>cache_lookup</td><td class="dum">Checks the notebook of approved answers.</td><td>Matches by meaning (cosine ≥ 0.92) inside one workspace and clearance partition. A hit ends the run.</td><td class="file">retrieval/semantic_cache.py</td></tr>
           <tr><td>router</td><td class="dum">Reception desk: chat goes left, work goes right.</td><td>Word lists plus similarity to chitchat examples for short messages. The threshold keeps a wide margin, since a wrong "chat" skips retrieval.</td><td class="file">pipeline/entry.py</td></tr>
-          <tr><td>retrieve</td><td class="dum">Sends two librarians, one by meaning and one by exact words, then picks the best three pages.</td><td>5 dense + 5 keyword hits, fused by RRF (k=60) to 8, injection scan, cross-encoder keeps 3, then the evidence gate. Funnel candidate widths are configurable.</td><td class="file">pipeline/retrieval.py</td></tr>
+          <tr><td>retrieve</td><td class="dum">Sends librarians for meaning, words, and connections between documents.</td><td>5 dense + 5 keyword hits + optional GraphRAG entity traversal, fused by RRF (k=60) to 8, injection scan, cross-encoder keeps 3 (preserving graph-bridging passages), then the evidence gate. Funnel candidate widths are configurable.</td><td class="file">pipeline/retrieval.py</td></tr>
           <tr><td>sanitize_context</td><td class="dum">A second look for hidden orders in the pages.</td><td>Strips pieces with role spoofing, delimiter attacks, instruction overrides or exfiltration beacons before the writer sees them.</td><td class="file">security/context_sanitizer.py</td></tr>
           <tr><td>grade_docs</td><td class="dum">"Did we find anything usable?" If not, search again.</td><td>No documents left: rewrite (budget 2), then <code>circuit_break</code> to the writer, which abstains.</td><td class="file">pipeline/retrieval.py</td></tr>
           <tr><td>rewrite</td><td class="dum">Tries different search words.</td><td>Builds a keyword-style query, optionally with the LLM, then loops back to retrieve.</td><td class="file">pipeline/retrieval.py</td></tr>
@@ -538,10 +538,10 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
         <h3>Anatomy of a search</h3>
         <p class="oneliner" style="background:transparent;border:0;padding:0"><b>For dummies:</b> cast a wide net, then keep narrowing until only the best three pages remain.</p>
         <div class="bars">
-          <div class="bar"><b>≤ 10 candidates</b><span>5 by meaning (vectors) + 5 by exact words (BM25), both filtered by clearance (widths configurable)</span></div>
-          <div class="bar" style="margin-right:10%"><b>8 fused</b><span>Reciprocal rank fusion, score = Σ 1 / (60 + rank)</span></div>
+          <div class="bar"><b>Candidates</b><span>5 vectors + 5 BM25 + GraphRAG multi-hop entity traversal, filtered by clearance (widths configurable)</span></div>
+          <div class="bar" style="margin-right:10%"><b>RRF Fusion</b><span>Reciprocal rank fusion merges dense, sparse, and graph hops</span></div>
           <div class="bar" style="margin-right:20%"><b>≤ 8 clean</b><span>Pieces with planted-instruction patterns are dropped</span></div>
-          <div class="bar" style="margin-right:45%"><b>3 reranked</b><span>Cross-encoder reads question and piece together</span></div>
+          <div class="bar" style="margin-right:45%"><b>3 reranked</b><span>Cross-encoder reads question and piece together, preserving graph bridges</span></div>
           <div class="bar gate"><b>Evidence gate</b><span>Best reranker score ≥ −4.5 (default profile) or nothing moves on</span></div>
         </div>
       </div>
@@ -621,8 +621,8 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
         <thead><tr><th>Folder</th><th>Job</th><th>Key files</th></tr></thead>
         <tbody>
           <tr><td>pipeline/</td><td>The graph and every node in it.</td><td class="file">graph.py (wiring) · state.py (shared state) · entry.py (prepare_pipeline_input, guardrail, cache, router, chitchat) · context.py · retrieval.py (retrieve, sanitize, grade_docs, rewrite) · generation.py · grading.py · review.py · llm_provider.py</td></tr>
-          <tr><td>retrieval/</td><td>The search machinery.</td><td class="file">embedding_provider.py · sparse_search.py · reranker.py · nli.py · semantic_cache.py · cache_index.py</td></tr>
-          <tr><td>ingestion/</td><td>Documents in, indexes out.</td><td class="file">ingest.py (chunk, tag, embed, publish) · parsers.py · parser_worker.py (sandbox)</td></tr>
+          <tr><td>retrieval/</td><td>The search machinery.</td><td class="file">embedding_provider.py · sparse_search.py · graph_store.py · reranker.py · nli.py · semantic_cache.py · cache_index.py</td></tr>
+          <tr><td>ingestion/</td><td>Documents in, indexes out.</td><td class="file">ingest.py (chunk, tag, embed, graph, publish) · graph_builder.py · parsers.py · parser_worker.py (sandbox)</td></tr>
           <tr><td>security/</td><td>Who you are, what you may see, proof of what happened.</td><td class="file">access.py (roles, sign-in, tokens, TOTP) · keystore.py · vault.py (AES-GCM) · audit.py · context_sanitizer.py + injection_patterns.tsv · redaction.py · model_integrity.py · threat-model.md</td></tr>
           <tr><td>storage/</td><td>Where vectors, state and workspaces are kept.</td><td class="file">vector_store.py (+ qdrant_store.py, pgvector_store.py) · checkpointer.py · workspace_manager.py · backup.py · retention.py</td></tr>
           <tr><td>lang/</td><td>English, German, French and Greek language data.</td><td class="file">lang/__init__.py · lang/data/</td></tr>
@@ -653,7 +653,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
 </main>
 
 <footer>
-  Sources: README, <code>CLAUDE.md</code>, <code>eval/README.md</code>, <code>eval/baselines/README.md</code>, <code>docs/threat-model.md</code>, <code>docs/scaling.md</code>, <code>docs/architecture.mmd</code> and the code under <code>rag_lab/</code>. The cloud architecture in the README is a roadmap and is not built; Qdrant, pgvector, vLLM and the shared PostgreSQL cache are built but off by default. Figures re-measured on 2026-11-05: cache miss 4.8 ms at 500 and 5.0 ms at 2,000 entries, Rust scan 39x on a best-of-three run, NLI claim tests pass, eval gates met on 159 cases, 937 tests passing. Quoted from the repo docs and not re-measured: the 217 ms cache time from before the index, x86 NLI scores, the 150-document ingest timings and the LLM-judge tables.
+  Sources: README, <code>CLAUDE.md</code>, <code>eval/README.md</code>, <code>eval/baselines/README.md</code>, <code>docs/threat-model.md</code>, <code>docs/scaling.md</code>, <code>docs/architecture.mmd</code> and the code under <code>rag_lab/</code>. The cloud architecture in the README is a roadmap and is not built; Qdrant, pgvector, vLLM and the shared PostgreSQL cache are built but off by default. Figures re-measured on 2026-11-06: cache miss 4.8 ms at 500 and 5.0 ms at 2,000 entries, Rust scan 39x on a best-of-three run, NLI claim tests pass, eval gates met on 159 cases, 957 tests passing. Quoted from the repo docs and not re-measured: the 217 ms cache time from before the index, x86 NLI scores, the 150-document ingest timings and the LLM-judge tables.
 </footer>
 
 <script>
@@ -678,6 +678,7 @@ var G = [
   { c: 'find', t: 'Vector store', d: 'A filing cabinet sorted by meaning instead of by letter.', x: 'One VectorStore interface: ChromaDB by default, Qdrant and pgvector opt in. Every query is filtered by clearance on the server, then passes guard_hits(). Scores stay on Chroma\'s 1 - distance cosine scale because the gates are calibrated on it.', f: 'storage/vector_store.py' },
   { c: 'find', t: 'Keyword search (BM25)', d: 'Ctrl+F with good ranking: finds exact words, codes and names that meaning-search can blur.', x: 'SQLite FTS5 with BM25 ranking and the trigram tokenizer (keyword-only recall@3 on 98 answerable cases: 86 against 80 for unicode61/porter). One database per workspace.', f: 'retrieval/sparse_search.py' },
   { c: 'find', t: 'Hybrid search and RRF', d: 'Ask two experts, one who knows meaning and one who knows exact words, and merge their lists.', x: 'Dense top 5 and keyword top 5 are merged with reciprocal rank fusion, score = Σ 1 / (60 + rank). The best 8 move on. All funnel widths (dense k, sparse k, fusion top N, rerank top k) are configurable via settings or env.', f: 'pipeline/retrieval.py, config.py' },
+  { c: 'find', t: 'GraphRAG (Knowledge Graph)', d: 'Connect the dots between separate documents using entity relationships.', x: 'Zero-dependency in-process KnowledgeGraph extracts entities (people, roles, policies, services) and directed relationships in EN, DE, FR, and EL during sync, traversing multi-hop chains up to GRAPH_MAX_HOPS to retrieve bridging documents that vector search misses.', f: 'retrieval/graph_store.py, ingestion/graph_builder.py' },
   { c: 'find', t: 'Cross-encoder reranker', d: 'A slow, careful second opinion that reads the question and a page together.', x: 'bge-reranker-v2-m3 (int8 in the default profile) keeps 3 of the 8. Pieces with injected instructions are removed first, so a poisoned piece is replaced by the next-best clean one.', f: 'retrieval/reranker.py' },
   { c: 'find', t: 'Evidence gate (abstention)', d: 'If nothing good was found, say "I do not know" instead of making something up.', x: 'Default profile: best reranker score must reach -4.5 (answerable questions scored -1.8 to 6.6, out-of-scope -11.0 to -7.1). The en profile uses cosine ≥ 0.65 or keyword coverage ≥ 0.40.', f: 'pipeline/retrieval.py' },
   { c: 'find', t: 'Multilingual profiles', d: 'One system that reads four languages, even when question and document differ.', x: 'English, German, French and Greek. Three profiles: multilingual (about 0.8 GB), multilingual-large (about 4.5 GB), en (English only), each plus the 1.1 GB NLI model. Language data lives in rag_lab/lang/.', f: 'lang/, config.py' },

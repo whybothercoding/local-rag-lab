@@ -365,6 +365,8 @@ footer { max-width: 980px; margin: 0 auto; padding: 24px 16px 60px; color: var(-
           <div class="cap">Active Workspace</div>
           <div class="field"><span><span class="n">2</span>accounting</span><span>▾</span></div>
           <div class="cap">Status: <b>4</b> files | <b>61</b> indexed chunks</div>
+          <div class="cap">Retrieval Engine</div>
+          <div class="field"><span><span class="n">6</span>Graph-Augmented (GraphRAG)</span></div>
           <div class="cap">Conversations (1)</div>
           <div class="btn"><span class="n">3</span>+ New Chat</div>
         </div>
@@ -374,6 +376,7 @@ footer { max-width: 980px; margin: 0 auto; padding: 24px 16px 60px; color: var(-
           <div class="bubble a">
             <span>All business expense receipts above $50 require manager sign-off.</span>
             <div class="exp"><span class="n">5</span><b>Retrieved Source Citations</b><br><code>[1] [accounting_0_0_… ] tax_policy.md</code></div>
+            <div class="exp"><span class="n">7</span><b>🕸️ Knowledge Graph Traversal (1 path)</b><br><code>[Expense Receipts] --(REQUIRES_APPROVAL)--> [Manager]</code></div>
           </div>
           <div class="input"><span class="n">4</span>Ask a question grounded in 'accounting'...</div>
         </div>
@@ -384,6 +387,8 @@ footer { max-width: 980px; margin: 0 auto; padding: 24px 16px 60px; color: var(-
         <li><span class="n">3</span><span><b>New Chat.</b> Start one for each new topic so old questions do not leak into the new one.</span></li>
         <li><span class="n">4</span><span><b>Question box.</b> It greys out while one of your answers waits for a reviewer.</span></li>
         <li><span class="n">5</span><span><b>Citations.</b> The proof. The text shown here is an example; your chunk names will differ.</span></li>
+        <li><span class="n">6</span><span><b>Retrieval Engine.</b> Switch between standard Hybrid (Vector + BM25) and Graph-Augmented (GraphRAG) to resolve multi-hop connections across documents.</span></li>
+        <li><span class="n">7</span><span><b>Knowledge Graph Traversal.</b> An expandable audit card revealing the exact chain of entity relationships connecting bridging documents.</span></li>
       </ol>
     </div>
 
@@ -462,6 +467,7 @@ footer { max-width: 980px; margin: 0 auto; padding: 24px 16px 60px; color: var(-
         </tbody>
       </table>
     </div>
+    <p class="oneliner" style="margin-top:14px"><b>Multilingual responses:</b> answers and system notices (abstentions, access denials, compliance rejections) strictly match the language of your query (English, German, French, or Greek) with zero language bleed.</p>
   </section>
 
   <section id="review">

@@ -72,18 +72,19 @@ When retrieved documents fail relevance grading or an answer is found irrelevant
 
 An answer that fails the groundedness check is regenerated from the same documents with the grader's reason added to the prompt (for example, the figures it stated that the context does not contain), because at temperature 0 an identical prompt would only repeat the same answer. The extractive fallback is never retried: it escalates straight to review. Two separate **circuit breakers** bound the loops: `MAX_RETRIEVAL_RETRIES` (default 2) for query rewrites and `MAX_GENERATION_RETRIES` (default 1) for regenerations, so one loop cannot spend the other's budget. Deployments running larger models can raise them in `.env`.
 
-### 5. Hybrid Retrieval & Cross-Encoder Reranking
-Combines dense vector embeddings, sparse lexical search, and neural cross-encoder reranking:
+### 5. Hybrid Retrieval, GraphRAG & Cross-Encoder Reranking
+Combines dense vector embeddings, sparse lexical search, in-process knowledge graph traversal, and neural cross-encoder reranking:
 * **Dense Retrieval**: Cosine similarity via ChromaDB and in-process ONNX embeddings. `MODEL_PROFILE` picks the models: `multilingual` (default; `paraphrase-multilingual-MiniLM-L12-v2` + `bge-reranker-v2-m3-int8`, about 0.8 GB), `multilingual-large` (`multilingual-e5-large` + `bge-reranker-v2-m3`, about 4.5 GB, slower, marginally better), or `en` (`bge-small-en-v1.5` + `ms-marco-MiniLM-L-6-v2`, English only). Documents and questions may be in English, German, French, or Greek, in any combination.
   Models never switch automatically: each index records the model that built it, and retrieval skips dense search with a labelled warning until the workspace is re-indexed (`make sync FORCE=1`). `make status` marks such a workspace `[!!]`, and an answer built on it, including a "not found" abstention, waits for a reviewer instead of releasing on its own. Every profile also downloads the 1.1 GB NLI model (default profile: about 2 GB in all). There is no Ollama embedding path: it failed the multilingual gates, could not be hash-pinned and was slower (measurements in [eval/README.md](eval/README.md)); a leftover `EMBEDDING_PROVIDER=ollama` fails with instructions.
 * **Sparse Retrieval**: Lexical term matching via SQLite FTS5 / BM25 for exact matches, technical acronyms, and identifiers.
-* **Reciprocal Rank Fusion (RRF)**: Merges candidate sets into an initial top candidate list.
-* **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (per profile) to ensure that chunks directly answering the query are prioritized above partial keyword distractions.
+* **Graph-Augmented Retrieval (GraphRAG - `rag_lab/retrieval/graph_store.py`, `rag_lab/ingestion/graph_builder.py`)**: Zero-dependency, in-process Knowledge Graph built during workspace ingestion. Automatically extracts corporate entity relationships (people, roles, policies, services, authorities) across English, German, French, and Greek. Resolves multi-hop bridging queries where lexical or vector similarity alone misses intermediate linking documents (e.g. *Person* $\rightarrow$ *Role* $\rightarrow$ *System Authority* $\rightarrow$ *Access Ticket*). Configurable via `ENABLE_GRAPH_RAG=1`, `GRAPH_MAX_HOPS=2`, or toggled on demand in the Streamlit UI with an interactive traversal path visualizer.
+* **Reciprocal Rank Fusion (RRF)**: Merges dense, sparse, and graph traversal candidate sets into an initial top candidate list.
+* **Neural Cross-Encoder Reranker (`rag_lab/retrieval/reranker.py`)**: Shortlisted candidates undergo deep cross-attention re-scoring with a local, pinned ONNX model (per profile) to ensure that chunks directly answering the query are prioritized above partial keyword distractions while preserving graph-bridging evidence.
 
 ### 6. Retrieval Abstention & Evidence Thresholds ("Knowing When Not to Answer")
 To prevent hallucinations on irrelevant context, the system enforces strict evidence thresholds:
 * The gate is per model profile (calibrated with `make calibrate-models`). The default `multilingual` profile requires the cross-encoder reranker's best score to reach its threshold; the `en` profile requires cosine similarity $\ge 0.65$; either falls back to similarity or query keyword coverage when no reranker score exists.
-* If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context.
+* If retrieved chunks fail these criteria, the system cleanly **abstains** (explaining that documentation was not found) instead of fabricating answers from unrelated context. System abstention notices, clearance access denials, and compliance rejection banners are localized into Greek, German, French, and English, matching the question without language bleed.
 
 ### 7. State-Scoped & Clearance-Partitioned Semantic Caching
 * Approved answers and their citations are stored sealed (AES-256-GCM) in a persistent SQLite cache with a bounded in-memory L1 in front (`CACHE_BACKEND=postgres` shares one table instead). Lookup is two-stage: an exact match on a composite key, `hashlib.sha256(f"{workspace_id}:{clearance}:{index_version}:{normalized_question}")`, then a cosine match inside the same partition, which also requires the same numbers, negations and language.
@@ -584,7 +585,7 @@ local-rag-lab/
 ├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders
-└── tests/                   # 937 unit, integration and security tests
+└── tests/                   # 957 unit, integration and security tests
 ```
 
 ---
