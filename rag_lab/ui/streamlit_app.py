@@ -79,6 +79,26 @@ def render_citations(citations):
             st.markdown(f"**[{idx}]** `{citation}`")
 
 
+def render_graph_traversal(graph_info) -> None:
+    """Renders expandable view of multi-hop Knowledge Graph traversal paths."""
+    if not graph_info or not graph_info.get("paths"):
+        return
+    paths = graph_info.get("paths", [])
+    with st.expander(f"🕸️ Knowledge Graph Traversal ({len(paths)} path{'s' if len(paths) != 1 else ''})", expanded=False):
+        seeds = ", ".join(graph_info.get("seed_entities", []))
+        if seeds:
+            st.caption(f"**Seed Entities:** `{seeds}`")
+        st.markdown("**Multi-Hop Evidence Paths:**")
+        for p in paths:
+            st.code(p, language="text")
+        edges = graph_info.get("edges", [])
+        if edges:
+            st.caption(f"**Traversed Relationships ({len(edges)}):**")
+            for edge in edges:
+                st.markdown(f"- `{edge.get('source')}` **--[{edge.get('predicate')}]-->** `{edge.get('target')}`")
+
+
+
 def render_degraded(notes) -> None:
     """Shows what went wrong when an answer was produced in a reduced mode, so no one reads it as a full answer."""
     for note in notes or []:
@@ -363,6 +383,14 @@ st.query_params["ws"] = active_ws
 
 stats = get_workspace_stats(active_ws)
 st.sidebar.caption(f"Status: **{stats['files']}** files | **{stats['chunks']}** indexed chunks")
+
+retrieval_mode = st.sidebar.radio(
+    "Retrieval Engine",
+    options=["Hybrid (Vector + BM25)", "Graph-Augmented (GraphRAG)"],
+    index=1 if getattr(settings, "enable_graph_rag", False) else 0,
+    help="Graph-Augmented traverses corporate entity and authority relationships across documents to resolve multi-hop queries that vector search misses.",
+)
+is_graph_strategy = "Graph" in retrieval_mode
 
 engine = compiled_engine(settings.db_uri)
 
@@ -716,6 +744,8 @@ for msg in st.session_state.messages:
         render_degraded(msg.get("degraded"))
         if msg.get("citations"):
             render_citations(msg["citations"])
+        if msg.get("graph_traversal"):
+            render_graph_traversal(msg["graph_traversal"])
 
 config: RunnableConfig = {"configurable": {"thread_id": st.session_state.thread_id}}
 
@@ -730,11 +760,14 @@ if not paused and st.session_state.messages and st.session_state.messages[-1]["r
         rejected = gen_text == REJECTION_NOTICE
         cites = [] if rejected else completed_state.values.get("citations", [])
         deg = [] if rejected else completed_state.values.get("degraded", [])
+        telem = {} if rejected else completed_state.values.get("telemetry", {})
+        graph_info = telem.get("graph_traversal")
         st.session_state.messages.append({
             "role": "assistant",
             "content": gen_text,
             "citations": cites,
             "degraded": deg,
+            "graph_traversal": graph_info,
         })
         st.rerun()
 
@@ -757,6 +790,7 @@ if user_query:
         session_id=st.session_state.thread_id,
         principal_token=st.session_state.token,
         question=user_query,
+        retrieval_strategy="graph" if is_graph_strategy else "hybrid",
     )
 
     with st.spinner("Processing query via guardrails, hybrid search, and Self-RAG..."):
@@ -772,14 +806,20 @@ if user_query:
     ans = state.values.get("generation", "No answer generated.")
     citations = state.values.get("citations", [])
     degraded = state.values.get("degraded", [])
+    telemetry = state.values.get("telemetry", {})
+    graph_info = telemetry.get("graph_traversal")
     st.session_state.messages.append({
         "role": "assistant",
         "content": ans,
         "citations": citations,
         "degraded": degraded,
+        "graph_traversal": graph_info,
     })
     with st.chat_message("assistant"):
         st.write(ans)
         render_degraded(degraded)
-        render_citations(citations)
+        if citations:
+            render_citations(citations)
+        if graph_info:
+            render_graph_traversal(graph_info)
     st.rerun()

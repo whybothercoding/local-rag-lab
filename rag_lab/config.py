@@ -239,6 +239,10 @@ class Settings:
     retrieval_sparse_k: int
     retrieval_fusion_top_n: int
     retrieval_rerank_top_k: int
+    # Knowledge Graph augmentation (GraphRAG)
+    enable_graph_rag: bool
+    graphs_dir: str
+    graph_max_hops: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -311,6 +315,9 @@ class Settings:
             retrieval_sparse_k=int(_env("RETRIEVAL_SPARSE_K", "5")),
             retrieval_fusion_top_n=int(_env("RETRIEVAL_FUSION_TOP_N", "8")),
             retrieval_rerank_top_k=int(_env("RETRIEVAL_RERANK_TOP_K", "3")),
+            enable_graph_rag=_flag("ENABLE_GRAPH_RAG", "false"),
+            graphs_dir=_env("GRAPHS_DIR", str(ROOT / "data" / "graphs")),
+            graph_max_hops=int(_env("GRAPH_MAX_HOPS", "2")),
         )
 
 

@@ -61,6 +61,8 @@ def ensure_base_dirs():
     os.makedirs(settings.chroma_path, exist_ok=True)
     os.makedirs(settings.bm25_dir, exist_ok=True)
     os.makedirs(settings.uploads_dir, exist_ok=True)
+    if hasattr(settings, "graphs_dir"):
+        os.makedirs(settings.graphs_dir, exist_ok=True)
 
 
 def list_workspaces() -> List[str]:
@@ -204,13 +206,18 @@ def delete_workspace(raw_name: str, actor: str | None = None) -> bool:
     except Exception as exc:
         logger.debug("Could not clear cache for %s: %s", ws_id, exc)
 
-    # 4. Delete manifest file if present
+    # 4. Delete manifest and knowledge graph files if present
     manifest_file = os.path.join(settings.bm25_dir, f"{ws_id}_manifest.json")
     if os.path.exists(manifest_file):
         try:
             os.remove(manifest_file)
         except OSError:
             pass
+    try:
+        from rag_lab.retrieval.graph_store import delete_workspace_graph
+        delete_workspace_graph(ws_id)
+    except Exception as exc:
+        logger.debug("Could not delete knowledge graph for %s: %s", ws_id, exc)
 
     # 5. Delete uploaded source files
     upload_path = os.path.join(settings.uploads_dir, ws_id)

@@ -161,6 +161,44 @@ def search_sparse_chunks(
     ]
 
 
+def get_chunks_by_ids(
+    workspace_id: str,
+    chunk_ids: list[str],
+    allowed_clearances: list[str] | None = None,
+    base_dir: str | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve specific chunks by ID from the workspace's SQLite FTS database, filtered by clearance."""
+    if not chunk_ids:
+        return []
+    clearances = ["public"] if allowed_clearances is None else list(allowed_clearances)
+    if not clearances:
+        return []
+
+    target_dir = base_dir or settings.bm25_dir
+    db_path = os.path.join(target_dir, f"{workspace_id}.db")
+    if not os.path.exists(db_path):
+        return []
+
+    id_placeholders = ", ".join("?" for _ in chunk_ids)
+    clr_placeholders = ", ".join("?" for _ in clearances)
+    try:
+        with closing(sqlite3.connect(db_path)) as conn:
+            query = (
+                f"SELECT id, source, content, clearance FROM fts_chunks "
+                f"WHERE id IN ({id_placeholders}) AND clearance IN ({clr_placeholders});"
+            )
+            rows = conn.execute(query, [*chunk_ids, *clearances]).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Error fetching chunks by ID on %s: %s", workspace_id, exc)
+        return []
+
+    return [
+        {"id": row[0], "content": row[2], "citation": f"[{row[0]}] {row[1]}", "clearance": row[3]}
+        for row in rows
+    ]
+
+
+
 def delete_sparse_index(workspace_id: str, base_dir: str | None = None) -> None:
     """Safely delete all sparse index files (.db, .db-wal, .db-shm, and leftover legacy .pkl) for a workspace."""
     target_dir = Path(base_dir or settings.bm25_dir)

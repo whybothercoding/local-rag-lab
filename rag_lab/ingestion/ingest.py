@@ -157,12 +157,17 @@ def _save_manifest(ws_id: str, manifest_data: dict) -> None:
 
 
 def _clear_index(ws_id: str) -> None:
-    """Remove every index artifact of a workspace: vectors, keywords, manifest, and cached answers."""
+    """Remove every index artifact of a workspace: vectors, keywords, manifest, graph, and cached answers."""
     get_vector_store().delete(ws_id)
     delete_sparse_index(ws_id, base_dir=settings.bm25_dir)
     manifest = _get_manifest_path(ws_id)
     if manifest.exists():
         manifest.unlink()
+    try:
+        from rag_lab.retrieval.graph_store import delete_workspace_graph
+        delete_workspace_graph(ws_id)
+    except Exception:
+        pass
     from rag_lab.retrieval.semantic_cache import clear_workspace_cache
 
     clear_workspace_cache(ws_id)
@@ -458,6 +463,18 @@ def ingest_workspace(
         logger.exception("FTS5 keyword write failed for workspace %s", ws_id)
         result.error = f"Keyword index write failed: {exc}"
         return result
+
+    # 2b. Build and save Knowledge Graph for multi-hop relationship retrieval
+    try:
+        from rag_lab.ingestion.graph_builder import build_workspace_graph
+        from rag_lab.retrieval.graph_store import get_graph_path
+
+        kg = build_workspace_graph(
+            ws_id, [{"id": cid, "text": c} for cid, c in zip(chunk_ids, chunks)]
+        )
+        kg.save(get_graph_path(ws_id))
+    except Exception as exc:
+        logger.warning("Knowledge graph build failed for workspace %s: %s", ws_id, exc)
 
     # 3. Save ingestion manifest for idempotent verification
     try:

@@ -39,6 +39,8 @@ class GraphState(TypedDict, total=False):
     degraded: List[str]
     principal_clearance: str
     dropped_chunks: List[Dict[str, Any]]
+    retrieval_strategy: str
+
 
 
 # Node input. Tests and callers pass plain dicts; GraphState is total=False, so every key is optional.

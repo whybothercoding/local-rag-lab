@@ -8,8 +8,8 @@ from typing import Any
 from typing import Dict
 from typing import List
 import json
+import logging
 import time
-
 
 from rag_lab.config import settings
 from rag_lab.pipeline import llm_provider
@@ -31,6 +31,9 @@ from rag_lab.security.context_sanitizer import scan_chunk
 
 from rag_lab.pipeline.state import StateInput
 from rag_lab.pipeline.text import _content_terms, _coverage, _keywords, _stem_variants
+
+logger = logging.getLogger("retrieval")
+
 
 
 class _EmbeddingMismatch(RuntimeError):
@@ -88,10 +91,11 @@ def _top_rerank_score(query: str, reranked: List[Dict[str, Any]], rerank_note: s
 def reciprocal_rank_fusion(
     dense_results: List[Dict[str, Any]],
     sparse_results: List[Dict[str, Any]],
+    graph_results: List[Dict[str, Any]] | None = None,
     k: int = 60,
-    top_n: int = 3
+    top_n: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Merges and re-ranks dense and sparse candidate chunks using Reciprocal Rank Fusion.
+    """Merges and re-ranks dense, sparse, and graph candidate chunks using Reciprocal Rank Fusion.
     Score = sum(1.0 / (k + rank_i))
     """
     scores: Dict[str, float] = {}
@@ -106,6 +110,12 @@ def reciprocal_rank_fusion(
         doc_id = item["id"]
         doc_map[doc_id] = item
         scores[doc_id] = scores.get(doc_id, 0.0) + (1.0 / (k + (rank + 1)))
+
+    if graph_results:
+        for rank, item in enumerate(graph_results):
+            doc_id = item["id"]
+            doc_map[doc_id] = item
+            scores[doc_id] = scores.get(doc_id, 0.0) + (1.0 / (k + (rank + 1)))
 
     sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
     return [doc_map[doc_id] for doc_id in sorted_ids[:top_n]]
@@ -172,17 +182,72 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     except Exception as exc:
         degraded.append(f"sparse_retrieval_unavailable: {type(exc).__name__}: {exc}")
 
+    # 2b. Knowledge Graph traversal (GraphRAG: multi-hop entity relationship retrieval)
+    enable_graph = settings.enable_graph_rag or state.get("retrieval_strategy") in ("graph", "graphrag", "hybrid_graph")
+    graph_candidates: List[Dict[str, Any]] = []
+    graph_traversal_info: Dict[str, Any] = {}
+    if enable_graph:
+        try:
+            from rag_lab.retrieval.graph_store import load_workspace_graph
+            from rag_lab.retrieval.sparse_search import get_chunks_by_ids
+
+            kg = load_workspace_graph(ws_id)
+            if kg.entities:
+                seed_entities = kg.find_entities_in_text(query)
+                if seed_entities:
+                    traversal = kg.traverse(
+                        [e.id for e in seed_entities],
+                        max_hops=settings.graph_max_hops,
+                    )
+                    if traversal.chunk_ids:
+                        graph_chunks = get_chunks_by_ids(
+                            ws_id,
+                            traversal.chunk_ids,
+                            allowed_clearances=authorized_clrs,
+                            base_dir=settings.bm25_dir,
+                        )
+                        for gc in graph_chunks:
+                            graph_candidates.append({
+                                "id": gc["id"],
+                                "content": gc["content"],
+                                "citation": gc["citation"],
+                                "similarity": 1.0,
+                                "is_graph": True,
+                            })
+                    graph_traversal_info = {
+                        "seed_entities": [e.name for e in seed_entities],
+                        "visited": traversal.visited_entity_ids,
+                        "paths": [p.describe() for p in traversal.paths],
+                        "edges": traversal.subgraph_edges,
+                        "chunks_count": len(graph_candidates),
+                    }
+        except Exception as exc:
+            logger.debug("Graph traversal failed for workspace %s: %s", ws_id, exc)
+            degraded.append(f"graph_retrieval_failed: {exc}")
+
     # 3. Retrieval signals, kept for telemetry and as the fallback relevance gate.
-    candidates = dense_candidates + sparse_candidates
-    best_similarity = max((c["similarity"] for c in dense_candidates), default=0.0)
+    candidates = dense_candidates + sparse_candidates + graph_candidates
+    sim_scores = [c["similarity"] for c in dense_candidates if "similarity" in c] + [c["similarity"] for c in graph_candidates if "similarity" in c]
+    best_similarity = max(sim_scores, default=0.0)
     query_terms = _content_terms(query)
     best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
 
     # 4. Fuse with Reciprocal Rank Fusion (RRF), drop chunks that carry injected instructions, and only
     # then cut to the final top passages with the cross-encoder. Screening before the cut means a poisoned chunk
     # is replaced by the next-best clean one instead of leaving a gap.
+    fusion_top_n = (
+        max(settings.retrieval_fusion_top_n, len(graph_candidates) + settings.retrieval_fusion_top_n)
+        if graph_candidates
+        else settings.retrieval_fusion_top_n
+    )
     fused_docs = (
-        reciprocal_rank_fusion(dense_candidates, sparse_candidates, k=60, top_n=settings.retrieval_fusion_top_n)
+        reciprocal_rank_fusion(
+            dense_candidates,
+            sparse_candidates,
+            graph_results=graph_candidates,
+            k=60,
+            top_n=fusion_top_n,
+        )
         if candidates
         else []
     )
@@ -198,8 +263,13 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
                 "reason": reason or "unknown_violation",
                 "preview": item["content"][:120],
             })
+    effective_top_k = (
+        max(settings.retrieval_rerank_top_k, len(graph_candidates) + settings.retrieval_rerank_top_k)
+        if graph_candidates
+        else settings.retrieval_rerank_top_k
+    )
     reranked_docs, rerank_note = (
-        rerank_with_status(query, clean_pool, top_n=settings.retrieval_rerank_top_k)
+        rerank_with_status(query, clean_pool, top_n=effective_top_k)
         if clean_pool
         else ([], None)
     )
@@ -218,7 +288,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             # documents cover only one part. Each part is scored on its own; the full question still goes to
             # the model, which says what the documents do not contain.
             for part in _question_parts(query):
-                part_docs, part_note = rerank_with_status(part, clean_pool, top_n=settings.retrieval_rerank_top_k)
+                part_docs, part_note = rerank_with_status(part, clean_pool, top_n=effective_top_k)
                 part_score = _top_rerank_score(part, part_docs, part_note)
                 if part_score is not None and part_score >= settings.relevance_min_rerank_score and part_score > best_rerank:
                     reranked_docs, best_rerank, relevant = part_docs, part_score, True
@@ -234,7 +304,10 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     elif best_rerank is not None and settings.relevance_gate == "reranker":
         # Cut weak passages: they dilute the context and give stated figures false support.
         floor = max(settings.relevance_min_rerank_score, best_rerank - settings.rerank_keep_margin)
-        kept = [d for i, d in enumerate(reranked_docs) if i == 0 or d.get("rerank_score", best_rerank) >= floor]
+        kept = [
+            d for i, d in enumerate(reranked_docs)
+            if i == 0 or d.get("rerank_score", best_rerank) >= floor or d.get("is_graph")
+        ]
         telemetry["passages_cut"] = len(reranked_docs) - len(kept)
         reranked_docs = kept
 
@@ -244,6 +317,9 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
     telemetry["retrieval_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
     telemetry["dense_candidates_count"] = len(dense_candidates)
     telemetry["sparse_candidates_count"] = len(sparse_candidates)
+    telemetry["graph_candidates_count"] = len(graph_candidates)
+    if graph_traversal_info:
+        telemetry["graph_traversal"] = graph_traversal_info
     telemetry["fused_chunks_count"] = len(chunks_found)
     telemetry["best_similarity"] = round(best_similarity, 4)
     telemetry["best_coverage"] = round(best_coverage, 4)
@@ -258,6 +334,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             "citations": citations,
             "dense_candidates": len(dense_candidates),
             "sparse_candidates": len(sparse_candidates),
+            "graph_candidates": len(graph_candidates),
             "best_similarity": telemetry["best_similarity"],
             "best_coverage": telemetry["best_coverage"],
             "relevant": relevant,
