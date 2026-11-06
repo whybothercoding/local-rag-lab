@@ -246,7 +246,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "citations": citations,
         "documents": values.get("documents", []),
         "latency_ms": latency_ms,
-        "abstained": "could not find" in answer.lower(),
+        "abstained": "could not find" in answer.lower() or telemetry.get("abstained") is True,
         "cache_hit": cache_hit,
         "best_similarity": telemetry.get("best_similarity"),
         "best_coverage": telemetry.get("best_coverage"),

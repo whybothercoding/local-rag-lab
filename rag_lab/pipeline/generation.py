@@ -7,12 +7,12 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from rag_lab.lang import detect_language
+from rag_lab.lang import abstain_reply, detect_language
 from rag_lab.pipeline import llm_provider
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM
 from rag_lab.security.redaction import redact_pii
 
-from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
+from rag_lab.pipeline.state import StateInput
 
 
 LANGUAGE_NAMES: dict[str, str] = {
@@ -95,19 +95,19 @@ def generate_node(state: StateInput) -> dict[str, Any]:
     # Keep retrieval degradations; drop fallback notes from an earlier attempt so they are not repeated.
     degraded = [d for d in state.get("degraded", []) if not d.startswith("generation_fallback")]
 
-    if not docs:
-        telemetry["abstained"] = True
-        telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-        return {"generation": ABSTAIN_MESSAGE, "telemetry": telemetry, "degraded": degraded}
-
-    feedback = str(state.get("grader_feedback") or "")
-    telemetry["abstained"] = False
-    telemetry["generation_feedback_applied"] = bool(feedback)
-
     # Detect user inquiry language (from the user's raw question, falling back to original_q)
     user_q = state.get("asked_question") or original_q
     lang = detect_language(user_q)
     telemetry["generation_language"] = lang
+
+    if not docs:
+        telemetry["abstained"] = True
+        telemetry["generation_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        return {"generation": abstain_reply(lang), "telemetry": telemetry, "degraded": degraded}
+
+    feedback = str(state.get("grader_feedback") or "")
+    telemetry["abstained"] = False
+    telemetry["generation_feedback_applied"] = bool(feedback)
 
     messages = _generation_messages(docs, search_q, feedback, lang=lang)
     try:

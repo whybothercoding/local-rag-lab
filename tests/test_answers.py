@@ -65,6 +65,32 @@ def test_off_topic_question_abstains_and_waits_for_review_without_auto_approve(r
     assert values["telemetry"]["relevant"] is False
 
 
+def test_abstention_message_matches_user_language():
+    from rag_lab.lang import ABSTAIN_MESSAGES
+    from rag_lab.pipeline.generation import generate_node
+
+    # Greek query
+    res_el = generate_node({"documents": [], "original_question": "Ποια είναι τα μέτρα ασφαλείας;"})
+    assert res_el["generation"] == ABSTAIN_MESSAGES["el"]
+    assert res_el["telemetry"]["abstained"] is True
+
+    # German query
+    res_de = generate_node({"documents": [], "original_question": "Was sind die Sicherheitsmaßnahmen im Büro?"})
+    assert res_de["generation"] == ABSTAIN_MESSAGES["de"]
+    assert res_de["telemetry"]["abstained"] is True
+
+    # French query
+    res_fr = generate_node({"documents": [], "original_question": "Quelles sont les règles de sécurité au bureau ?"})
+    assert res_fr["generation"] == ABSTAIN_MESSAGES["fr"]
+    assert res_fr["telemetry"]["abstained"] is True
+
+    # English query
+    res_en = generate_node({"documents": [], "original_question": "What are the security measures?"})
+    assert res_en["generation"] == ABSTAIN_MESSAGES["en"]
+    assert res_en["telemetry"]["abstained"] is True
+
+
+
 def test_relevance_gate_withholds_documents_for_off_topic_questions(rollback_index):
     state = hybrid_retrieval_node(_retrieval_state(OFF_TOPIC_QUESTION))
     assert state["documents"] == []

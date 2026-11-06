@@ -10,7 +10,7 @@ from rag_lab.security.audit import record as audit_record
 from rag_lab.pipeline.state import ABSTAIN_MESSAGE, StateInput
 import re
 
-from rag_lab.lang import fold, is_no_info_sentence, strip_attribution, words
+from rag_lab.lang import fold, is_abstain_message, is_no_info_sentence, strip_attribution, words
 from rag_lab.pipeline.text import STOPWORDS, _unsupported_numbers, split_sentences
 
 
@@ -74,7 +74,7 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
     semantic_score: float | None = None
     grader_method = "lexical_pass"
 
-    if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
+    if gen == ABSTAIN_MESSAGE or is_abstain_message(gen) or telemetry.get("abstained"):
         status = "grounded"
         grader_method = "abstain"
     elif not gen or not str(gen).strip():
@@ -151,7 +151,7 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
 def grade_answer_relevance_node(state: StateInput) -> dict[str, Any]:
     gen = state.get("generation", "")
     telemetry = dict(state.get("telemetry", {}))
-    if gen == ABSTAIN_MESSAGE or telemetry.get("abstained"):
+    if gen == ABSTAIN_MESSAGE or is_abstain_message(gen) or telemetry.get("abstained"):
         telemetry["relevance_grader"] = "abstain"
         return {"relevance_status": "relevant", "telemetry": telemetry}
 

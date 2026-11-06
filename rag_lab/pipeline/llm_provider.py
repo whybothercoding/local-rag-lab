@@ -21,7 +21,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from rag_lab.config import settings
-from rag_lab.lang import STOPWORDS, same_word as _same_word, words
+from rag_lab.lang import STOPWORDS, abstain_reply, detect_language, same_word as _same_word, words
 
 # Words the extractive synthesizer ignores when matching a question to context sentences.
 _EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "a", "an", "of", "and"}
@@ -67,7 +67,7 @@ class DeterministicContextLLM(BaseChatModel):
             question = ""
 
         if not context:
-            return "I could not find relevant documentation in this workspace to answer your query."
+            return abstain_reply(detect_language(question))
 
         # Find the most relevant sentences in context matching question tokens
         q_tokens = set(words(question)) - _EXTRACTOR_IGNORE

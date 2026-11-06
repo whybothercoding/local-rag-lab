@@ -116,5 +116,57 @@ def chitchat_reply(lang: str) -> str:
     return str(_load(lang if lang in LANGUAGES else "en")["chitchat_reply"])
 
 
+ABSTAIN_MESSAGES: dict[str, str] = {
+    "en": "I could not find relevant documentation in this workspace to answer your query.",
+    "de": "In diesem Arbeitsbereich wurden keine Informationen gefunden, um Ihre Anfrage zu beantworten.",
+    "fr": "Je n'ai pas trouvé de documents pertinents dans cet espace de travail pour répondre à votre demande.",
+    "el": "Δεν βρέθηκαν σχετικά έγγραφα σε αυτόν τον χώρο εργασίας για να απαντηθεί το ερώτημά σας.",
+}
+
+
+def abstain_reply(lang: str) -> str:
+    return ABSTAIN_MESSAGES.get(lang if lang in LANGUAGES else "en", ABSTAIN_MESSAGES["en"])
+
+
+def is_abstain_message(text: str) -> bool:
+    return (text or "").strip() in ABSTAIN_MESSAGES.values()
+
+
+ACCESS_DENIED_MESSAGES: dict[str, str] = {
+    "en": "[ACCESS DENIED: this account is not authorized for the selected workspace.]",
+    "de": "[ACCESS DENIED: dieses Konto ist für den ausgewählten Arbeitsbereich nicht autorisiert.]",
+    "fr": "[ACCESS DENIED: ce compte n'est pas autorisé pour l'espace de travail sélectionné.]",
+    "el": "[ACCESS DENIED: αυτός ο λογαριασμός δεν είναι εξουσιοδοτημένος για τον επιλεγμένο χώρο εργασίας.]",
+}
+
+
+def access_denied_reply(lang: str) -> str:
+    return ACCESS_DENIED_MESSAGES.get(lang if lang in LANGUAGES else "en", ACCESS_DENIED_MESSAGES["en"])
+
+
+SECURITY_VIOLATION_MESSAGES: dict[str, str] = {
+    "en": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
+    "de": "[SECURITY VIOLATION: Bösartige Prompt-Injection erkannt.]",
+    "fr": "[SECURITY VIOLATION: Injection de prompt malveillante détectée.]",
+    "el": "[SECURITY VIOLATION: Εντοπίστηκε κακόβουλη απόπειρα παράκαμψης οδηγιών (prompt injection).]",
+}
+
+
+def security_violation_reply(lang: str) -> str:
+    return SECURITY_VIOLATION_MESSAGES.get(lang if lang in LANGUAGES else "en", SECURITY_VIOLATION_MESSAGES["en"])
+
+
+REJECTION_NOTICES: dict[str, str] = {
+    "en": "[RESPONSE REJECTED BY HUMAN COMPLIANCE]",
+    "de": "[RESPONSE REJECTED BY HUMAN COMPLIANCE: Die Antwort wurde von der Compliance abgelehnt.]",
+    "fr": "[RESPONSE REJECTED BY HUMAN COMPLIANCE: La réponse a été rejetée par la conformité humaine.]",
+    "el": "[RESPONSE REJECTED BY HUMAN COMPLIANCE: Η απάντηση απορρίφθηκε από την ομάδα συμμόρφωσης.]",
+}
+
+
+def rejection_notice(lang: str) -> str:
+    return REJECTION_NOTICES.get(lang if lang in LANGUAGES else "en", REJECTION_NOTICES["en"])
+
+
 # Longest first, so "ungen" is tried before "en" and "n".
 STEM_SUFFIXES: tuple[str, ...] = tuple(sorted(_folded_set("stem_suffixes"), key=len, reverse=True))

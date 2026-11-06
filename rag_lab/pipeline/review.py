@@ -13,8 +13,9 @@ from rag_lab.security.access import verify_token
 from rag_lab.security.audit import record as audit_record
 from rag_lab.security.redaction import redact_pii
 
+from rag_lab.lang import detect_language, is_abstain_message, rejection_notice
 from rag_lab.pipeline.context import MAX_HISTORY_TURNS
-from rag_lab.pipeline.state import ABSTAIN_MESSAGE, BLOCKING_DEGRADED_PREFIXES, REJECTION_NOTICE, StateInput, _sha256
+from rag_lab.pipeline.state import ABSTAIN_MESSAGE, BLOCKING_DEGRADED_PREFIXES, StateInput, _sha256
 
 
 def _normalize_decision(raw: Any) -> dict[str, str]:
@@ -58,7 +59,7 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
     ws_id = state.get("workspace_id", "default")
     principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
     requester_clearance = state.get("principal_clearance") or get_user_clearance(principal)
-    abstained = gen == ABSTAIN_MESSAGE or bool(state.get("telemetry", {}).get("abstained"))
+    abstained = gen == ABSTAIN_MESSAGE or is_abstain_message(gen) or bool(state.get("telemetry", {}).get("abstained"))
 
     # auto_approve skips the human gate only for answers that passed every automated check.
     reasons = _review_reasons(state)
@@ -146,4 +147,5 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
         return {"generation": gen, "history": history}
 
     history = (history + [{"question": display_q, "asked": asked, "answer": "", "released": False}])[-MAX_HISTORY_TURNS:]
-    return {"generation": REJECTION_NOTICE, "citations": [], "degraded": [], "history": history}
+    user_lang = detect_language(asked or display_q)
+    return {"generation": rejection_notice(user_lang), "citations": [], "degraded": [], "history": history}

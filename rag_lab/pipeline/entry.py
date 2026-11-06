@@ -16,7 +16,16 @@ from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.state import StateInput, _sha256
 from rag_lab.config import settings
-from rag_lab.lang import CHITCHAT_EXAMPLES, CHITCHAT_PHRASES, CHITCHAT_WORDS, chitchat_reply, detect_language, words
+from rag_lab.lang import (
+    CHITCHAT_EXAMPLES,
+    CHITCHAT_PHRASES,
+    CHITCHAT_WORDS,
+    access_denied_reply,
+    chitchat_reply,
+    detect_language,
+    security_violation_reply,
+    words,
+)
 from rag_lab.retrieval.embedding_provider import embedding_fingerprint, get_embedding_model
 from rag_lab.retrieval.semantic_cache import _cosine_similarity
 from rag_lab.pipeline.text import _content_terms
@@ -89,10 +98,11 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
             session_id=session_id,
             data={"principal": principal, "permission": "query", "query": denied_query},
         )
+        user_lang = detect_language(denied_query)
         return {
             "is_safe": False,
             "question": denied_query,
-            "generation": "[ACCESS DENIED: this account is not authorized for the selected workspace.]",
+            "generation": access_denied_reply(user_lang),
             "sanitized_question": denied_query,
             "telemetry": telemetry,
         }
@@ -108,10 +118,11 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
             session_id=session_id,
             data={"status": "blocked", "reason": "prompt_injection", "pattern": injection_reason, "query": safe_query},
         )
+        user_lang = detect_language(safe_query)
         return {
             "is_safe": False,
             "question": safe_query,
-            "generation": "[SECURITY VIOLATION: Adversarial prompt injection detected.]",
+            "generation": security_violation_reply(user_lang),
             "sanitized_question": safe_query,
             "telemetry": telemetry,
         }
