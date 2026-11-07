@@ -154,3 +154,15 @@ def test_the_pinned_nli_weights_are_full_precision():
     assert weights, "the NLI pin must list its weights file"
     for name in weights:
         assert not any(marker in name for marker in ("quant", "int8", "uint8", "q4", "bnb4", "fp16")), name
+
+
+def test_entailment_scores_handles_large_premise_batches_without_tile_error():
+    """Evaluating 50+ premises must not exceed ONNX Runtime's 4GB Tile operator tensor limit."""
+    from rag_lab.retrieval.nli import entailment_scores
+
+    premises = [f"This is test premise sentence number {i} with additional detail." for i in range(50)]
+    hypothesis = "This is a test claim sentence."
+    scores = entailment_scores(premises, hypothesis, batch_size=8)
+    assert len(scores) == 50
+    assert all(0.0 <= s <= 1.0 for s in scores)
+

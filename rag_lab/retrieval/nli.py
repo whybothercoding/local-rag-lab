@@ -52,22 +52,34 @@ def _load(model_name: str, cache_dir: str) -> tuple[Any, Any, int]:
         return _SESSIONS[key]
 
 
-def entailment_scores(premises: list[str], hypothesis: str, model_name: str | None = None,
-                      cache_dir: str | None = None) -> list[float]:
+def entailment_scores(
+    premises: list[str],
+    hypothesis: str,
+    model_name: str | None = None,
+    cache_dir: str | None = None,
+    batch_size: int = 16,
+) -> list[float]:
     """Probability that each premise entails the hypothesis (softmax over the model's three labels)."""
     if not premises or not hypothesis.strip():
         return []
     model_name = settings.nli_model if model_name is None else model_name
     cache_dir = settings.models_dir if cache_dir is None else cache_dir
     session, tokenizer, entailment = _load(model_name, cache_dir)
-    encodings = tokenizer.encode_batch([(premise, hypothesis) for premise in premises])
-    width = max(len(e.ids) for e in encodings)
-    ids = np.array([e.ids + [0] * (width - len(e.ids)) for e in encodings], dtype=np.int64)
-    mask = np.array([e.attention_mask + [0] * (width - len(e.attention_mask)) for e in encodings], dtype=np.int64)
-    logits = session.run(None, {"input_ids": ids, "attention_mask": mask})[0]
-    exp = np.exp(logits - logits.max(axis=1, keepdims=True))
-    probs = exp / exp.sum(axis=1, keepdims=True)
-    return [float(p[entailment]) for p in probs]
+
+    all_scores: list[float] = []
+    # Sub-batch inference to prevent exceeding ONNX Runtime's 4GB single-tensor Tile limit in DeBERTa attention
+    for i in range(0, len(premises), batch_size):
+        chunk = premises[i : i + batch_size]
+        encodings = tokenizer.encode_batch([(premise, hypothesis) for premise in chunk])
+        width = max(len(e.ids) for e in encodings)
+        ids = np.array([e.ids + [0] * (width - len(e.ids)) for e in encodings], dtype=np.int64)
+        mask = np.array([e.attention_mask + [0] * (width - len(e.attention_mask)) for e in encodings], dtype=np.int64)
+        logits = session.run(None, {"input_ids": ids, "attention_mask": mask})[0]
+        exp = np.exp(logits - logits.max(axis=1, keepdims=True))
+        probs = exp / exp.sum(axis=1, keepdims=True)
+        all_scores.extend(float(p[entailment]) for p in probs)
+
+    return all_scores
 
 
 def _vocabulary_overlap(hypothesis: str, premise: str) -> float:
