@@ -185,7 +185,12 @@ class PgvectorStore(VectorStore):
         return hits
 
     def drop_namespace(self) -> None:
-        """Remove this schema and everything in it. For tests and for retiring an install's namespace."""
+        """Remove this schema and everything in it. For tests and for retiring an install's namespace.
+
+        Idempotent: a fixture teardown may call it again after the test dropped the namespace itself.
+        """
+        if self._pool.closed:
+            return
         with self._pool.connection() as conn:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(self._schema)))
         self._pool.close()
