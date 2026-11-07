@@ -8,8 +8,10 @@ from rag_lab.retrieval.semantic_cache import (
     _L1_CITATIONS,
     _L1_GENERATIONS,
     _cosine_similarity,
+    _l1_evict,
     _pack_vector,
     _unpack_vector,
+    cache_key,
     clear_cache,
     clear_workspace_cache,
     lookup_cache,
@@ -44,6 +46,30 @@ def test_vector_packing_and_cosine_similarity():
     assert abs(_cosine_similarity(vec_a, vec_c) - 0.0) < 1e-6
     assert _cosine_similarity([], []) == 0.0
     assert _cosine_similarity([1.0], [1.0, 2.0]) == 0.0
+
+
+def test_l1_hits_enforce_the_retention_cutoff_and_keep_the_approver(tmp_path: Path, monkeypatch):
+    """An entry older than the retention cutoff must be refused from L1 memory exactly as from disk,
+    and an L1 hit must report who approved the answer, not an empty approver."""
+    import rag_lab.retrieval.semantic_cache as sc
+
+    db_file = str(tmp_path / "cache.db")
+    ckey = store_cache(
+        workspace_id="default",
+        query="What is the rollback SLA?",
+        clearance="public",
+        generation="Under 5 minutes.",
+        db_path=db_file,
+        approved_by="alice",
+    )
+    assert ckey, "store_cache returns the key it stored under"
+    fresh = lookup_cache("default", "What is the rollback SLA?", "public", db_path=db_file)
+    assert fresh["hit"] is True
+    assert fresh["approved_by"] == "alice", "an exact hit reports the approver, also when it is served from L1"
+
+    # Everything is now older than retention: the database read path refuses it, and so must L1.
+    monkeypatch.setattr(sc, "_retention_cutoff", lambda: "9999-12-31T00:00:00")
+    assert lookup_cache("default", "What is the rollback SLA?", "public", db_path=db_file) == {"hit": False}
 
 
 def test_cache_persists_across_l1_in_memory_eviction(tmp_path: Path):
@@ -179,22 +205,28 @@ def test_clear_workspace_cache_evicts_only_target_workspace(tmp_path: Path):
 
 
 def test_dict_proxy_interfaces():
+    """The proxies update existing rows (sealed under the row's own partition); a key with no row
+    keeps its value in L1 only, because a new row written here could never be read back."""
     cache = PersistentSemanticCache()
     cites = PersistentCitationsCache()
 
-    cache["k1"] = "gen1"
-    cites["k1"] = ["cite1"]
+    store_cache(
+        workspace_id="default", query="What is the proxy contract?", clearance="public",
+        generation="gen1", citations=["cite1"], reviewed=True, approved_by="alice",
+    )
+    key = cache_key("default", "What is the proxy contract?", "public")
+    assert cache[key] == "gen1" and cites[key] == ["cite1"]
 
-    assert "k1" in cache
-    assert cache["k1"] == "gen1"
-    assert cache.get("k1") == "gen1"
-    assert cites["k1"] == ["cite1"]
+    cache[key] = "gen2"
+    cites[key] = ["cite2"]
+    _l1_evict(key)  # read through the database, not the L1 the writes just filled
+    assert cache[key] == "gen2" and cites[key] == ["cite2"]
 
     assert len(cache) >= 1
-    assert "k1" in list(cache)
+    assert key in list(cache)
 
-    del cache["k1"]
-    assert "k1" not in cache
+    del cache[key]
+    assert key not in cache
 
 
 def test_hierarchical_clearance_exact_match(tmp_path: Path):

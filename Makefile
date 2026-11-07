@@ -53,7 +53,7 @@ help:
 	@echo "  make workspaces                                List workspaces with file and chunk counts"
 	@echo "  make create-workspace WS=<ws> [ADMIN=<admin>]  Initialize a new workspace bundle"
 	@echo "  make delete-workspace WS=<ws> [ADMIN=<admin>] [YES=1]"
-	@echo "  make sync ADMIN=<u> [WS=<ws>] [DIR=<path>] [FORCE=1]  Index all or one workspace"
+	@echo "  make sync ADMIN=<u> [WS=<ws>] [DIR=<path>] [FORCE=1]  Index all or one workspace (DIR needs WS)"
 	@echo "  make ui [ADMIN=<u>]                            Launch Streamlit web interface"
 	@echo ""
 	@echo "Human-in-the-Loop (HITL) Compliance Review:"
@@ -204,6 +204,7 @@ delete-workspace:
 # Discover every folder under knowledge_base/ and index it, or index a single WS.
 # Idempotent: unchanged workspaces are skipped unless FORCE=1.
 sync:
+	@if [ -n "$(DIR)" ] && [ -z "$(WS)" ]; then echo "DIR needs WS: make sync ADMIN=<u> WS=<ws> DIR=<path>. Without WS, every workspace is indexed." && exit 1; fi
 	@test -n "$(ADMIN)" || (echo "Indexing is an administrative action. Run: make sync ADMIN=<admin account> [WS=<ws>] [DIR=<path>] [FORCE=1]" && exit 1)
 	./venv/bin/python -m rag_lab.ingestion.ingest $(if $(WS),--workspace $(WS) $(if $(DIR),--dir $(DIR),),--all) $(if $(FORCE),--force,) --as $(ADMIN)
 
@@ -402,10 +403,10 @@ clean:
 reset-users:
 	./venv/bin/python -m rag_lab.security.access $(if $(ADMIN),--as $(ADMIN),) reset-users $(if $(or $(CONFIRM),$(YES)),-y,)
 
-# 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, uploads, and caches)
+# 20. Complete zero-trace factory reset (wipes policy, data, audit, checkpoints, keys, vectors, source documents, and caches)
 factory-reset:
 	@if [ "$(CONFIRM)" != "yes" ] && [ "$(YES)" != "1" ] && [ "$(YES)" != "yes" ]; then \
-		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, and indexed vectors, including whatever the configured Qdrant, pgvector or shared-cache server holds for this install.\nType 'yes' to proceed: "; \
+		printf "WARNING: This permanently deletes all user accounts, audit logs, checkpoints, encryption keys, indexed vectors and source documents (knowledge_base/ and uploads/), including whatever the configured Qdrant, pgvector or shared-cache server holds for this install.\nType 'yes' to proceed: "; \
 		read ans; \
 		if [ "$$ans" != "yes" ]; then \
 			echo "Factory reset cancelled."; \
@@ -419,6 +420,7 @@ factory-reset:
 	rm -rf chroma_data
 	rm -rf bm25_indices
 	rm -rf uploads
+	rm -rf knowledge_base
 	rm -rf backups
 	rm -rf eval/out
 	find . -type d -name "__pycache__" -exec rm -rf {} +

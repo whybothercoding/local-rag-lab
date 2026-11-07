@@ -28,6 +28,8 @@ from rag_lab.security.access import verify_token
 from rag_lab.security.audit import record as audit_record
 from rag_lab.security.context_sanitizer import sanitize_chunks
 from rag_lab.security.context_sanitizer import scan_chunk
+from rag_lab.security.context_sanitizer import scan_user_input
+from rag_lab.security.redaction import redact_pii
 
 from rag_lab.pipeline.state import StateInput
 from rag_lab.pipeline.text import _content_terms, _coverage, _keywords, _stem_variants
@@ -225,16 +227,18 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             logger.debug("Graph traversal failed for workspace %s: %s", ws_id, exc)
             degraded.append(f"graph_retrieval_failed: {exc}")
 
-    # 3. Retrieval signals, kept for telemetry and as the fallback relevance gate.
+    # 3. Retrieval signals, kept for telemetry and as the fallback relevance gate. Graph candidates carry
+    # a 1.0 sentinel, not a cosine: feeding it to the gate would let any entity-name match force relevance.
     candidates = dense_candidates + sparse_candidates + graph_candidates
-    sim_scores = [c["similarity"] for c in dense_candidates if "similarity" in c] + [c["similarity"] for c in graph_candidates if "similarity" in c]
+    sim_scores = [c["similarity"] for c in dense_candidates if "similarity" in c]
     best_similarity = max(sim_scores, default=0.0)
     query_terms = _content_terms(query)
     best_coverage = max((_coverage(query_terms, c["content"]) for c in candidates), default=0.0)
 
     # 4. Fuse with Reciprocal Rank Fusion (RRF), drop chunks that carry injected instructions, and only
-    # then cut to the final top passages with the cross-encoder. Screening before the cut means a poisoned chunk
-    # is replaced by the next-best clean one instead of leaving a gap.
+    # then cut to the final top passages with the cross-encoder. Screening happens after the fusion cut,
+    # so a poisoned chunk inside the cut leaves a smaller pool (fail-closed), and candidates ranked below
+    # the cut are not re-admitted.
     fusion_top_n = (
         max(settings.retrieval_fusion_top_n, len(graph_candidates) + settings.retrieval_fusion_top_n)
         if graph_candidates
@@ -422,7 +426,13 @@ def _llm_keyword_query(question: str) -> str | None:
             "Reply with the query only.\n\nQuestion: " + question
         )
         candidate = " ".join(str(llm.invoke(prompt).content).split())[:200]
-        return candidate or None
+        if not candidate:
+            return None
+        # The rewrite is new input (it may echo chunk text): mask PII and scan it for injected
+        # instructions exactly like contextualize_node does, and refuse it when it fails.
+        candidate = redact_pii(candidate)
+        safe, _reason = scan_user_input(candidate)
+        return candidate if safe else None
     except Exception:
         return None
 

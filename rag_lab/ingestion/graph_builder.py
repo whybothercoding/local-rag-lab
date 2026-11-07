@@ -15,20 +15,20 @@ from rag_lab.retrieval.graph_store import KnowledgeGraph
 # Patterns for extracting enterprise relationships across English, German, French, and Greek.
 _RELATION_PATTERNS: list[tuple[re.Pattern, str, str, str]] = [
     # English
-    (re.compile(r"([A-Z][a-zA-Z.\s]{2,30}?)\s+(?:is|serves as|holds the title of|holds the role of)\s+(?:the\s+)?([A-Z][a-zA-Z.\s]{2,40})", re.IGNORECASE), "PERSON", "HOLDS_ROLE", "ROLE"),
-    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:requires|needs|must be|may only be|can only be)\s+(?:the\s+)?(?:approval|sign-off|authorization|authorized|approved)\s+(?:from|by)\s+(?:the\s+)?([A-Z][a-zA-Z.\s]{2,40})", re.IGNORECASE), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
-    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:supersedes|overrides|replaces)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})", re.IGNORECASE), "POLICY", "SUPERSEDES", "POLICY"),
-    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:applies to|governs|references|pertains to)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})", re.IGNORECASE), "POLICY", "APPLIES_TO", "ENTITY"),
-    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:depends on|relies on)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})", re.IGNORECASE), "SERVICE", "DEPENDS_ON", "SERVICE"),
+    (re.compile(r"([A-Z][a-zA-Z.\s]{2,30}?)\s+(?:is|serves as|holds the title of|holds the role of)\s+(?:the\s+)?([A-Z][a-zA-Z.\s]{2,40})"), "PERSON", "HOLDS_ROLE", "ROLE"),
+    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:requires|needs|must be|may only be|can only be)\s+(?:the\s+)?(?:approval|sign-off|authorization|authorized|approved)\s+(?:from|by)\s+(?:the\s+)?([A-Z][a-zA-Z.\s]{2,40})"), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
+    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:supersedes|overrides|replaces)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})"), "POLICY", "SUPERSEDES", "POLICY"),
+    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:applies to|governs|references|pertains to)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})"), "POLICY", "APPLIES_TO", "ENTITY"),
+    (re.compile(r"([A-Z][a-zA-Z0-9_.\s]{2,40}?)\s+(?:depends on|relies on)\s+([A-Z][a-zA-Z0-9_.\s]{2,40})"), "SERVICE", "DEPENDS_ON", "SERVICE"),
 
     # German
-    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,30}?)\s+(?:ist|fungiert als)\s+(?:der|die|das)?\s*([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,40})", re.IGNORECASE), "PERSON", "HOLDS_ROLE", "ROLE"),
-    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40}?)\s+(?:erfordert|benötigt|darf nur)\s+(?:die\s+)?(?:Genehmigung|Freigabe|genehmigt werden)\s+durch\s+([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,40})", re.IGNORECASE), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
-    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40}?)\s+ersetzt\s+([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40})", re.IGNORECASE), "POLICY", "SUPERSEDES", "POLICY"),
+    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,30}?)\s+(?:ist|fungiert als)\s+(?:der|die|das)?\s*([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,40})"), "PERSON", "HOLDS_ROLE", "ROLE"),
+    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40}?)\s+(?:erfordert|benötigt|darf nur)\s+(?:die\s+)?(?:Genehmigung|Freigabe|genehmigt werden)\s+durch\s+([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß.\s]{2,40})"), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
+    (re.compile(r"([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40}?)\s+ersetzt\s+([A-ZÄÖÜ][a-zA-ZäöüÄÖÜß0-9_.\s]{2,40})"), "POLICY", "SUPERSEDES", "POLICY"),
 
     # French
-    (re.compile(r"([A-ZÀ-ÖØ-öø-ÿ.\s]{2,30}?)\s+est\s+(?:le|la)?\s*([A-ZÀ-ÖØ-öø-ÿ.\s]{2,40})", re.IGNORECASE), "PERSON", "HOLDS_ROLE", "ROLE"),
-    (re.compile(r"([A-ZÀ-ÖØ-öø-ÿ0-9_.\s]{2,40}?)\s+(?:nécessite|requiert|doit être)\s+(?:l'approbation|autorisé)\s+(?:de|par)\s+([A-ZÀ-ÖØ-öø-ÿ.\s]{2,40})", re.IGNORECASE), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
+    (re.compile(r"([A-Za-zÀ-ÖØ-öø-ÿ.\s]{2,30}?)\s+est\s+(?:le|la)?\s*([A-Za-zÀ-ÖØ-öø-ÿ.\s]{2,40})"), "PERSON", "HOLDS_ROLE", "ROLE"),
+    (re.compile(r"([A-Za-zÀ-ÖØ-öø-ÿ0-9_.\s]{2,40}?)\s+(?:nécessite|requiert|doit être)\s+(?:l'approbation|autorisé)\s+(?:de|par)\s+([A-Za-zÀ-ÖØ-öø-ÿ.\s]{2,40})"), "POLICY", "REQUIRES_APPROVAL", "ROLE"),
 
     # Greek
     (re.compile(r"([\u0370-\u03ff\u1f00-\u1fff.\s]{2,30}?)\s+(?:είναι|κατέχει τη θέση του|κατέχει τη θέση της)\s+([\u0370-\u03ff\u1f00-\u1fff.\s]{2,40})", re.IGNORECASE), "PERSON", "HOLDS_ROLE", "ROLE"),

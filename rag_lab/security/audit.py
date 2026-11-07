@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_lab.config import settings
-from rag_lab.security.vault import anchor_mac, chain_mac, open_text, seal_text, subject_tag
+from rag_lab.security.vault import anchor_mac, base_mac, chain_mac, open_text, seal_text, subject_tag
 
 GENESIS_HASH = "0" * 64
 _schema_lock = threading.Lock()
@@ -104,7 +104,13 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.executescript(_SCHEMA)
         if "audit_events" in tables and "subject" not in columns:
-            conn.execute("ALTER TABLE audit_events ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+            try:
+                conn.execute("ALTER TABLE audit_events ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                # Two processes first-opening the same database can race past the thread-only lock
+                # above; the schema re-check decides whether the other one already did our work.
+                if "subject" not in _schema_state(conn)[0]:
+                    raise
         conn.executescript(_NO_UPDATE_TRIGGER + _NO_DELETE_TRIGGER)
 
 
@@ -121,6 +127,40 @@ def _base(conn: sqlite3.Connection) -> tuple[int, str]:
     """The last record deleted by retention, and its hash. The chain starts from it."""
     rows = dict(conn.execute("SELECT key, value FROM audit_meta WHERE key IN ('base_seq', 'base_hash')").fetchall())
     return int(rows.get("base_seq", 0)), rows.get("base_hash", GENESIS_HASH)
+
+
+def _base_problems(conn: sqlite3.Connection) -> list[str]:
+    """Problems with the retention base. audit_meta carries no append-only triggers, so the base is
+    integrity-tagged with a keyed MAC and cross-checked against the prune event the chain must hold.
+
+    This is what defeats a truncation cover-up: deleting the records up to an anchored seq and writing
+    that seq/hash into audit_meta makes the remaining chain verify, but the base tag cannot be forged
+    without the data key, and a legitimate prune always records a sealed retention_prune event."""
+    rows = dict(conn.execute("SELECT key, value FROM audit_meta").fetchall())
+    try:
+        base_seq = int(rows.get("base_seq", 0))
+    except (TypeError, ValueError):
+        return ["retention base seq is not a number (audit_meta was edited)"]
+    if base_seq <= 0:
+        return []
+    base_hash = rows.get("base_hash", "")
+    problems: list[str] = []
+    body = json.dumps([str(base_seq), base_hash], separators=(",", ":"))
+    tag = str(rows.get("base_mac", ""))
+    if not tag or not hmac.compare_digest(base_mac(body), tag):
+        problems.append(
+            f"retention base (seq {base_seq}) does not match its integrity tag (audit_meta was edited, "
+            "or the base predates integrity tags)"
+        )
+    prune_rows = conn.execute(
+        f"SELECT {_COLUMNS} FROM audit_events WHERE event_type = 'retention_prune' ORDER BY seq"
+    ).fetchall()
+    if not any(_decode(row)["data"].get("base_seq") == base_seq for row in prune_rows):
+        problems.append(
+            f"retention base (seq {base_seq}) has no matching retention_prune event in the log; "
+            "records were deleted outside retention"
+        )
+    return problems
 
 
 def _decode(row: tuple) -> dict[str, Any]:
@@ -233,10 +273,41 @@ def list_events(
     return [_decode(row) for row in rows]
 
 
+# The `released` flag lives inside the sealed payload, so candidates cannot be filtered in SQL;
+# the scan pages backwards through the whole history instead of stopping at a fixed cap, so no
+# rejection becomes unreachable no matter how many decisions came after it.
+_REJECTION_PAGE = 2000
+
+
 def list_rejections(limit: int = 50, workspace_id: str | None = None, path: str | None = None) -> list[dict[str, Any]]:
     """Newest-first human rejections with the reviewer's reason. Feedback on answers the reviewer declined to release."""
-    candidates = list_events(limit=10_000, workspace_id=workspace_id, event_type="hitl_decision", path=path)
-    rejected = [event for event in candidates if event["data"].get("released") is False]
+    rejected: list[dict[str, Any]] = []
+    last_seq: int | None = None
+    conn = _open(path)
+    try:
+        while len(rejected) < limit:
+            clauses = ["event_type = 'hitl_decision'"]
+            params: list[Any] = []
+            if workspace_id:
+                clauses.append("workspace_id = ?")
+                params.append(workspace_id)
+            if last_seq is not None:
+                clauses.append("seq < ?")
+                params.append(last_seq)
+            rows = conn.execute(
+                f"SELECT {_COLUMNS} FROM audit_events WHERE {' AND '.join(clauses)} ORDER BY seq DESC LIMIT {_REJECTION_PAGE}",
+                params,
+            ).fetchall()
+            if not rows:
+                break
+            for event in (_decode(row) for row in rows):
+                if event["data"].get("released") is False:
+                    rejected.append(event)
+                    if len(rejected) >= limit:
+                        break
+            last_seq = rows[-1][0]
+    finally:
+        conn.close()
     return rejected[:limit]
 
 
@@ -361,18 +432,37 @@ def anchor(
         conn.close()
     if head is None:
         return None
-    anchors = _read_anchors(anchor_path)
-    entry: dict[str, Any] = {
-        "seq": head[0],
-        "hash": head[1],
-        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
-        "prev": anchors[-1]["mac"] if anchors else GENESIS_HASH,
-    }
-    entry["mac"] = anchor_mac(_canonical(entry))
     target = Path(anchor_path or settings.anchor_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    # The read-modify-append runs under an exclusive lock on the anchor file: two overlapping runs
+    # (cron plus manual) would otherwise chain onto the same previous anchor and interleave lines.
+    with open(target, "a+b") as handle:
+        try:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass  # platforms without fcntl keep the single-writer behaviour of the append itself
+        try:
+            anchors = _read_anchors(str(target))
+            entry: dict[str, Any] = {
+                "seq": head[0],
+                "hash": head[1],
+                "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+                "prev": anchors[-1]["mac"] if anchors else GENESIS_HASH,
+            }
+            entry["mac"] = anchor_mac(_canonical(entry))
+            handle.seek(0, os.SEEK_END)
+            handle.write((json.dumps(entry, sort_keys=True) + "\n").encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        finally:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
     copy = _copy_target(anchor_path, copy_dir)
     if copy is not None:
         try:
@@ -403,6 +493,7 @@ def _check_anchor_file(conn: sqlite3.Connection, target: Path, label: str) -> tu
                     continue
                 anchors.append(parsed)
     base_seq, base_hash = _base(conn)
+    problems.extend(_base_problems(conn))
     prev = GENESIS_HASH
     for index, entry in enumerate(anchors, 1):
         body = {key: value for key, value in entry.items() if key != "mac"}
@@ -501,6 +592,10 @@ def prune(retention_days: int | None = None, path: str | None = None, now: datet
         conn.execute(_NO_DELETE_TRIGGER)
         conn.execute("INSERT OR REPLACE INTO audit_meta (key, value) VALUES ('base_seq', ?)", (str(last_seq),))
         conn.execute("INSERT OR REPLACE INTO audit_meta (key, value) VALUES ('base_hash', ?)", (last_hash,))
+        conn.execute(
+            "INSERT OR REPLACE INTO audit_meta (key, value) VALUES ('base_mac', ?)",
+            (base_mac(json.dumps([str(last_seq), last_hash], separators=(",", ":"))),),
+        )
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:

@@ -68,6 +68,29 @@ def test_knowledge_graph_serialization(tmp_path: Path) -> None:
     assert loaded.relationships[0].predicate == "HOLDS_ROLE"
 
 
+def test_the_sparse_index_refuses_mismatched_lists(tmp_path: Path) -> None:
+    """zip() would silently drop the tail chunks; a length mismatch must be refused instead."""
+    with pytest.raises(ValueError, match="length"):
+        index_sparse_chunks("ws", ["a", "b"], ["one.md"], ["first", "second"], base_dir=str(tmp_path))
+
+
+def test_an_edge_seen_in_two_chunks_keeps_both_provenances() -> None:
+    kg = KnowledgeGraph("ws")
+    kg.add_relationship("Eleni Vance", "Infrastructure Security Lead", "HOLDS_ROLE", source_chunk="chunk_a")
+    kg.add_relationship("Eleni Vance", "Infrastructure Security Lead", "HOLDS_ROLE", source_chunk="chunk_b")
+    matched = kg.find_entities_in_text("Does Eleni Vance approve?")[0]
+    traversal = kg.traverse([matched.id], max_hops=2)
+    assert set(traversal.chunk_ids) == {"chunk_a", "chunk_b"}
+
+
+def test_lowercase_sentence_fragments_do_not_become_junk_triplets() -> None:
+    """The relation patterns are anchored on a capital: a lowercase mid-sentence fragment
+    ("the deadline is Friday") must not yield a PERSON->ROLE triplet."""
+    assert extract_triplets_from_text("Remember: the deadline is Friday, not Thursday.", "c") == []
+    triples = extract_triplets_from_text("Eleni Vance holds the title of Infrastructure Security Lead.", "c")
+    assert any(tr["predicate"] == "HOLDS_ROLE" and "Eleni Vance" in tr["source"] for tr in triples)
+
+
 def test_multilingual_graph_pattern_extraction() -> None:
     # English
     t1 = "Eleni Vance holds the title of Infrastructure Security Lead."

@@ -404,3 +404,50 @@ def test_factory_reset_purge_empties_a_real_store_of_this_installs_workspaces(st
     lines, complete = purge_external.purge()
     assert complete and lines[0].startswith("Purged 2 workspace(s) from ") and "hunter2" not in lines[0]
     assert store.workspaces() == set() and not store.exists("alpha")
+
+
+def test_a_failing_chroma_filter_falls_back_unfiltered_labelled_and_widened(tmp_path, monkeypatch, caplog):
+    """When the server-side filter errors, Chroma (alone) retries without it and widens the fetch so the
+    clearance guard still has candidates; the fallback is logged, never silent."""
+    import logging
+
+    class StubCollection:
+        metadata = {"hnsw:space": "cosine"}
+
+        def __init__(self):
+            self.requested_n = None
+
+        def query(self, **kwargs):
+            if "where" in kwargs:
+                raise RuntimeError("where clause not supported")
+            self.requested_n = kwargs["n_results"]
+            return {
+                "documents": [["doc one"]],
+                "metadatas": [[{"id": "c1", "clearance": "public"}]],
+                "ids": [["c1"]],
+                "distances": [[0.25]],
+            }
+
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
+    store = ChromaStore()
+    stub = StubCollection()
+    monkeypatch.setattr(store, "_collection", lambda workspace: stub)
+    with caplog.at_level(logging.WARNING, logger="vector_store"):
+        hits = store._search("ws", [1.0, 0.0], 5, ("public", "internal"))
+    assert [h.id for h in hits] == ["c1"] and hits[0].similarity == pytest.approx(0.75)
+    assert stub.requested_n >= 100, "the fallback fetch must be widened, not capped at n"
+    assert any("filter failed" in record.message for record in caplog.records)
+
+
+def test_drop_namespace_evicts_the_closed_store_from_the_instance_cache(store, monkeypatch):
+    """A dropped namespace closes its pool; the dead store must not stay cached, or every later
+    get_vector_store() would hand out a closed pool (pgvector only: Chroma and Qdrant keep no pool)."""
+    from rag_lab.storage.pgvector_store import PgvectorStore
+
+    if not isinstance(store, PgvectorStore):
+        pytest.skip("pgvector-only: only that adapter keeps a cached pool")
+    key = ("pgvector", vs._digest(store._where), store._schema)
+    monkeypatch.setitem(vs._INSTANCES, key, store)
+    assert vs._INSTANCES.get(key) is store
+    store.drop_namespace()
+    assert key not in vs._INSTANCES

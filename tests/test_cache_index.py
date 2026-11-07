@@ -268,6 +268,24 @@ def test_sync_adds_removes_replaces_and_never_retries_a_row_that_failed_to_open(
     assert opened[-1] == ["bad"]
 
 
+def test_a_failed_load_does_not_mark_the_partition_synced():
+    """A transient database error during sync must not freeze the index: the rows are retried next time.
+
+    The fingerprint may only be recorded once the rows are actually loaded."""
+    index = PartitionIndex("public")
+    vectors = {"a": unit([1, 0, 0]), "b": unit([0, 1, 0])}
+    index.sync(rows(("a", 1, "t1", 1)), lambda keys: {k: (vectors[k], ()) for k in keys})
+
+    def failing_load(keys):
+        raise RuntimeError("database is locked")
+
+    with pytest.raises(RuntimeError):
+        index.sync(rows(("a", 1, "t1", 1), ("b", 2, "t2", 1)), failing_load)
+    # Same light rows again, now with a working load: b must be opened despite the earlier failure.
+    index.sync(rows(("a", 1, "t1", 1), ("b", 2, "t2", 1)), lambda keys: {k: (vectors[k], ()) for k in keys})
+    assert sorted(index.keys) == ["a", "b"]
+
+
 def test_vectors_of_another_size_or_no_length_are_never_indexed():
     index = PartitionIndex("public")
     loaded = {"a": (unit([1, 0, 0]), ()), "wide": (unit([1, 0, 0, 0]), ())}

@@ -44,6 +44,30 @@ NEGATIONS: frozenset[str] = _folded_set("negations")
 CHITCHAT_WORDS: frozenset[str] = _folded_set("chitchat_words")
 CHITCHAT_PHRASES: tuple[str, ...] = tuple(sorted(" ".join(words(p)) for lang in LANGUAGES for p in _load(lang)["chitchat_phrases"]))
 NUMBER_WORDS: dict[str, str] = {fold(k): v for lang in LANGUAGES for k, v in _load(lang)["number_words"].items()}
+# Compound numerals ("quatre-vingt-dix") state ONE figure; their parts would otherwise be read as
+# separate, wrong ones (4, 20, 10). Keyed on the words joined by "-", separator-insensitive at match time.
+COMPOUND_NUMBERS: dict[str, str] = {
+    "-".join(re.split(r"[-\s]+", fold(k))): str(v)
+    for lang in LANGUAGES for k, v in _load(lang).get("compound_numbers", {}).items()
+}
+_COMPOUND_RE = re.compile(
+    "(?:" + "|".join(
+        r"[-\s]+".join(re.escape(w) for w in phrase.split("-"))
+        for phrase in sorted(COMPOUND_NUMBERS, key=len, reverse=True)
+    ) + ")"
+) if COMPOUND_NUMBERS else None
+
+
+def replace_compound_numbers(text: str) -> str:
+    """Replace every compound numeral with its digits, longest match first, before numbers are scanned."""
+    if _COMPOUND_RE is None:
+        return text
+
+    def _sub(match: re.Match[str]) -> str:
+        canonical = "-".join(re.split(r"[-\s]+", match.group(0)))
+        return COMPOUND_NUMBERS.get(canonical, match.group(0))
+
+    return _COMPOUND_RE.sub(_sub, text)
 # Words that are both the number one and an article ("un", "μια"); counting them as a stated "1" would
 # make every French or Greek answer look like it invents a number.
 ARTICLE_NUMBERS: frozenset[str] = _folded_set("article_numbers")
@@ -94,10 +118,24 @@ _ATTRIBUTION = re.compile(
 
 def strip_attribution(sentence: str) -> str:
     """Drop a leading "According to the documents," / "Selon les documents," so only the claim is judged."""
-    match = _ATTRIBUTION.match(fold(sentence))
+    folded = fold(sentence)
+    match = _ATTRIBUTION.match(folded)
     if not match:
         return sentence
-    rest = sentence[len(match.group(0)):] if len(fold(sentence)) == len(sentence) else sentence.split(",", 1)[-1]
+    consumed = len(match.group(0))
+    if len(folded) == len(sentence):
+        rest = sentence[consumed:]
+    else:
+        # fold() expands some characters (ß -> ss), so folded offsets are not original offsets: walk
+        # the original text until its folded length covers the matched prefix.
+        used = 0
+        cut = len(sentence)
+        for index, char in enumerate(sentence):
+            used += len(fold(char))
+            if used >= consumed:
+                cut = index + 1
+                break
+        rest = sentence[cut:]
     rest = rest.strip()
     return rest[:1].upper() + rest[1:] if rest else sentence
 

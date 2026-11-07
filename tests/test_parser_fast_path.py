@@ -35,6 +35,24 @@ def test_the_in_process_text_is_exactly_the_childs(tmp_path, name):
     assert extract_text_from_file(path) == _extract_in_child(path)
 
 
+def test_the_child_receives_the_parse_timeout_so_its_cpu_cap_matches(tmp_path, monkeypatch):
+    """Without forwarding PARSE_TIMEOUT_SEC the child always caps at the 60 s default while the parent
+    waits for the configured wall-clock timeout: a slow parse would die at 65 s CPU with no reason."""
+    seen: dict = {}
+    real = parsers.subprocess.run
+
+    def fake_run(*a, **k):
+        seen.update(k.get("env") or {})
+        return real(*a, **k)
+
+    monkeypatch.setattr(parsers.subprocess, "run", fake_run)
+    monkeypatch.setattr(parsers, "PARSE_TIMEOUT_SEC", 300)
+    path = tmp_path / "doc.json"
+    path.write_text('{"k": "v"}')
+    assert extract_text_from_file(path)
+    assert seen.get("PARSE_TIMEOUT_SEC") == "300"
+
+
 def test_everything_else_still_runs_in_the_sandboxed_child(tmp_path, monkeypatch):
     calls = []
     real = parsers.subprocess.run

@@ -14,6 +14,9 @@ from typing import Any
 from rag_lab.config import settings
 from rag_lab.lang import fold, words
 
+# An edge seen in several chunks keeps every provenance id in one string, separated by this.
+_CHUNK_SEP = "|"
+
 
 @dataclass
 class Entity:
@@ -125,9 +128,12 @@ class KnowledgeGraph:
         # Deduplicate identical edges
         for existing in self._out_edges.get(src.id, []):
             if existing.target == tgt.id and existing.predicate == pred:
-                if source_chunk and source_chunk != existing.source_chunk:
-                    # Update chunks if seen in multiple places
-                    pass
+                if source_chunk and source_chunk not in existing.source_chunk.split(_CHUNK_SEP):
+                    # The same relationship seen in several chunks: keep every provenance so traversal
+                    # can resolve each of them back to its text.
+                    existing.source_chunk = (
+                        f"{existing.source_chunk}{_CHUNK_SEP}{source_chunk}" if existing.source_chunk else source_chunk
+                    )
                 return existing
 
         rel = Relationship(
@@ -194,12 +200,14 @@ class KnowledgeGraph:
                 if edge_dict not in subgraph_edges:
                     subgraph_edges.append(edge_dict)
 
-                if edge.source_chunk and edge.source_chunk not in chunk_ids:
-                    chunk_ids.append(edge.source_chunk)
+                if edge.source_chunk:
+                    for chunk in edge.source_chunk.split(_CHUNK_SEP):
+                        if chunk and chunk not in chunk_ids:
+                            chunk_ids.append(chunk)
 
                 new_path = current_path + [self.entities[next_id].name if next_id in self.entities else next_id]
                 new_preds = predicates + [edge.predicate]
-                new_chunks = path_chunks + ([edge.source_chunk] if edge.source_chunk else [])
+                new_chunks = path_chunks + [c for c in edge.source_chunk.split(_CHUNK_SEP) if c]
                 paths.append(TraversalPath(entities=new_path, predicates=new_preds, chunk_ids=new_chunks))
 
                 if next_id not in visited:
@@ -217,12 +225,14 @@ class KnowledgeGraph:
                 if edge_dict not in subgraph_edges:
                     subgraph_edges.append(edge_dict)
 
-                if edge.source_chunk and edge.source_chunk not in chunk_ids:
-                    chunk_ids.append(edge.source_chunk)
+                if edge.source_chunk:
+                    for chunk in edge.source_chunk.split(_CHUNK_SEP):
+                        if chunk and chunk not in chunk_ids:
+                            chunk_ids.append(chunk)
 
                 new_path = current_path + [self.entities[prev_id].name if prev_id in self.entities else prev_id]
                 new_preds = predicates + [f"REV_{edge.predicate}"]
-                new_chunks = path_chunks + ([edge.source_chunk] if edge.source_chunk else [])
+                new_chunks = path_chunks + [c for c in edge.source_chunk.split(_CHUNK_SEP) if c]
                 paths.append(TraversalPath(entities=new_path, predicates=new_preds, chunk_ids=new_chunks))
 
                 if prev_id not in visited:

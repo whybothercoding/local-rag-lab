@@ -230,3 +230,52 @@ def test_a_new_chunker_version_re_indexes_unchanged_files(storage, monkeypatch):
     assert ingest_workspace("ops", str(ws_dir)).unchanged is True
     monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-v2")
     assert ingest_workspace("ops", str(ws_dir)).unchanged is False
+
+
+def test_a_malformed_clearance_marker_fails_closed_for_the_whole_folder(tmp_path):
+    """One bad `.clearance` must refuse every file in that folder, not just the first.
+
+    The cache entry may only be written after the marker validates: caching `None` before the raise
+    would let sibling files silently fall back to the parent's (or public) clearance."""
+    from rag_lab.ingestion.ingest import _folder_default
+
+    folder = tmp_path / "ws" / "docs"
+    folder.mkdir(parents=True)
+    (folder / ".clearance").write_text("top secret\n", encoding="utf-8")
+    cache: dict = {}
+    for name in ("a.md", "b.md"):
+        with pytest.raises(ValueError, match="top secret"):
+            _folder_default(folder / name, tmp_path / "ws", cache)
+    assert cache == {}
+
+
+def test_a_failed_graph_delete_during_a_purge_is_logged_not_swallowed(storage, monkeypatch, caplog):
+    """A purge that cannot delete the knowledge graph must say so: silently leaving it behind
+    contradicts the rule that degradation is never silent."""
+    import logging
+
+    ws_dir = storage / "ops"
+    ws_dir.mkdir()
+    (ws_dir / "a.md").write_text("# Ops\nThe deploy window is Tuesday evening.")
+    assert ingest_workspace("ops", str(ws_dir)).ok
+    monkeypatch.setattr(settings, "cache_db_path", str(storage.parent / "cache.db"))
+
+    def boom(ws_id):
+        raise RuntimeError("graph store locked")
+
+    monkeypatch.setattr("rag_lab.retrieval.graph_store.delete_workspace_graph", boom)
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        import rag_lab.ingestion.ingest as ing
+        ing._clear_index("ops")
+    assert any("Knowledge graph" in record.message for record in caplog.records)
+
+
+def test_a_workspace_literally_named_all_is_reserved(storage):
+    """"all" is the everywhere-sentinel in grants and the UI: a workspace of that name would be
+    indistinguishable from it, so creating it is refused and discovery skips such a folder."""
+    from rag_lab.storage.workspace_manager import RESERVED_WORKSPACE_IDS, create_workspace
+
+    assert create_workspace("all") == ""
+    (storage / "all").mkdir()
+    assert all(ws_id != "all" for ws_id, _path in discover_knowledge_base_workspaces())
+    assert "all" in RESERVED_WORKSPACE_IDS

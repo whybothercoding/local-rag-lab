@@ -319,6 +319,10 @@ def print_language_breakdown(results: list[dict]) -> None:
     for lang in sorted({r["lang"] for r in results}):
         rows = [r for r in results if r["lang"] == lang and r["passed"] is not None]
         passed = sum(1 for r in rows if r["passed"])
+        if not rows:
+            # Every case of this language was inconclusive (e.g. an earlier turn never released).
+            print(f"{lang:<10}{0:>7}{0:>8}{'-':>7}  (no conclusive cases)")
+            continue
         print(f"{lang:<10}{len(rows):>7}{passed:>8}{passed / len(rows):>7.2f}")
 
 

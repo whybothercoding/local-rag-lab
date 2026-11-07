@@ -54,6 +54,16 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _summary(name: str, positives: list[float], negatives: list[float], margin: float) -> dict:
+    if not positives or not negatives:
+        # A calibration split that produced no usable pairs cannot set a threshold: report that
+        # instead of dying on min()/max() of an empty list.
+        return {
+            "threshold": name,
+            "error": (
+                f"not enough data: {len(positives)} positive and {len(negatives)} negative pairs. "
+                "Calibrate with a larger or more varied report."
+            ),
+        }
     lowest_positive, highest_negative = min(positives), max(negatives)
     suggestion = round(highest_negative + margin, 2)
     accepted = sum(1 for p in positives if p >= suggestion) / len(positives)
@@ -184,6 +194,8 @@ def calibrate_nli(reports: list[Path]) -> dict:
     # at figures, so those pairs are reported but do not set the entailment threshold.
     all_negatives = [v for kind, values in negatives.items() if kind != "number" for v in values]
     summary = _summary("groundedness_min_entailment", [p for p, _ in positives], all_negatives, margin=0.05)
+    if "error" in summary:
+        return summary
     summary["suggested_midpoint"] = round((min(p for p, _ in positives) + max(all_negatives)) / 2, 2)
     cross_scores = [p for p, c in positives if c]
     summary["cross_lingual_positives"] = (

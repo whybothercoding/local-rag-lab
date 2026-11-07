@@ -353,6 +353,28 @@ def test_migration_preserves_everyones_access(tmp_path, case):
     assert backups[0].read_bytes() == original_bytes, "the backup is the untouched old file"
     assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
 
+
+def test_migration_backfills_uid_so_revocation_keeps_working(tmp_path):
+    """A legacy account without `uid` must not outlive its own session revocation.
+
+    `_token_version` collapses to "" for uid-less accounts, so password resets and revoke_sessions
+    would otherwise bump a token_version that verify_token never compares against the token."""
+    target = tmp_path / "access_policy.json"
+    _write_legacy(target, {"root": {"password_hash": "", "admin": True, "clearance": "public", "grants": {}}}, None)
+
+    migrated = load_policy(str(target))
+    assert migrated["users"]["root"]["uid"]
+
+    token = access.issue_token("root", path=str(target))
+    assert access.verify_token(token, path=str(target)) == "root"
+
+    access.revoke_sessions("root", path=str(target), actor="root")
+    assert access.verify_token(token, path=str(target)) == "", "revocation must invalidate outstanding tokens"
+
+    token = access.issue_token("root", path=str(target))
+    access.set_password("root", "another-strong-password-42", path=str(target), actor="root")
+    assert access.verify_token(token, path=str(target)) == "", "a password reset must invalidate outstanding tokens"
+
     load_policy(str(target))
     assert len(list(tmp_path.glob("access_policy.json.v*.bak"))) == 1, "migration runs once"
 

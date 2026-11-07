@@ -205,6 +205,30 @@ def test_hitl_node_rejection(mocker):
     assert result["degraded"] == []
 
 
+def test_hitl_node_self_approval_uses_the_verified_requester(mocker):
+    """A resumed checkpoint without a raw `principal` field must still enforce separation of duties:
+    the requester may not approve their own answer, whoever the token says they are."""
+    mocker.patch(
+        "rag_lab.pipeline.review.interrupt",
+        return_value={"decision": "approved", "approver_token": token_for("alice")},
+    )
+    SEMANTIC_CACHE.clear()
+
+    state = {
+        "workspace_id": "default",
+        "original_question": "What is the rollback SLA?",
+        "sanitized_question": "what is the rollback sla?",
+        "generation": "Rollback SLA is strictly under 5 minutes.",
+        "citations": [],
+        "history": [],
+        "principal_token": token_for("alice"),  # requester and reviewer are the same account
+    }
+
+    result = human_in_the_loop_node(state)
+    assert result["generation"] == REJECTION_NOTICE, "the requester must not be able to approve their own answer"
+    assert result["history"][-1]["released"] is False
+
+
 def test_reciprocal_rank_fusion_prefers_overlap():
     dense = [
         {"id": "doc_a", "content": "alpha", "citation": "[doc_a] alpha.txt"},
@@ -228,6 +252,26 @@ def test_grade_hallucination_trips_circuit_breaker_on_max_retries():
     }
     result = grade_hallucination_node(state)
     assert result["hallucination_status"] == "circuit_break"
+
+
+def test_nli_inference_failure_degrades_to_the_labelled_lexical_fallback(monkeypatch):
+    """An onnxruntime failure during scoring must not abort the run: the grader falls back to the
+    lexical check and says so in telemetry."""
+    monkeypatch.setattr(settings, "groundedness_method", "nli")
+
+    def broken(sentence, passages):
+        raise RuntimeError("onnxruntime inference crashed")
+
+    monkeypatch.setattr("rag_lab.retrieval.nli.sentence_support", broken)
+
+    state = {
+        "documents": ["The rollback SLA is 5 minutes."],
+        "generation": "The rollback SLA is 5 minutes.",
+        "telemetry": {},
+    }
+    result = grade_hallucination_node(state)
+    assert result["hallucination_status"] == "grounded"
+    assert "NLI scoring failed" in result["telemetry"]["groundedness_fallback"]
 
 
 def test_semantic_cache_preserves_citations_on_hit(mocker):

@@ -78,6 +78,20 @@ def test_the_first_sync_embeds_everything_and_an_unchanged_one_embeds_nothing(st
     assert again.unchanged and embedder.calls == []
 
 
+def test_a_changed_passage_prefix_defeats_the_unchanged_fast_path(store, monkeypatch):
+    """The vectors embed the prefix; a sync must re-embed when EMBEDDING_PASSAGE_PREFIX changes,
+    not report the workspace unchanged while queries embed with a different prefix."""
+    source, embedder = store
+    sync(source)
+    embedder.calls.clear()
+
+    monkeypatch.setattr(settings, "embedding_passage_prefix", "passage: ")
+    again = sync(source)
+
+    assert again.unchanged is False
+    assert again.embedded == again.chunks and again.reused == 0, "every chunk is embedded with the new prefix"
+
+
 def test_editing_one_file_embeds_only_its_new_chunks(store):
     source, embedder = store
     first = sync(source)

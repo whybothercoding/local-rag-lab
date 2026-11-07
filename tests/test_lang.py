@@ -11,6 +11,7 @@ from rag_lab.lang import (
     NUMBER_WORDS,
     STOPWORDS,
     fold,
+    strip_attribution,
     words,
 )
 from rag_lab.pipeline.entry import router_node
@@ -42,9 +43,24 @@ def test_every_language_ships_complete_data():
         assert data["negations"] and data["number_words"] and data["stopwords"], lang
 
 
-@pytest.mark.parametrize("word", ["not", "nicht", "keine", "pas", "jamais", "δεν", "μην", "ποτέ"])
+@pytest.mark.parametrize("word", ["not", "nicht", "keine", "pas", "jamais", "δεν", "μην"])
 def test_negations_cover_every_language(word):
     assert fold(word) in NEGATIONS
+
+
+def test_greek_question_words_are_not_negations():
+    """"Πότε" (when) must not count as a negation: the "δεν ... ποτέ" construction is already marked by
+    "δεν", and treating every Greek "Πότε…" question as negated keeps it from ever hitting the cache."""
+    assert fold("ποτέ") not in NEGATIONS
+    assert fold("ποτέ") in STOPWORDS
+    assert fold("δεν") in NEGATIONS
+
+
+def test_attribution_is_stripped_even_when_folding_expands_the_text():
+    """fold() expands "ß" to "ss", so folded offsets are not original offsets: the cut must still land
+    after the attribution prefix, not keep it or eat the claim."""
+    assert strip_attribution("Gemäß den Dokumenten ist die Frist fünf Tage.") == "Ist die Frist fünf Tage."
+    assert strip_attribution("According to the documents, the SLA is 5 minutes.") == "The SLA is 5 minutes."
 
 
 def test_negated_questions_have_different_cache_signatures_in_every_language():
@@ -192,3 +208,29 @@ def test_compound_questions_split_into_answerable_parts(question, parts):
     from rag_lab.pipeline.retrieval import _question_parts
 
     assert len(_question_parts(question)) == parts
+
+
+@pytest.mark.parametrize(("sentence", "digits"), [
+    ("Es sind zweiundzwanzig Tage.", {"22"}),
+    ("Die Frist beträgt dreizehn Tage.", {"13"}),
+    ("Es sind neunundneunzig Prozent.", {"99"}),
+    ("seventy days", {"70"}),
+    ("Il faut treize jours.", {"13"}),
+    ("vingt et un jours", {"21"}),
+    ("soixante-dix jours", {"70"}),
+    ("quatre-vingt-dix jours", {"90"}),
+    ("quatre-vingt-onze jours", {"91"}),
+    ("Είναι εξήντα ημέρες.", {"60"}),
+    ("δεκαπέντε ημέρες", {"15"}),
+])
+def test_word_numbers_are_detected_in_every_language(sentence, digits):
+    assert _numbers(sentence) >= digits
+
+
+def test_french_compound_numerals_do_not_leak_their_parts_as_separate_figures():
+    """"soixante-dix" states 70, not the wrong figures 60 and 10."""
+    assert _numbers("Le délai est de soixante-dix jours.") == {"70"}
+    assert _numbers("quatre-vingts jours") == {"80"}
+    assert _unsupported_numbers("Il faut soixante-dix jours.", ["Le délai est de 70 jours."], "") == set()
+    assert _unsupported_numbers("Es sind zweiundzwanzig Tage.", ["Die Frist beträgt 22 Tage."], "") == set()
+    assert _unsupported_numbers("Il faut soixante-dix jours.", ["Le délai est de 60 jours."], "") == {"70"}

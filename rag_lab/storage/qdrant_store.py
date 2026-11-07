@@ -9,7 +9,8 @@ is the collection's own metadata.
 Scores. Qdrant's Cosine distance returns the cosine similarity as the score, the same scale as Chroma's
 `1 - distance` that the relevance gates are calibrated on (tests/test_vector_stores.py asserts the values).
 
-Differences from Chroma that matter: vectors are normalised on insert (direction is kept, which is all ranking uses), a
+Differences from Chroma that matter: ranking uses cosine direction (Distance.COSINE normalises internally on the
+server; vectors are stored unnormalised), a
 collection's vector size is fixed when it is created (so an empty workspace holds a one-dimensional placeholder until the
 first publish), and there is no unfiltered fallback: a failing server-side filter makes dense retrieval unavailable
 (labelled) instead of asking for everything and trusting the guard.

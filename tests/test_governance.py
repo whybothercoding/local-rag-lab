@@ -201,6 +201,30 @@ def test_prune_keeps_recent_records(audit_path):
     assert verify_chain(audit_path) == (True, None, 1)
 
 
+def test_a_forged_retention_base_cannot_cover_up_truncation(audit_path, anchor_path):
+    """Deleting the records up to an anchored seq and writing that seq/hash into audit_meta makes the
+    remaining chain verify; the keyed base tag and the missing prune event must still expose it."""
+    for i in range(3):
+        record("query_received", workspace_id="ops", session_id="s", data={"i": i}, path=audit_path)
+    anchored = anchor(path=audit_path, anchor_path=anchor_path)
+    assert anchored is not None
+
+    conn = sqlite3.connect(audit_path)
+    conn.execute("DROP TRIGGER audit_events_no_delete")
+    conn.execute("DELETE FROM audit_events")
+    conn.execute("INSERT OR REPLACE INTO audit_meta (key, value) VALUES ('base_seq', ?)", (str(anchored["seq"]),))
+    conn.execute("INSERT OR REPLACE INTO audit_meta (key, value) VALUES ('base_hash', ?)", (anchored["hash"],))
+    conn.commit()
+    conn.close()
+
+    ok, _bad, _count = verify_chain(audit_path)  # the remaining chain itself still verifies...
+    assert ok is True
+    anchors_ok, problems, _n = verify_anchors(audit_path, anchor_path)  # ...but the forgery is detected
+    assert anchors_ok is False
+    assert any("integrity tag" in problem for problem in problems), problems
+    assert any("retention_prune" in problem for problem in problems), problems
+
+
 def test_idle_checkpoint_threads_are_pruned_but_threads_awaiting_review_are_kept(tmp_path, rollback_index):
     from rag_lab.pipeline.graph import workflow
     from conftest import token_for as token

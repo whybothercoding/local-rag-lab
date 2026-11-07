@@ -189,3 +189,9 @@ class PgvectorStore(VectorStore):
         with self._pool.connection() as conn:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(self._schema)))
         self._pool.close()
+        # The closed store must not stay cached: every later get_vector_store() would hand out a dead pool.
+        from rag_lab.storage import vector_store
+
+        for key, store in list(vector_store._INSTANCES.items()):
+            if key[0] == "pgvector" and store is self:
+                del vector_store._INSTANCES[key]

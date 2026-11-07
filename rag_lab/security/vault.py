@@ -29,6 +29,7 @@ __all__ = [
     "InvalidKeyError",
     "bind_thread",
     "anchor_mac",
+    "base_mac",
     "chain_mac",
     "load_or_create_key",
     "open_bytes",
@@ -107,6 +108,12 @@ def subject_tag(value: str) -> str:
 
 def anchor_mac(body: str) -> str:
     return hmac.new(load_or_create_key(), b"anchor:" + body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def base_mac(body: str) -> str:
+    """Keyed tag for the retention base in audit_meta. audit_meta has no triggers, so without this an
+    attacker with database write access could delete records and move the base to an anchored hash."""
+    return hmac.new(load_or_create_key(), b"base:" + body.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def chain_mac(body: str) -> str:

@@ -212,3 +212,40 @@ def test_harvest_feedback_creates_eval_candidates(tmp_path):
     assert len(written) == 1
     assert written[0]["id"] == case["id"]
 
+
+
+def test_rejections_are_found_no_matter_how_many_decisions_come_after(audit_path, monkeypatch):
+    """The scan pages backwards through the whole history: a rejection must stay reachable even when
+    thousands of newer decisions exist (the old fixed cap hid everything past 10,000)."""
+    import rag_lab.security.audit as audit
+
+    record("hitl_decision", workspace_id="ops", session_id="s", data={"released": True}, path=audit_path)
+    record("hitl_decision", workspace_id="ops", session_id="s", data={"released": False, "reason": "not grounded"}, path=audit_path)
+    for _ in range(5):  # a small page in the test forces several pages of the same scan
+        record("hitl_decision", workspace_id="ops", session_id="s", data={"released": True}, path=audit_path)
+    monkeypatch.setattr(audit, "_REJECTION_PAGE", 2)
+
+    rejections = audit.list_rejections(limit=10, path=audit_path)
+    assert len(rejections) == 1
+    assert rejections[0]["data"]["reason"] == "not grounded"
+
+
+def test_concurrent_anchor_runs_keep_the_chain_intact(audit_path, tmp_path):
+    """Two overlapping `make audit-anchor` runs must chain, not interleave: the read-modify-append
+    holds an exclusive lock on the anchor file."""
+    import threading
+
+    from rag_lab.security.audit import anchor, verify_anchors
+
+    anchor_path = str(tmp_path / "anchors.jsonl")
+    record("query_received", workspace_id="ops", session_id="s", data={}, path=audit_path)
+    threads = [threading.Thread(target=anchor, kwargs={"path": audit_path, "anchor_path": str(anchor_path)})
+               for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    ok, problems, count = verify_anchors(audit_path, str(anchor_path))
+    assert ok, problems
+    assert count == 4

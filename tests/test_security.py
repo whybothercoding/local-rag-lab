@@ -143,7 +143,21 @@ def test_successful_sign_in_issues_a_token_for_that_account(isolated_sign_in):
     policy, audit = isolated_sign_in
     add_user("erin", TEST_PASSWORD, path=policy)
     result = sign_in("erin", TEST_PASSWORD, policy, audit)
-    assert result.ok and verify_token(result.token) == "erin"
+    # The token is only valid for the policy it was issued from: there is no cross-policy fallback.
+    assert result.ok and verify_token(result.token, path=policy) == "erin"
+
+
+def test_a_token_is_not_validated_against_a_foreign_policy(isolated_sign_in, tmp_path):
+    """An account deleted from the active policy stays deleted; a same-named account in another policy
+    is a different incarnation and must not inherit the token (fail-closed: no cross-policy fallback)."""
+    policy, audit = isolated_sign_in
+    other = str(tmp_path / "other-policy.json")
+    add_user("erin", TEST_PASSWORD, path=policy)
+    add_user("erin", TEST_PASSWORD, path=other)
+    result = sign_in("erin", TEST_PASSWORD, policy, audit)
+    assert result.ok
+    assert verify_token(result.token, path=policy) == "erin"
+    assert verify_token(result.token, path=other) == ""
 
 
 def test_lockout_expires_with_the_window(isolated_sign_in, monkeypatch):

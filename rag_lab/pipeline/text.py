@@ -8,7 +8,9 @@ from typing import List
 import re
 
 
-from rag_lab.lang import ARTICLE_NUMBERS, NUMBER_WORDS, STEM_SUFFIXES, STOPWORDS, fold, words
+from rag_lab.lang import (
+    ARTICLE_NUMBERS, NUMBER_WORDS, STEM_SUFFIXES, STOPWORDS, fold, replace_compound_numbers, words,
+)
 
 # Folded words in any script (see rag_lab.lang): kept under this name for the graders and the router.
 _WORD = re.compile(r"[^\W_]+")
@@ -23,7 +25,7 @@ _LIST_MARKER = re.compile(r"(?m)^\s*\d+[.)]\s")
 
 def _numbers(text: str, *, include_one: bool = True) -> set[str]:
     """Numbers in a text, with spelled-out ones folded to digits ("five" == "5", "1,000" == "1000")."""
-    lowered = re.sub(r"(?<=\d),(?=\d{3}\b)", "", fold(text))
+    lowered = replace_compound_numbers(re.sub(r"(?<=\d),(?=\d{3}\b)", "", fold(text)))
     found = {m.rstrip(".,:") for m in _NUMBER.findall(lowered)}
     found |= {
         NUMBER_WORDS[w]

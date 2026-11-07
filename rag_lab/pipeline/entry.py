@@ -178,7 +178,9 @@ def cache_lookup_node(state: StateInput) -> dict[str, Any]:
         telemetry["cache_similarity"] = cache_res.get("similarity", 1.0)
         telemetry["cache_approved_by"] = cache_res.get("approved_by", "")
         cached = cache_res["generation"]
-        cached_citations = cache_res.get("citations") or state.get("citations", [])
+        # An empty citation list is a real answer (the normal case for an abstention): "or" would read it
+        # as missing and fall back to the thread's stale citations from the previous turn.
+        cached_citations = cache_res.get("citations", [])
         audit_record(
             "cache_hit",
             workspace_id=ws_id,

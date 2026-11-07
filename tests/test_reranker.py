@@ -94,10 +94,12 @@ def test_score_pairs_empty_inputs():
     assert score_pairs("   ", ["doc"]) == []
     assert score_pairs("query", []) == []
     assert score_pairs("query", ["", "   "]) == []
-    # Filters out blank documents and scores valid ones
+    # Blank and None documents keep their slot, scored as -inf: the result stays positionally
+    # aligned with the input, so a caller can zip it without shifting scores onto other docs.
     res = score_pairs("query", ["", None, "valid doc"])
-    assert len(res) == 1
-    assert isinstance(res[0], float)
+    assert len(res) == 3
+    assert res[0] == res[1] == float("-inf")
+    assert isinstance(res[2], float) and res[2] > float("-inf")
 
 
 def test_reranker_whitespace_query_returns_candidates():

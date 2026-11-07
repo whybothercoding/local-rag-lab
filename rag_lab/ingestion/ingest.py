@@ -167,7 +167,9 @@ def _clear_index(ws_id: str) -> None:
         from rag_lab.retrieval.graph_store import delete_workspace_graph
         delete_workspace_graph(ws_id)
     except Exception:
-        pass
+        # Never fail silently: a purge that leaves a graph behind must at least be visible in the log.
+        logger.warning("Knowledge graph for workspace %s could not be deleted; it may be stale",
+                       ws_id, exc_info=True)
     from rag_lab.retrieval.semantic_cache import clear_workspace_cache
 
     clear_workspace_cache(ws_id)
@@ -183,7 +185,9 @@ def _folder_default(file_path: Path, root: Path, cache: dict[Path, str | None]) 
     while True:
         if folder not in cache:
             marker = folder / ".clearance"
-            cache[folder] = None
+            # The cache entry is written only after the marker validates: poisoning it with None on the
+            # raise would let sibling files silently fall back to the parent's clearance (fail-open).
+            level = None
             if marker.is_file() and not marker.is_symlink():
                 lines = [ln.strip() for ln in marker.read_text(encoding="utf-8").splitlines()
                          if ln.strip() and not ln.strip().startswith("#")]
@@ -192,7 +196,7 @@ def _folder_default(file_path: Path, root: Path, cache: dict[Path, str | None]) 
                     raise ValueError(
                         f"{marker} names clearance '{level}' (allowed: {', '.join(CLEARANCE_LEVELS)})"
                     )
-                cache[folder] = level
+            cache[folder] = level
         if cache[folder] is not None:
             return cache[folder]
         if folder == root or folder.parent == folder:
@@ -378,6 +382,7 @@ def ingest_workspace(
             and manifest.get("chunk_size") == chunk_size
             and manifest.get("chunk_overlap") == chunk_overlap
             and manifest.get("embedding") == fingerprint
+            and manifest.get("passage_prefix") == settings.embedding_passage_prefix
             and manifest.get("sparse_tokenizer", "porter") == settings.sparse_tokenizer
             and manifest.get("chunker") == CHUNKER_VERSION
         ):
@@ -562,6 +567,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     actor = authenticate_admin(args.admin)
 
+    if args.dir and not args.workspace:
+        parser.error("--dir needs --workspace: without one it would silently sync every workspace")
     if args.all or not args.workspace:
         from rag_lab.storage.workspace_manager import sync_all_workspaces
         print("Discovering and syncing all workspaces in knowledge_base/...")

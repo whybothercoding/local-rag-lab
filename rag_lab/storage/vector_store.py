@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from abc import ABC, abstractmethod
 from urllib.parse import urlsplit
 from collections.abc import Iterator, Sequence
@@ -257,10 +258,13 @@ class ChromaStore(VectorStore):
                 n_results=n,
                 where={"clearance": {"$in": list(allowed_clearances)}},  # type: ignore[dict-item]
             )
-        except Exception:
+        except Exception as exc:
             # Kept for parity with the behaviour before this interface existed: ask without the filter and let the
-            # guard in VectorStore.query() do the filtering. Other adapters fail closed instead.
-            results = collection.query(query_embeddings=[vector], n_results=max(n, 20))  # type: ignore[arg-type]
+            # guard in VectorStore.query() do the filtering. Other adapters fail closed instead. The failure is
+            # logged (never silent) and the fetch is widened so the guard still finds `n` readable chunks.
+            logger.warning("Chroma workspace filter failed for %s (%s); fetching unfiltered and guarding in Python",
+                           workspace, exc)
+            results = collection.query(query_embeddings=[vector], n_results=max(n * 10, 100))  # type: ignore[arg-type]
         docs = (results.get("documents") or [[]])[0]
         metas = (results.get("metadatas") or [[]])[0] or [{}] * len(docs)
         ids = (results.get("ids") or [[]])[0]
@@ -286,6 +290,7 @@ def vector_store_status() -> tuple[bool, str]:
 # --- The factory ---------------------------------------------------------------------------------------------------
 
 _INSTANCES: dict[tuple, VectorStore] = {}
+_INSTANCES_LOCK = threading.Lock()
 
 
 def _digest(secret: str) -> str:
@@ -301,20 +306,24 @@ def get_vector_store() -> VectorStore:
     if kind == "qdrant":
         key: tuple = ("qdrant", settings.qdrant_url, _digest(settings.qdrant_api_key), settings.qdrant_prefix)
         if key not in _INSTANCES:
-            try:
-                from rag_lab.storage.qdrant_store import QdrantStore
-            except ImportError as exc:
-                raise VectorStoreError(
-                    "VECTOR_STORE=qdrant needs the optional qdrant-client package: pip install 'qdrant-client>=1.9' "
-                    "(or pip install -e '.[qdrant]')."
-                ) from exc
-            _INSTANCES[key] = QdrantStore(settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
+            with _INSTANCES_LOCK:
+                if key not in _INSTANCES:  # the UI is multi-threaded: two first calls must not build two clients
+                    try:
+                        from rag_lab.storage.qdrant_store import QdrantStore
+                    except ImportError as exc:
+                        raise VectorStoreError(
+                            "VECTOR_STORE=qdrant needs the optional qdrant-client package: pip install 'qdrant-client>=1.9' "
+                            "(or pip install -e '.[qdrant]')."
+                        ) from exc
+                    _INSTANCES[key] = QdrantStore(settings.qdrant_url, settings.qdrant_api_key, settings.qdrant_prefix)
         return _INSTANCES[key]
     if kind == "pgvector":
         key = ("pgvector", _digest(settings.pgvector_uri), settings.pgvector_schema)
         if key not in _INSTANCES:
-            from rag_lab.storage.pgvector_store import PgvectorStore
+            with _INSTANCES_LOCK:
+                if key not in _INSTANCES:
+                    from rag_lab.storage.pgvector_store import PgvectorStore
 
-            _INSTANCES[key] = PgvectorStore(settings.pgvector_uri, settings.pgvector_schema)
+                    _INSTANCES[key] = PgvectorStore(settings.pgvector_uri, settings.pgvector_schema)
         return _INSTANCES[key]
     raise VectorStoreError(f"VECTOR_STORE must be one of {', '.join(STORES)}; got '{kind}'.")

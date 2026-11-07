@@ -82,6 +82,12 @@ def index_sparse_chunks(
                 f"tokenize='{tokenizer_clause()}'"
                 ");"
             )
+            if not (len(chunk_ids) == len(sources) == len(clearances) == len(chunks)):
+                # zip() would silently drop the tail chunks: they would become unfindable by BM25
+                # (the same class of bug the vector stores' publish() guards against).
+                raise ValueError(
+                    f"chunk lists differ in length ({len(chunk_ids)}, {len(sources)}, {len(clearances)}, {len(chunks)})"
+                )
             rows = [
                 (cid, src, clr, content)
                 for cid, src, clr, content in zip(chunk_ids, sources, clearances, chunks)

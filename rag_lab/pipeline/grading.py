@@ -55,6 +55,11 @@ def _nli_verdict(gen: str, docs: list[str], telemetry: dict[str, Any]) -> list[s
         scores = [(sentence_support(s, docs), s) for s in claims]
     except NLIUnavailableError:
         return None
+    except Exception as exc:
+        # An inference-time failure (bad tensor, OOM, provider error) must degrade to the labelled lexical
+        # fallback, not abort the whole run.
+        telemetry["groundedness_fallback"] = f"NLI scoring failed ({exc.__class__.__name__}); lexical check used"
+        return None
     telemetry["nli_min_support"] = round(min((v for v, _ in scores), default=1.0), 4)
     telemetry["nli_claims"] = len(scores)
     unsupported = [s for v, s in scores if v < settings.groundedness_min_entailment]
@@ -107,7 +112,7 @@ def grade_hallucination_node(state: StateInput) -> dict[str, Any]:
             status, update = _generation_failure(state, telemetry, feedback)
     elif docs:
         if settings.groundedness_method == "nli":
-            telemetry["groundedness_fallback"] = "NLI model unavailable; lexical check used"
+            telemetry.setdefault("groundedness_fallback", "NLI model unavailable; lexical check used")
         doc_words = set(words(" ".join(docs)))
         gen_words = [w for w in words(gen) if len(w) > 3]
         if gen_words:

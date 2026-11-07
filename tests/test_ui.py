@@ -123,8 +123,25 @@ def test_add_user_panel_warns_when_answers_could_not_be_reviewed():
 def test_every_screen_shows_the_one_rejection_notice():
     """The reviewer's session, a reloaded thread and the requester's screen must read the same rejection text."""
     source = (Path(UI).parent / "rag_lab" / "ui" / "streamlit_app.py").read_text(encoding="utf-8")
-    assert "REJECTION_NOTICE" in source
-    assert "rejected by" not in source.lower(), "a rejection text is written inline instead of using REJECTION_NOTICE"
+    assert "REJECTION_NOTICES" in source
+    assert "rejected by" not in source.lower(), "a rejection text is written inline instead of the shared notices"
+    # Every localized variant must be recognized as a rejection, not only the English one.
+    assert "gen_text in REJECTION_NOTICES.values()" in source
+    from rag_lab.lang import REJECTION_NOTICES, rejection_notice
+    assert set(REJECTION_NOTICES.values()) == {rejection_notice(lang) for lang in ("en", "de", "fr", "el")}
+
+
+def test_sign_out_clears_second_factor_material_and_typed_secrets():
+    """TOTP secrets, recovery codes and typed passwords must not outlive the session: the next admin
+    on the same browser would otherwise see the previous admin's second-factor material."""
+    app = _signed_in("alice")
+    for key in ("totp_enrolment", "recovery_codes", "new_user_pass", "login_code", "totp_current_code", "totp_confirm_code"):
+        app.session_state[key] = "sensitive-value"
+    sign_out_btn = [b for b in app.sidebar.button if b.label == "Sign out"][0]
+    sign_out_btn.click().run()
+    assert not app.exception, app.exception
+    for key in ("totp_enrolment", "recovery_codes", "new_user_pass", "login_code", "totp_current_code", "totp_confirm_code"):
+        assert not app.session_state.get(key), f"sign-out leaked {key}"
 
 
 def test_session_restores_on_reload_via_query_params():

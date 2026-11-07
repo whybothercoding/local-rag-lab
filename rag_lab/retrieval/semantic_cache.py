@@ -55,6 +55,8 @@ _L1_LOCK = threading.Lock()
 _L1_GENERATIONS: "collections.OrderedDict[str, str]" = collections.OrderedDict()
 _L1_CITATIONS: dict[str, list[str]] = {}
 _L1_REVIEWED: dict[str, bool] = {}
+_L1_CREATED: dict[str, str] = {}
+_L1_APPROVED_BY: dict[str, str] = {}
 
 _COLUMNS = (
     "key, workspace_id, clearance, index_version, query, generation, citations_json, "
@@ -357,7 +359,8 @@ def _retention_cutoff() -> str:
 
 # --- L1 (LRU) ----------------------------------------------------------------
 
-def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = True) -> None:
+def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = True,
+            created_at: str = "", approved_by: str = "") -> None:
     if _shared():
         return  # another process's prune or delete could not evict this copy
     with _L1_LOCK:
@@ -368,16 +371,25 @@ def _l1_put(key: str, generation: str, citations: list[str], reviewed: bool = Tr
             _L1_GENERATIONS.pop(oldest, None)
             _L1_CITATIONS.pop(oldest, None)
             _L1_REVIEWED.pop(oldest, None)
+            _L1_CREATED.pop(oldest, None)
+            _L1_APPROVED_BY.pop(oldest, None)
         _L1_GENERATIONS[key] = generation
         _L1_CITATIONS[key] = citations
         _L1_REVIEWED[key] = reviewed
+        # A fresh store is "now"; rows promoted from the database keep their own creation time, so the
+        # retention cutoff is enforced on L1 hits exactly as it is on database reads.
+        _L1_CREATED[key] = created_at or datetime.now(UTC).isoformat(timespec="seconds")
+        _L1_APPROVED_BY[key] = approved_by or ""
 
 
-def _l1_get(key: str) -> tuple[bool, str, list[str]]:
+def _l1_get(key: str, cutoff: str | None = None) -> tuple[bool, str, list[str]]:
     if _shared():
         return False, "", []
     with _L1_LOCK:
         if key in _L1_GENERATIONS:
+            if cutoff is not None and _L1_CREATED.get(key, "") < cutoff:
+                _evict_locked(key)
+                return False, "", []
             _L1_GENERATIONS.move_to_end(key)
             return True, _L1_GENERATIONS[key], _L1_CITATIONS.get(key, [])
     return False, "", []
@@ -388,11 +400,30 @@ def _l1_is_reviewed(key: str) -> bool:
         return _L1_REVIEWED.get(key, True)
 
 
+def _l1_citations_set(key: str, cites: list[str]) -> None:
+    """Store citations in L1 under the same cap as the generations: keys cached by _l1_put are bounded
+    by its LRU, and a citations-only key is trimmed here so the proxy cannot grow without bound."""
+    with _L1_LOCK:
+        if key in _L1_GENERATIONS:
+            _L1_CITATIONS[key] = cites
+            return
+        if key not in _L1_CITATIONS and len(_L1_CITATIONS) >= MAX_L1_SIZE:
+            _L1_CITATIONS.pop(next(iter(_L1_CITATIONS)), None)
+        _L1_CITATIONS[key] = cites
+
+
 def _l1_evict(key: str) -> None:
     with _L1_LOCK:
-        _L1_GENERATIONS.pop(key, None)
-        _L1_CITATIONS.pop(key, None)
-        _L1_REVIEWED.pop(key, None)
+        _evict_locked(key)
+
+
+def _evict_locked(key: str) -> None:
+    # Caller holds _L1_LOCK.
+    _L1_GENERATIONS.pop(key, None)
+    _L1_CITATIONS.pop(key, None)
+    _L1_REVIEWED.pop(key, None)
+    _L1_CREATED.pop(key, None)
+    _L1_APPROVED_BY.pop(key, None)
 
 
 def _l1_clear() -> None:
@@ -400,6 +431,8 @@ def _l1_clear() -> None:
         _L1_GENERATIONS.clear()
         _L1_CITATIONS.clear()
         _L1_REVIEWED.clear()
+        _L1_CREATED.clear()
+        _L1_APPROVED_BY.clear()
 
 
 # --- Store and lookup --------------------------------------------------------
@@ -424,7 +457,7 @@ def store_cache(
     ver = _index_version(workspace_id)
     ckey = key or cache_key(workspace_id, query, clearance)
 
-    _l1_put(ckey, generation, cites, reviewed)
+    _l1_put(ckey, generation, cites, reviewed, approved_by=approved_by)
 
     vector: bytes | None = None
     if compute_vector and query.strip():
@@ -498,12 +531,14 @@ def lookup_cache(
     # 1. Hierarchical exact match across the caller's authorized clearance levels (highest to lowest)
     exact_keys = {clr: cache_key(workspace_id, cleaned_query, clr) for clr in reversed(authorized)}
     for candidate_key in exact_keys.values():
-        hit, gen, cites = _l1_get(candidate_key)
+        hit, gen, cites = _l1_get(candidate_key, cutoff=cutoff)
         if hit and (include_unreviewed or _l1_is_reviewed(candidate_key)):
+            with _L1_LOCK:
+                approver = _L1_APPROVED_BY.get(candidate_key, "")
             return {
                 "hit": True, "hit_type": "exact", "similarity": 1.0, "key": candidate_key,
                 "generation": gen, "citations": cites, "query": cleaned_query,
-                "reviewed": _l1_is_reviewed(candidate_key), "approved_by": "",
+                "reviewed": _l1_is_reviewed(candidate_key), "approved_by": approver,
             }
 
     try:
@@ -515,7 +550,8 @@ def lookup_cache(
                 ).fetchone()
                 entry = _open_row(row) if row else None
                 if entry and entry["clearance"] == clr and (include_unreviewed or entry["reviewed"]):
-                    _l1_put(candidate_key, entry["generation"], entry["citations"], entry["reviewed"])
+                    _l1_put(candidate_key, entry["generation"], entry["citations"], entry["reviewed"],
+                            created_at=entry["created_at"], approved_by=entry["approved_by"])
                     return _hit(entry, "exact", 1.0)
 
             # 2. Semantic vector similarity across the matching workspace and index version
@@ -732,21 +768,29 @@ class PersistentSemanticCache(collections.abc.MutableMapping):
             with _open_db() as conn:
                 entry = _fetch_entry(conn, key)
                 if entry:
-                    _l1_put(key, entry["generation"], entry["citations"], entry["reviewed"])
+                    _l1_put(key, entry["generation"], entry["citations"], entry["reviewed"],
+                            created_at=entry["created_at"], approved_by=entry["approved_by"])
                     return entry["generation"]
         except Exception:
             pass
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
+        """Keep the value in L1 and, when a row exists under this key, update its sealed answer.
+
+        A new row cannot be written here: the mapping API does not know the key's workspace, clearance
+        or index version, so a row sealed with placeholder fields could never be read back under the key."""
         _l1_put(key, str(value), [])
         try:
-            sealed_query, sealed_gen, sealed_cites, _ = _seal_row(key, "", "public", "", "", str(value), [], None)
             with _open_db() as conn:
-                now = datetime.now(UTC).isoformat(timespec="seconds")
+                row = conn.execute(f"SELECT {_COLUMNS} FROM semantic_cache WHERE key = ?;", (key,)).fetchone()
+                entry = _open_row(row) if row else None
+                if entry is None:
+                    return
+                aad = _aad(key, row[1], row[2], row[3])
                 conn.execute(
-                    _UPSERT_PG if _shared() else _UPSERT_SQLITE,
-                    (key, "", "public", "", sealed_query, sealed_gen, sealed_cites, None, 1, "", now),
+                    "UPDATE semantic_cache SET generation = ? WHERE key = ?;",
+                    (seal_text(str(value), aad), key),
                 )
                 conn.commit()
         except Exception as exc:
@@ -809,8 +853,7 @@ class PersistentCitationsCache(collections.abc.MutableMapping):
             with _open_db() as conn:
                 entry = _fetch_entry(conn, key)
                 if entry and entry["citations"]:
-                    with _L1_LOCK:
-                        _L1_CITATIONS[key] = entry["citations"]
+                    _l1_citations_set(key, list(entry["citations"]))
                     return list(entry["citations"])
         except Exception:
             pass
@@ -831,8 +874,7 @@ class PersistentCitationsCache(collections.abc.MutableMapping):
 
     def __setitem__(self, key: str, value: list[str]) -> None:
         cites = list(value)
-        with _L1_LOCK:
-            _L1_CITATIONS[key] = cites
+        _l1_citations_set(key, cites)
         try:
             self._rewrite(key, cites)
         except Exception as exc:

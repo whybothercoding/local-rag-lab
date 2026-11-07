@@ -243,3 +243,24 @@ def test_ollama_models_answer_without_a_thinking_pass(monkeypatch):
     from rag_lab.pipeline import llm_provider
 
     assert llm_provider._ollama_chat().reasoning is False
+
+
+def test_calibration_without_usable_pairs_reports_not_enough_data(tmp_path):
+    """An empty or too-narrow calibration split must say so, not die on min()/max() of an empty list."""
+    from rag_lab.ops.calibrate import calibrate_nli
+
+    empty_report = tmp_path / "empty-report.json"
+    empty_report.write_text('{"results": []}', encoding="utf-8")
+    summary = calibrate_nli([empty_report])
+    assert "error" in summary and "not enough data" in summary["error"]
+
+
+def test_language_breakdown_survives_a_language_with_no_conclusive_cases(capsys):
+    """Every case of a language inconclusive (an earlier turn never released) is reported as such,
+    not a ZeroDivisionError."""
+    from rag_lab.ops.eval import print_language_breakdown
+
+    print_language_breakdown([{"lang": "de", "passed": None}, {"lang": "en", "passed": True}])
+    out = capsys.readouterr().out
+    assert "de" in out and "no conclusive cases" in out
+    assert "1.00" in out

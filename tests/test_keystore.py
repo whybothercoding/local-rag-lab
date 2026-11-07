@@ -434,6 +434,15 @@ def test_status_with_a_working_keychain(tmp_path, memory_keyring):
     assert marker == "--" and "make migrate-keys" in text
 
 
+def test_status_reports_where_a_new_key_will_actually_be_created(tmp_path, memory_keyring, monkeypatch):
+    """With KEY_ENVELOPE set a new key is created envelope-wrapped in its key file, even with a working
+    keychain: the report must not promise the OS keychain."""
+    monkeypatch.setattr(settings, "key_envelope", True)
+    fresh = tmp_path / "fresh.key"
+    (marker, text), = key_storage_report({"data": fresh})
+    assert marker == "OK" and "envelope-wrapped" in text and "keychain" not in text
+
+
 def test_the_cli_migrates_and_reports(tmp_path, key_paths, memory_keyring, monkeypatch, capsys):
     access, data = key_paths
     monkeypatch.setattr(settings, "key_store", "file")

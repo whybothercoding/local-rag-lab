@@ -355,7 +355,14 @@ def _extract_in_child(file_path: Path) -> str:
             capture_output=True,
             text=True,
             timeout=PARSE_TIMEOUT_SEC,
-            env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": package_parent},
+            # The child re-reads PARSE_TIMEOUT_SEC to set its own CPU cap: without forwarding it, the cap
+            # desyncs from this wall-clock timeout and a slow parse dies at 65 s CPU with an empty stderr.
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": package_parent,
+                "PARSE_TIMEOUT_SEC": str(PARSE_TIMEOUT_SEC),
+            },
         )
     except subprocess.TimeoutExpired as exc:
         raise ParseError(f"parsing took longer than {PARSE_TIMEOUT_SEC} seconds") from exc

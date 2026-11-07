@@ -50,7 +50,7 @@ from rag_lab.security.access import (
 )
 from rag_lab.pipeline.graph import workflow
 from rag_lab.pipeline.entry import prepare_pipeline_input
-from rag_lab.pipeline.state import REJECTION_NOTICE
+from rag_lab.lang import REJECTION_NOTICES, detect_language, rejection_notice
 from rag_lab.security.audit import export_events, list_events, record, verify_anchors, verify_chain
 from rag_lab.ops.approve import list_pending_threads
 from rag_lab.storage.checkpointer import close_checkpointer, fetch_checkpoint_threads, open_checkpointer, shared_pool
@@ -112,7 +112,14 @@ def _sign_out(notice: str = "", revoke: bool = False) -> None:
             revoke_sessions(current_user, actor=current_user)
         except Exception:
             pass
-    for key in ("user", "token", "last_seen", "messages", "thread_id", "current_ws", "queue_pick"):
+    # Second-factor material and typed secrets must not outlive the session: the next admin to sign
+    # in on this browser would otherwise see the previous admin's TOTP secret, recovery codes and
+    # pre-filled password.
+    for key in (
+        "user", "token", "last_seen", "messages", "thread_id", "current_ws", "queue_pick",
+        "totp_enrolment", "recovery_codes", "new_user_pass",
+        "login_code", "totp_current_code", "totp_confirm_code",
+    ):
         st.session_state.pop(key, None)
     st.query_params.clear()
     if notice:
@@ -204,7 +211,8 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
     render_citations(state.values.get("citations", []))
     render_degraded(state.values.get("degraded", []))
 
-    if not authorize(user, ws_id, "review") or user == requester or not clearance_covers(user_clearance, req_clearance):
+    if not authorize(user, ws_id, "review") or user == requester:
+        # (Clearance was already checked when this panel was opened: the third condition would be unreachable.)
         if user == requester:
             st.info("Awaiting approval from another reviewer (Separation of Duties). An authorized reviewer can approve here or via CLI: `make review`.")
         else:
@@ -234,7 +242,8 @@ def pending_review_panel(engine, thread_id: str, ws_id: str, user: str) -> bool:
             else:
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": REJECTION_NOTICE,
+                    # The requester reads the notice in their own question's language.
+                    "content": rejection_notice(detect_language(display_q)),
                     "citations": [],
                 })
         st.rerun()
@@ -263,7 +272,8 @@ def thread_messages(thread: dict) -> list[dict]:
     turns = [h for h in thread.get("history", []) if isinstance(h, dict)]
     for turn in turns:
         msgs.append({"role": "user", "content": turn.get("asked") or turn.get("question", "")})
-        msgs.append({"role": "assistant", "content": turn.get("answer") or REJECTION_NOTICE})
+        msgs.append({"role": "assistant", "content": turn.get("answer")
+                     or rejection_notice(detect_language(turn.get("asked") or turn.get("question", "")))})
     last_asked = turns[-1].get("asked") if turns else None
     if thread["paused"] or thread["question"] != last_asked:
         msgs.append({"role": "user", "content": thread["question"]})
@@ -682,9 +692,12 @@ if admin:
             if not clean_name:
                 st.error("Enter a valid alphanumeric workspace name.")
             elif clean_name not in all_workspaces:
-                create_workspace(clean_name, actor=user)
-                st.success(f"Workspace '{clean_name}' created.")
-                st.rerun()
+                created = create_workspace(clean_name, actor=user)
+                if created:
+                    st.success(f"Workspace '{created}' created.")
+                    st.rerun()
+                else:
+                    st.error(f"'{clean_name}' is a reserved name.")
             else:
                 st.warning("A workspace with that name already exists.")
 
@@ -757,7 +770,8 @@ if not paused and st.session_state.messages and st.session_state.messages[-1]["r
     completed_state = engine.get_state(config)
     if completed_state.values and not completed_state.next and completed_state.values.get("generation"):
         gen_text = completed_state.values.get("generation", "")
-        rejected = gen_text == REJECTION_NOTICE
+        # review.py stores a localized notice; every language variant counts as a rejection.
+        rejected = gen_text in REJECTION_NOTICES.values()
         cites = [] if rejected else completed_state.values.get("citations", [])
         deg = [] if rejected else completed_state.values.get("degraded", [])
         telem = {} if rejected else completed_state.values.get("telemetry", {})

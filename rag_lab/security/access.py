@@ -265,6 +265,11 @@ def migrate_policy(policy: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     notes: list[str] = []
     for name, info in policy["users"].items():
         user = {k: v for k, v in info.items() if k != "admin"}
+        # Backfill the identity that revocation depends on: without a uid, _token_version() collapses to ""
+        # and password resets / revoke_sessions never invalidate outstanding tokens.
+        if not user.get("uid"):
+            user["uid"] = secrets.token_hex(8)
+            user["token_version"] = 0
         if name in admins:
             user["role"] = "owner" if name == admins[0] else "admin"
             if "default_permissions" not in user and old_defaults != sorted(ROLE_PERMISSIONS[user["role"]]):
@@ -414,9 +419,6 @@ def _token_mac(body: str) -> str:
     return _b64encode(hmac.new(_signing_key(), b"token:" + body.encode("ascii"), hashlib.sha256).digest())
 
 
-_LAST_POLICY_BY_UID: dict[str, str] = {}
-
-
 def _token_version(user: dict[str, Any] | None) -> str:
     """Identifies one incarnation of an account. It changes when sessions are revoked or the name is reused."""
     if not user or not user.get("uid"):
@@ -429,8 +431,6 @@ def issue_token(username: str, now: float | None = None, path: str | None = None
     try:
         user = load_policy(path)["users"].get(username)
         version = _token_version(user)
-        if user and user.get("uid"):
-            _LAST_POLICY_BY_UID[str(user["uid"])] = str(Path(path or settings.access_policy_path).resolve())
     except PolicyIntegrityError:
         version = ""
     payload = json.dumps(
@@ -457,12 +457,8 @@ def verify_token(token: str, now: float | None = None, path: str | None = None) 
             return ""
         subject = str(payload["sub"])
         user = load_policy(path)["users"].get(subject)
-        if user is None and path is None:
-            uid_part = str(payload.get("tv", "")).split(".", 1)[0]
-            origin_path = _LAST_POLICY_BY_UID.get(uid_part)
-            if origin_path and Path(origin_path).exists():
-                user = load_policy(origin_path)["users"].get(subject)
         if user is None or str(payload.get("tv", "")) != _token_version(user):
+            # An account deleted from the active policy stays deleted: no cross-policy fallback.
             return ""
         return subject
     except (ValueError, KeyError, TypeError, AttributeError, PolicyIntegrityError):
@@ -1324,10 +1320,11 @@ def set_grant(
 ) -> None:
     """Set an account's permissions on one workspace, replacing whatever applied there.
 
-    An empty list is an explicit denial: it overrides the defaults. Use reset_grant to fall back to them.
+    "all" targets every workspace (the everywhere-override), like grant_group does. An empty list is
+    an explicit denial: it overrides the defaults. Use reset_grant to fall back to them.
     """
     name = _normalize_username(username)
-    ws_id = _normalize_workspace(workspace)
+    ws_id = "*" if _is_all(workspace) else _normalize_workspace(workspace)
     perms = _normalize_permissions(permissions)
     who = _authorize_change(actor, path)
 
@@ -1340,9 +1337,12 @@ def set_grant(
 
 
 def reset_grant(username: str, workspace: str, path: str | None = None, actor: str | None = None) -> None:
-    """Remove an account's explicit override on one workspace so the defaults apply there again."""
+    """Remove an account's explicit override on one workspace so the defaults apply there again.
+
+    "all" resets the everywhere-override, symmetric with set_grant("all", ...).
+    """
     name = _normalize_username(username)
-    ws_id = _normalize_workspace(workspace)
+    ws_id = "*" if _is_all(workspace) else _normalize_workspace(workspace)
     who = _authorize_change(actor, path)
 
     def mutate(policy: dict[str, Any]) -> None:

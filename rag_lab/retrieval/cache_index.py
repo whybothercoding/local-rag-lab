@@ -74,7 +74,6 @@ class PartitionIndex:
         """
         if self._last is not None and light_rows == self._last:
             return  # nothing changed since the last sync: one comparison in C instead of a pass in Python
-        self._last = light_rows
         wanted = {key: (rowid, created, bool(reviewed)) for key, rowid, created, reviewed in light_rows}
         keep: list[int] = []
         for i, key in enumerate(self.keys):
@@ -88,6 +87,9 @@ class PartitionIndex:
         loaded: dict[str, tuple[np.ndarray, Any]] = {}
         for start in range(0, len(fresh), _LOAD_CHUNK):
             loaded.update(load(fresh[start:start + _LOAD_CHUNK]))
+        # The fingerprint is recorded only once the rows are loaded: a load that raised must not mark the
+        # partition synced, or the failed rows are never retried (silent permanent cache misses).
+        self._last = light_rows
         for key in fresh:
             if key not in loaded:
                 self._rejected.add((key, wanted[key][0], wanted[key][1]))

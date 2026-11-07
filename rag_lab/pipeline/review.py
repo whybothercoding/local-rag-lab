@@ -88,8 +88,9 @@ def human_in_the_loop_node(state: StateInput) -> dict[str, Any]:
             # An approval with no accountable reviewer is not released.
             approved = False
             review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: no approver identity"]))
-        if approved and review["approver"] == state.get("principal", ""):
-            # Separation of duties: the requester cannot approve their own query.
+        if approved and review["approver"] == principal:
+            # Separation of duties: the requester cannot approve their own query. Compare against the
+            # token-verified identity, never the raw state field, which a resumed checkpoint may lack or carry tampered.
             approved = False
             review["reason"] = "; ".join(filter(None, [review["reason"], "auto-rejected: self-approval"]))
         if approved and not authorize(review["approver"], ws_id, "review"):

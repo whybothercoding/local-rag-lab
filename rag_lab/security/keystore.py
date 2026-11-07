@@ -493,7 +493,12 @@ def key_storage_report(paths: dict[str, Path]) -> list[tuple[str, str]]:
     for name, target in paths.items():
         blob = _bytes_or_none(target)
         if blob is None:
-            where = "the OS keychain" if (settings.key_store != "file" and status.usable) else "its key file"
+            if settings.key_envelope:
+                where = "its key file (envelope-wrapped: KEY_ENVELOPE is set)"
+            elif settings.key_store != "file" and status.usable:
+                where = "the OS keychain"
+            else:
+                where = "its key file"
             lines.append(("OK", f"{name} key: not created yet (it will be created in {where})"))
         elif blob.startswith(POINTER_PREFIX):
             try:

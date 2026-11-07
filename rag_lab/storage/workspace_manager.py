@@ -20,6 +20,9 @@ logger = logging.getLogger("workspace_manager")
 
 # `ws_<id>__build` must stay inside Chroma's 63-character collection name limit.
 _MAX_WORKSPACE_ID = 48
+# "all" is the everywhere-sentinel in grants and the UI: a workspace of that name would be
+# indistinguishable from it, so it is reserved.
+RESERVED_WORKSPACE_IDS = frozenset({"all"})
 
 
 def sanitize_workspace_id(raw_name: str) -> str:
@@ -112,7 +115,7 @@ def discover_knowledge_base_workspaces(base_dir: str | None = None) -> list[Tupl
         if entry.is_symlink() or not entry.is_dir() or entry.name.startswith((".", "_")):
             continue
         ws_id = sanitize_workspace_id(entry.name)
-        if not ws_id:
+        if not ws_id or ws_id in RESERVED_WORKSPACE_IDS:
             continue
         if ws_id in seen:
             logger.warning("Skipping '%s': workspace id '%s' is already used by another folder.", entry.name, ws_id)
@@ -157,6 +160,9 @@ def create_workspace(raw_name: str, actor: str | None = None) -> str:
     ensure_base_dirs()
     ws_id = sanitize_workspace_id(raw_name)
     if not ws_id:
+        return ""
+    if ws_id in RESERVED_WORKSPACE_IDS:
+        logger.warning("Workspace name %r is reserved (it collides with the everywhere-sentinel 'all')", raw_name)
         return ""
 
     # Ensure staging folder exists

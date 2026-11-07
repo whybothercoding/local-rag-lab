@@ -844,3 +844,19 @@ def test_abstention_after_broken_retrieval_goes_to_a_person(mocker, note):
 
 
 
+
+
+def test_granting_and_resetting_all_targets_the_everywhere_override(tmp_path):
+    """"all" is a reserved word, not a workspace id: set_grant("all") writes the everywhere-override
+    (like grant_group), and reset_grant("all") removes it again."""
+    from rag_lab.security.access import add_user, load_policy, reset_grant, set_grant
+
+    policy_path = str(tmp_path / "policy.json")
+    add_user("alice", TEST_PASSWORD, admin=True, path=policy_path)
+    add_user("bob", TEST_PASSWORD, path=policy_path, actor="alice")
+
+    set_grant("bob", "all", ["query"], path=policy_path, actor="alice")
+    assert load_policy(policy_path)["users"]["bob"]["grants"]["*"] == ["query"]
+
+    reset_grant("bob", "all", path=policy_path, actor="alice")
+    assert load_policy(policy_path)["users"]["bob"]["grants"].get("*") is None

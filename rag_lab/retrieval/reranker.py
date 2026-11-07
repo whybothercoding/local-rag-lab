@@ -78,6 +78,8 @@ def rerank_with_status(
         reranker = get_reranker(model_name=model_name, cache_dir=cache_dir)
         docs = [c["content"] for c in candidates]
         scores = list(reranker.rerank(str(query).strip(), docs))
+        if len(scores) != len(docs):
+            raise ValueError(f"cross-encoder returned {len(scores)} scores for {len(docs)} documents")
 
         scored_candidates = []
         for cand, score in zip(candidates, scores):
@@ -117,7 +119,8 @@ def score_pairs(
 ) -> list[float]:
     """Score (query, doc) text pairs using the pinned cross-encoder model.
 
-    Returns raw logits for each document in docs.
+    Returns raw logits for each document in docs, positionally aligned with it: a filtered
+    (empty) document is scored -inf, never by the logit of the document after it.
     Returns an empty list if ENABLE_RERANKER is False, query is empty/whitespace,
     docs contains no valid text, or if scoring fails.
     """
@@ -126,11 +129,17 @@ def score_pairs(
     if not settings.enable_reranker or not query or not str(query).strip() or not docs:
         return []
     try:
-        valid_docs = [str(d).strip() for d in docs if d is not None and str(d).strip()]
-        if not valid_docs:
+        indexed = [(i, str(d).strip()) for i, d in enumerate(docs) if d is not None and str(d).strip()]
+        if not indexed:
             return []
         reranker = get_reranker(model_name=model_name, cache_dir=cache_dir)
-        return [float(s) for s in reranker.rerank(str(query).strip(), valid_docs)]
+        scores = [float(s) for s in reranker.rerank(str(query).strip(), [d for _, d in indexed])]
+        if len(scores) != len(indexed):  # a short answer would silently shift every later score
+            return []
+        aligned = [float("-inf")] * len(docs)
+        for (i, _), score in zip(indexed, scores):
+            aligned[i] = score
+        return aligned
     except Exception as exc:
         logger.warning("Cross-encoder score_pairs failed: %s", exc)
         return []
