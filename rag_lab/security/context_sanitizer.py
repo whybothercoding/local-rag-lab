@@ -116,6 +116,10 @@ def sanitize_chunks(
     Maintains 1-to-1 correspondence between documents and citations. Any chunk
     exhibiting prompt injection signatures is purged from the context.
 
+    A length mismatch is a caller bug: pairing the tail with fabricated citations or empty-string
+    documents would misattribute provenance, so only the aligned prefix is scanned and the mismatch
+    is reported as a dropped violation (visible in telemetry, audit and the degraded warning).
+
     Returns:
         (clean_documents, clean_citations, dropped_violations)
     """
@@ -123,12 +127,9 @@ def sanitize_chunks(
     clean_cites: list[str] = []
     dropped: list[dict[str, Any]] = []
 
-    # Handle cases where lengths might differ defensively
-    max_len = max(len(documents), len(citations))
-    for i in range(max_len):
-        doc = documents[i] if i < len(documents) else ""
-        cite = citations[i] if i < len(citations) else f"[CHUNK-{i}] unknown"
-
+    aligned = min(len(documents), len(citations))
+    for i in range(aligned):
+        doc, cite = documents[i], citations[i]
         is_safe, reason = scan_chunk(doc)
         if is_safe:
             clean_docs.append(doc)
@@ -139,5 +140,12 @@ def sanitize_chunks(
                 "reason": reason or "unknown_violation",
                 "preview": doc[:120],
             })
+
+    if len(documents) != len(citations):
+        dropped.append({
+            "citation": f"[CHUNK-{aligned}] unpaired",
+            "reason": f"length_mismatch: {len(documents)} documents but {len(citations)} citations",
+            "preview": "",
+        })
 
     return clean_docs, clean_cites, dropped

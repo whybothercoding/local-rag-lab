@@ -249,3 +249,39 @@ def test_concurrent_anchor_runs_keep_the_chain_intact(audit_path, tmp_path):
     ok, problems, count = verify_anchors(audit_path, str(anchor_path))
     assert ok, problems
     assert count == 4
+
+
+def test_an_insert_without_a_row_id_raises_before_the_commit(monkeypatch, tmp_path):
+    """The fail-closed contract needs the check before COMMIT: an event that is durably stored but
+    reported as failed would withhold the answer while the audit record exists."""
+    import rag_lab.security.audit as audit
+
+    calls: list[str] = []
+
+    class FakeCursor:
+        lastrowid = None
+
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        in_transaction = True
+
+        def execute(self, *args, **kwargs):
+            calls.append(str(args[0]))
+            return FakeCursor()
+
+        def executescript(self, *args, **kwargs):
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(audit, "_open", lambda *a, **k: FakeConn())
+    with pytest.raises(RuntimeError, match="no row id"):
+        audit.record("query_received", workspace_id="ops", session_id="s", data={}, path=str(tmp_path / "a.db"))
+    assert "COMMIT" not in calls, "nothing may be committed when the insert produced no row"
+    assert "ROLLBACK" in calls, "the un-stored event must be rolled back"

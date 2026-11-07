@@ -199,3 +199,18 @@ def test_pattern_file_scopes_document_only_markup():
     assert len(_INJECTION_PATTERNS) >= 26
     assert scan_user_input("How do I escape <script> tags in HTML?")[0] is True
     assert scan_chunk("<script>alert(1)</script>")[0] is False
+
+
+def test_a_length_mismatch_is_reported_not_papered_over():
+    """Extra documents or citations must not be paired with fabricated provenance ("[CHUNK-N]
+    unknown") or empty-string documents: only the aligned prefix is scanned, and the mismatch
+    itself is reported as a dropped violation."""
+    docs = ["clean one", "clean two", "clean three"]
+    cites = ["[1] a.md", "[2] b.md"]
+    clean_docs, clean_cites, dropped = sanitize_chunks(docs, cites)
+
+    assert clean_docs == ["clean one", "clean two"]
+    assert clean_cites == ["[1] a.md", "[2] b.md"]
+    assert len(dropped) == 1
+    assert dropped[0]["reason"].startswith("length_mismatch: 3 documents but 2 citations")
+    assert "unknown" not in dropped[0]["citation"]

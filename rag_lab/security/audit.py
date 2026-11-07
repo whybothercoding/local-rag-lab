@@ -209,9 +209,11 @@ def record(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (ts, event_type, workspace_id, session_id, subject_value, stored, prev_hash, digest),
         )
-        conn.execute("COMMIT")
         if cursor.lastrowid is None:
+            # Checked before the COMMIT: a row that stored but was reported as failed would invert the
+            # fail-closed contract (the answer is withheld although the event exists).
             raise RuntimeError("audit insert returned no row id")
+        conn.execute("COMMIT")
         return cursor.lastrowid
     except BaseException:
         if conn.in_transaction:
