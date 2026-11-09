@@ -34,22 +34,22 @@ MAX_COMPRESSION_RATIO = 100
 class _HTMLText(HTMLParser):
     """Collect visible HTML text and skip script, style, and noscript blocks."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._skip = 0
         self.parts: list[str] = []
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in {"script", "style", "noscript"}:
             self._skip += 1
 
-    def handle_endtag(self, tag):
+    def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style", "noscript"} and self._skip:
             self._skip -= 1
         if tag in {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "section"}:
             self.parts.append("\n")
 
-    def handle_data(self, data):
+    def handle_data(self, data: str) -> None:
         if self._skip:
             return
         text = data.strip()

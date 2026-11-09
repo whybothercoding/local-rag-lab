@@ -7,6 +7,8 @@ similarity alone misses.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -273,7 +275,12 @@ class KnowledgeGraph:
     def save(self, filepath: Path | str) -> None:
         p = Path(filepath)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        fd, temporary = tempfile.mkstemp(dir=p.parent, prefix=f".{p.stem}-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, p)
 
     @classmethod
     def load(cls, filepath: Path | str) -> KnowledgeGraph:
@@ -284,8 +291,11 @@ class KnowledgeGraph:
 
 
 def get_graph_path(workspace_id: str) -> Path:
+    from rag_lab.storage.workspace_manager import sanitize_workspace_id
+
+    ws_id = sanitize_workspace_id(workspace_id) or "default"
     base = Path(settings.graphs_dir) if hasattr(settings, "graphs_dir") else Path("data/graphs")
-    return base / f"{workspace_id}.json"
+    return base / f"{ws_id}.json"
 
 
 def load_workspace_graph(workspace_id: str) -> KnowledgeGraph:

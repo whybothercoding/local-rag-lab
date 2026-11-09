@@ -464,6 +464,7 @@ def test_expanded_pii_redaction_and_false_positive_protection():
     assert "+44 20 7946 0958" not in redacted
     assert "4532 0151 1283 0366" not in redacted and "[REDACTED_CARD]" in redacted
     assert "DE89370400440532013000" not in redacted and "[REDACTED_IBAN]" in redacted
+    assert redact_pii("IBAN de89370400440532013000") == "IBAN [REDACTED_IBAN]"
     # Plain 10-digit order ID without phone formatting is preserved
     assert "1234567890" in redacted
 

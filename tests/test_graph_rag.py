@@ -56,6 +56,8 @@ def test_knowledge_graph_bidirectional_traversal() -> None:
 
 
 def test_knowledge_graph_serialization(tmp_path: Path) -> None:
+    from rag_lab.retrieval.graph_store import get_graph_path
+
     kg = KnowledgeGraph("export_ws")
     kg.add_relationship("Dr. Smith", "Director", "HOLDS_ROLE", source_chunk="doc_1")
     save_file = tmp_path / "graph.json"
@@ -67,11 +69,30 @@ def test_knowledge_graph_serialization(tmp_path: Path) -> None:
     assert len(loaded.relationships) == 1
     assert loaded.relationships[0].predicate == "HOLDS_ROLE"
 
+    safe_path = get_graph_path("../unsafe/ws_name!")
+    assert ".." not in safe_path.parts
+    assert safe_path.name == "unsafe_ws_name.json"
+
 
 def test_the_sparse_index_refuses_mismatched_lists(tmp_path: Path) -> None:
     """zip() would silently drop the tail chunks; a length mismatch must be refused instead."""
     with pytest.raises(ValueError, match="length"):
         index_sparse_chunks("ws", ["a", "b"], ["one.md"], ["first", "second"], base_dir=str(tmp_path))
+
+
+def test_get_chunks_by_ids_large_batch(tmp_path: Path) -> None:
+    from rag_lab.retrieval.sparse_search import get_chunks_by_ids, index_sparse_chunks
+
+    ws = "batch_ws"
+    ids = [f"c_{i}" for i in range(500)]
+    sources = [f"doc_{i}.txt" for i in range(500)]
+    contents = [f"Content for chunk {i}" for i in range(500)]
+    index_sparse_chunks(ws, ids, sources, contents, base_dir=str(tmp_path))
+
+    fetched = get_chunks_by_ids(ws, ids, base_dir=str(tmp_path))
+    assert len(fetched) == 500
+    assert fetched[0]["id"] == "c_0"
+    assert fetched[499]["id"] == "c_499"
 
 
 def test_an_edge_seen_in_two_chunks_keeps_both_provenances() -> None:

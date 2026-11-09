@@ -21,7 +21,7 @@ _AMKA = re.compile(r"(?<![\w.,-])\d{11}(?![\w.,-])")
 # Swiss 044 123 45 67 / 079.123.45.67; Greek 210 1234567 / 694 123 4567.
 _PHONE_CH = re.compile(r"(?<![\w+.])0\d{2}[ .]\d{3}[ .]\d{2}[ .]\d{2}(?![\w.])")
 _PHONE_GR = re.compile(r"(?<![\w+.])(?:2\d{2}|69\d)(?:[ .-]\d{3}[ .-]?\d{4}|[ .-]\d{7})(?![\w.])")
-_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{3,4}){2,8}(?:[ ]?[A-Z0-9]{1,3})?\b")
+_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{3,4}){2,8}(?:[ ]?[A-Z0-9]{1,3})?\b", re.IGNORECASE)
 
 
 def _luhn_ok(digits: str) -> bool:

@@ -156,7 +156,7 @@ def guardrail_input_node(state: StateInput) -> dict[str, Any]:
 
 def cache_lookup_node(state: StateInput) -> dict[str, Any]:
     t0 = time.perf_counter()
-    query = state.get("sanitized_question", "")
+    query = state.get("original_question") or state.get("sanitized_question", "")
     ws_id = state.get("workspace_id", "default")
     principal = state.get("principal", "") or verify_token(str(state.get("principal_token", "")))
     clearance = get_user_clearance(principal) if principal else "public"
