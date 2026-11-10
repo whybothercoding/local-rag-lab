@@ -14,6 +14,8 @@ Designed for complete data sovereignty, this system operates **100% air-gapped**
 
 ### Architectural Principles & Evaluation Scorecard
 
+Scores are the author's self-assessment, not an external audit; each cites the mechanism and the measurement behind it.
+
 | Pillar | Principle | Score | Architectural Implementation |
 |:---|:---|:---:|:---|
 | **Zero Trust** | **Explicit Node Verification** | **9 / 10** | Tokens, workspace permissions, and dual-control reviewer rules are enforced directly inside graph nodes, never delegated to client state. |
@@ -25,9 +27,9 @@ Designed for complete data sovereignty, this system operates **100% air-gapped**
 | **AI Systems** | **Compound Architecture** | **9 / 10** | Directed acyclic & cyclic LangGraph state machine with explicit retry budgets and decoupled retrieval/grading nodes. |
 | **AI Systems** | **Reproducibility** | **9 / 10** | Pinned ONNX models; fp32 NLI yielding identical cross-entropy scores on arm64 and x86; deterministic extractive baseline. |
 | **AI Systems** | **Doc & Code Fidelity** | **9 / 10** | Automated CI tests enforce that architecture diagrams, Makefile commands, and golden set metrics match codebase reality. |
-| **AI Systems** | **Groundedness & Output Gates**| **8.5 / 10** | Quantitative figure extraction and cross-lingual NLI sentence entailment (`mDeBERTa-v3`) with self-corrective prompt feedback. |
-| **AI Systems** | **Tunability & Feedback Loop** | **8.5 / 10** | Parametric candidate retrieval widths (`RETRIEVAL_*_K`); automated harvesting of reviewer compliance rejections (`make audit-harvest`). |
-| **AI Systems** | **Evaluation Benchmark** | **8.5 / 10** | 189 golden benchmark cases (131 held-out test split) across 4 languages, a messy-document suite (DOCX, XLSX, PDF) and a near-duplicate stress suite that measures the candidate pool with committed reference baselines ([eval/README.md](eval/README.md)). |
+| **AI Systems** | **Groundedness & Output Gates**| **8.5 / 10** | Quantitative figure extraction and cross-lingual NLI sentence entailment (`mDeBERTa-v3`) with self-corrective prompt feedback; claims that name what only a heading states are judged against the heading too. |
+| **AI Systems** | **Tunability & Feedback Loop** | **9 / 10** | Parametric candidate retrieval widths (`RETRIEVAL_*_K`), measured on a 72-chunk near-duplicate stress suite (the defaults hold; a wider pool only doubles latency); automated harvesting of reviewer compliance rejections (`make audit-harvest`). |
+| **AI Systems** | **Evaluation Benchmark** | **9 / 10** | 189 golden benchmark cases (131 held-out test split) across 4 languages, a messy-document suite (DOCX, XLSX, PDF) and a near-duplicate stress suite that measures the candidate pool with committed reference baselines, plus `make eval-llm` runs of the real model on every suite, which found a grader defect the deterministic run could not ([eval/README.md](eval/README.md)). |
 
 *Full security threat model and cryptographic boundaries: see [docs/threat-model.md](docs/threat-model.md).*  
 *Interactive visual guides: see [Beginner Guide](docs/beginner-guide.html) and [Concept Map](docs/concept-map.html).*  
