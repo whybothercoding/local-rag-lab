@@ -93,6 +93,42 @@ def _vocabulary_overlap(hypothesis: str, premise: str) -> float:
     return sum(1 for t in terms if any(same_word(t, w) for w in premise_words)) / len(terms)
 
 
+def _titled(passage: str, hypothesis: str) -> list[str]:
+    """Each sentence prefixed with the headings above it: "Alder office policy. Hotel cap. The hotel cap is 100 EUR."
+
+    Headings are dropped from the plain premises, but a claim may name what only a heading states ("the Alder
+    office"). Only headings written in the passage count, the plain sentence stays a premise too, and a titled
+    one is offered only when the heading supplies words of the claim that the sentence lacks: otherwise it is
+    noise (a contradicted German notice claim scored 0.72 against a premise carrying its heading).
+    """
+    from rag_lab.pipeline.text import split_sentences
+
+    chain: list[tuple[int, str]] = []
+    titled: list[str] = []
+    block: list[str] = []
+
+    def flush() -> None:
+        if chain and block:
+            prefix = ". ".join(title for _, title in chain)
+            for sentence in split_sentences("\n".join(block)):
+                if _vocabulary_overlap(hypothesis, f"{prefix}. {sentence}") > _vocabulary_overlap(hypothesis, sentence):
+                    titled.append(f"{prefix}. {sentence}")
+        block.clear()
+
+    for line in passage.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            flush()
+            level = len(stripped) - len(stripped.lstrip("#"))
+            while chain and chain[-1][0] >= level:
+                chain.pop()
+            chain.append((level, stripped.lstrip("#").strip()))
+        else:
+            block.append(line)
+    flush()
+    return titled
+
+
 def _premises(passages: list[str], hypothesis: str) -> list[str]:
     """Premises for one answer sentence: every source sentence, plus neighbouring pairs that share the
     claim's vocabulary.
@@ -112,6 +148,7 @@ def _premises(passages: list[str], hypothesis: str) -> list[str]:
         body = "\n".join(line for line in passage.splitlines() if not line.lstrip().startswith("#"))
         sentences = split_sentences(body)
         singles += sentences
+        singles += _titled(passage, hypothesis)
         pairs += [f"{a} {b}" for a, b in zip(sentences, sentences[1:])]
     pairs = [p for p in pairs if _vocabulary_overlap(hypothesis, p) >= settings.nli_pair_min_overlap]
     return list(dict.fromkeys(p for p in singles + pairs if p.strip()))

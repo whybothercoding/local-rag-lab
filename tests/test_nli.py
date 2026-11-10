@@ -186,3 +186,11 @@ def test_a_quote_with_a_changed_figure_or_a_short_fragment_still_goes_to_the_mod
     assert sentence_support("A single taxi ride may cost at most 151 EUR.", [passage]) == 0.1
     assert sentence_support("141 EUR.", [passage]) == 0.1  # too short to count as a quotation
     assert len(calls) == 2
+
+
+def test_a_claim_naming_what_only_a_heading_states_has_a_premise():
+    passage = "# Alder office policy\n\n## Hotel cap\nThe hotel cap is 100 EUR per night."
+    premises = _premises([passage], "The hotel cap at the Alder office is 100 EUR.")
+    assert "Alder office policy. Hotel cap. The hotel cap is 100 EUR per night." in premises
+    assert "The hotel cap is 100 EUR per night." in premises
+    assert all(not p.startswith("#") for p in premises)
