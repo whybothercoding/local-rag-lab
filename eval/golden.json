@@ -2062,5 +2062,431 @@
   "workspace": "geneve",
   "question": "Y a-t-il une salle de sport ou un parking pour les employés ?",
   "expect": "abstain"
+ },
+ {
+  "id": "messy-hotel-g5-paris",
+  "split": "test",
+  "workspace": "messy",
+  "question": "What is the hotel cap for grade G5 in Paris?",
+  "expected_sources": [
+   "travel_caps.docx"
+  ],
+  "expected_keywords": [
+   "240"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-hotel-g7-berlin",
+  "split": "test",
+  "workspace": "messy",
+  "question": "What is the hotel cap for grade G7 in Berlin?",
+  "expected_sources": [
+   "travel_caps.docx"
+  ],
+  "expected_keywords": [
+   "260"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-hotel-approval",
+  "split": "test",
+  "workspace": "messy",
+  "question": "Which hotel bookings need approval?",
+  "expected_sources": [
+   "travel_caps.docx"
+  ],
+  "expected_keywords": [
+   "G7",
+   "Paris"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-booking-lead",
+  "split": "test",
+  "workspace": "messy",
+  "question": "How many days ahead must travel be booked?",
+  "expected_sources": [
+   "travel_caps.docx"
+  ],
+  "expected_keywords": [
+   "14"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-freeze-team",
+  "split": "test",
+  "workspace": "messy",
+  "question": "Which team has a hiring freeze?",
+  "expected_sources": [
+   "headcount.xlsx"
+  ],
+  "expected_keywords": [
+   "Support"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-open-roles",
+  "split": "test",
+  "workspace": "messy",
+  "question": "How many open roles does the Platform team have?",
+  "expected_sources": [
+   "headcount.xlsx"
+  ],
+  "expected_keywords": [
+   "3"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-platform-budget",
+  "split": "calibration",
+  "workspace": "messy",
+  "question": "What is the budget for the Platform team?",
+  "expected_sources": [
+   "headcount.xlsx"
+  ],
+  "expected_keywords": [
+   "420"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-pdf-rotation",
+  "split": "test",
+  "workspace": "messy",
+  "question": "How often must passwords be rotated?",
+  "expected_sources": [
+   "security_handbook.pdf"
+  ],
+  "expected_keywords": [
+   "90"
+  ],
+  "expected_pages": [
+   "security_handbook.pdf (p. 2)"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-pdf-incident",
+  "split": "test",
+  "workspace": "messy",
+  "question": "Within how many hours must security incidents be reported?",
+  "expected_sources": [
+   "security_handbook.pdf"
+  ],
+  "expected_keywords": [
+   "24"
+  ],
+  "expected_pages": [
+   "security_handbook.pdf (p. 3)"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-pdf-backup",
+  "split": "calibration",
+  "workspace": "messy",
+  "question": "How long are nightly backups retained?",
+  "expected_sources": [
+   "security_handbook.pdf"
+  ],
+  "expected_keywords": [
+   "35"
+  ],
+  "expected_pages": [
+   "security_handbook.pdf (p. 4)"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-pdf-soc",
+  "split": "test",
+  "workspace": "messy",
+  "question": "What is the SOC desk extension?",
+  "expected_sources": [
+   "security_handbook.pdf"
+  ],
+  "expected_keywords": [
+   "4471"
+  ],
+  "expected_pages": [
+   "security_handbook.pdf (p. 5)"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-mileage-car",
+  "split": "test",
+  "workspace": "messy",
+  "question": "What is the mileage rate for a car?",
+  "expected_sources": [
+   "mileage.pdf"
+  ],
+  "expected_keywords": [
+   "0.42"
+  ],
+  "expected_pages": [
+   "mileage.pdf (p. 1)"
+  ],
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-abstain-meal",
+  "split": "test",
+  "workspace": "messy",
+  "question": "What is the daily meal allowance on business trips?",
+  "expect": "abstain",
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "messy-abstain-laptop",
+  "split": "calibration",
+  "workspace": "messy",
+  "question": "Which laptop model do new hires receive?",
+  "expect": "abstain",
+  "suite": "messy",
+  "lang": "en"
+ },
+ {
+  "id": "stress-alder-hotel-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the hotel cap per night at the Alder office?",
+  "expected_sources": [
+   "alder.md"
+  ],
+  "expected_keywords": [
+   "100"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-birch-mileage-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the monthly mileage cap at the Birch office?",
+  "expected_sources": [
+   "birch.md"
+  ],
+  "expected_keywords": [
+   "108"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-cedar-parking-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the monthly parking subsidy cap at the Cedar office?",
+  "expected_sources": [
+   "cedar.md"
+  ],
+  "expected_keywords": [
+   "116"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-dogwood-meal-allowance",
+  "split": "calibration",
+  "workspace": "stress",
+  "question": "How much is the daily meal allowance at the Dogwood office?",
+  "expected_sources": [
+   "dogwood.md"
+  ],
+  "expected_keywords": [
+   "119"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-elm-taxi-limit",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the maximum cost of a single taxi ride at the Elm office?",
+  "expected_sources": [
+   "elm.md"
+  ],
+  "expected_keywords": [
+   "129"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-fir-training-budget",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the yearly training budget at the Fir office?",
+  "expected_sources": [
+   "fir.md"
+  ],
+  "expected_keywords": [
+   "133"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-ginkgo-hotel-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the hotel cap per night at the Ginkgo office?",
+  "expected_sources": [
+   "ginkgo.md"
+  ],
+  "expected_keywords": [
+   "136"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-hazel-parking-cap",
+  "split": "calibration",
+  "workspace": "stress",
+  "question": "What is the monthly parking subsidy cap at the Hazel office?",
+  "expected_sources": [
+   "hazel.md"
+  ],
+  "expected_keywords": [
+   "146"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-ironwood-mileage-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the monthly mileage cap at the Ironwood office?",
+  "expected_sources": [
+   "ironwood.md"
+  ],
+  "expected_keywords": [
+   "150"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-juniper-taxi-limit",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the maximum cost of a single taxi ride at the Juniper office?",
+  "expected_sources": [
+   "juniper.md"
+  ],
+  "expected_keywords": [
+   "159"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-larch-meal-allowance",
+  "split": "test",
+  "workspace": "stress",
+  "question": "How much is the daily meal allowance at the Larch office?",
+  "expected_sources": [
+   "larch.md"
+  ],
+  "expected_keywords": [
+   "161"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-maple-training-budget",
+  "split": "calibration",
+  "workspace": "stress",
+  "question": "What is the yearly training budget at the Maple office?",
+  "expected_sources": [
+   "maple.md"
+  ],
+  "expected_keywords": [
+   "169"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-dogwood-parking-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the monthly parking subsidy cap at the Dogwood office?",
+  "expected_sources": [
+   "dogwood.md"
+  ],
+  "expected_keywords": [
+   "122"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-ginkgo-taxi-limit",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the maximum cost of a single taxi ride at the Ginkgo office?",
+  "expected_sources": [
+   "ginkgo.md"
+  ],
+  "expected_keywords": [
+   "141"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-juniper-hotel-cap",
+  "split": "test",
+  "workspace": "stress",
+  "question": "What is the hotel cap per night at the Juniper office?",
+  "expected_sources": [
+   "juniper.md"
+  ],
+  "expected_keywords": [
+   "154"
+  ],
+  "suite": "stress",
+  "lang": "en"
+ },
+ {
+  "id": "stress-maple-meal-allowance",
+  "split": "calibration",
+  "workspace": "stress",
+  "question": "How much is the daily meal allowance at the Maple office?",
+  "expected_sources": [
+   "maple.md"
+  ],
+  "expected_keywords": [
+   "167"
+  ],
+  "suite": "stress",
+  "lang": "en"
  }
 ]

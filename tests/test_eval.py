@@ -10,6 +10,7 @@ from rag_lab.ops.eval_metrics import (
     context_precision,
     context_recall,
     keyword_recall,
+    page_accuracy,
     summarize,
 )
 
@@ -19,6 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_cited_sources_strips_chunk_ids():
     citations = ["[engineering_0_0_ab12] deployments.md", "[engineering_1_0_cd34] rollback.md"]
     assert cited_sources(citations) == ["deployments.md", "rollback.md"]
+
+
+def test_page_accuracy_needs_every_expected_page_cited():
+    cites = ["[w_0_1_ab] a.pdf (p. 2)", "[w_0_2_cd] a.pdf (p. 5)"]
+    assert page_accuracy(cites, ["a.pdf (p. 2)"]) == 1.0
+    assert page_accuracy(cites, ["a.pdf (p. 2)", "a.pdf (p. 3)"]) == 0.5
+    assert page_accuracy(["[w_0_1_ab] a.pdf"], ["a.pdf (p. 2)"]) == 0.0  # a citation without a page does not count
+    assert page_accuracy(cites, []) == 1.0
 
 
 def test_cited_sources_strips_the_pdf_page():
@@ -142,6 +151,9 @@ def test_golden_cases_are_well_formed():
                 assert (ROOT / "eval" / "corpus" / case["workspace"] / source).is_file(), (case["id"], source)
             for keyword in case["expected_keywords"]:
                 assert isinstance(keyword, str) or (isinstance(keyword, list) and all(isinstance(k, str) for k in keyword))
+        for label in case.get("expected_pages", []):
+            file, _, page = label.partition(" (p. ")
+            assert file in case["expected_sources"] and page.rstrip(")").isdigit(), (case["id"], label)
         if case.get("expect") in ("fresh", "cached"):
             assert case.get("setup"), f"{case['id']}: a cache case needs an earlier question"
         if case["suite"] == "conversation":

@@ -16,6 +16,23 @@ def cited_sources(citations: list[str]) -> list[str]:
     return sources
 
 
+def cited_labels(citations: list[str]) -> list[str]:
+    """Label of each citation, page included: '[chunk_id] file.pdf (p. 3)' gives 'file.pdf (p. 3)'."""
+    labels = []
+    for citation in citations:
+        match = _CITATION.match(citation.strip())
+        labels.append((match.group(1) if match else citation).strip())
+    return labels
+
+
+def page_accuracy(citations: list[str], expected_pages: list[str]) -> float:
+    """Share of the expected 'file.pdf (p. N)' labels that the answer cites."""
+    if not expected_pages:
+        return 1.0
+    cited = set(cited_labels(citations))
+    return sum(1 for label in expected_pages if label in cited) / len(expected_pages)
+
+
 def context_recall(cited: list[str], expected: list[str]) -> float:
     """Share of the expected source files that were retrieved."""
     if not expected:
@@ -70,6 +87,8 @@ def summarize(results: list[dict]) -> dict:
         "answer_rate": mean([0.0 if r["abstained"] else 1.0 for r in answerable]),
         "retrieval_recall": mean([r.get("context_recall") for r in answerable]),
         "context_precision": mean([r.get("context_precision") for r in answerable]),
+        # Only cases that name expected pages (PDF fixtures): does the citation carry the right page?
+        "page_accuracy": mean([r.get("page_accuracy") for r in answerable]),
         "keyword_recall": mean([r.get("keyword_recall") for r in answerable]),
         "groundedness": mean([r.get("groundedness") for r in answerable]),
         # Share of answers whose every claim is entailed by a retrieved passage (rag_lab.retrieval.nli).

@@ -1,0 +1,76 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R] /Count 5 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 400] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+5 0 obj
+<< /Length 0 >>
+stream
+
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 400] /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+7 0 obj
+<< /Length 103 >>
+stream
+BT /F1 12 Tf 20 360 Td 18 TL (Password rotation) Tj T* (Passwords must be rotated every 90 days.) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 400] /Contents 9 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+9 0 obj
+<< /Length 117 >>
+stream
+BT /F1 12 Tf 20 360 Td 18 TL (Incident reporting) Tj T* (Report security incidents to the SOC within 24 hours.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 400] /Contents 11 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+11 0 obj
+<< /Length 94 >>
+stream
+BT /F1 12 Tf 20 360 Td 18 TL (Backups) Tj T* (Nightly backups are retained for 35 days.) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 400] /Contents 13 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+13 0 obj
+<< /Length 98 >>
+stream
+BT /F1 12 Tf 20 360 Td 18 TL (Contacts) Tj T* (The SOC desk is reachable on extension 4471.) Tj ET
+endstream
+endobj
+xref
+0 14
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000141 00000 n 
+0000000211 00000 n 
+0000000337 00000 n 
+0000000386 00000 n 
+0000000512 00000 n 
+0000000666 00000 n 
+0000000792 00000 n 
+0000000960 00000 n 
+0000001088 00000 n 
+0000001233 00000 n 
+0000001361 00000 n 
+trailer
+<< /Size 14 /Root 1 0 R >>
+startxref
+1510
+%%EOF

@@ -5,7 +5,7 @@ Builds its own index from eval/corpus/ under eval/out/ and runs the real LangGra
 store is redirected into eval/out/ before the project imports load, so the evaluation never reads or
 writes production data.
 
-Cases carry a `suite` (en, multilingual, conversation) and a `lang` (question language). Each suite
+Cases carry a `suite` (en, multilingual, conversation, messy, stress) and a `lang` (question language). Each suite
 has its own gates, measured on its held-out test split; the calibration split is for choosing
 thresholds. A suite whose gates are None is measured and reported but not gated yet (see SUITE_GATES).
 
@@ -38,6 +38,7 @@ from rag_lab.ops.eval_metrics import (  # pure functions: importing them loads n
     context_precision,
     context_recall,
     keyword_recall,
+    page_accuracy,
     summarize,
 )
 
@@ -115,10 +116,32 @@ CONVERSATION_THRESHOLDS = {
     "groundedness": 0.5,
     "entailment_rate": 0.9,
 }
+# Non-Markdown fixtures (DOCX table, sparse XLSX, PDFs with a blank first page): the ingestion failure modes.
+# Strict on purpose: the facts are single figures in a handful of files, so a miss means a parser regression.
+MESSY_THRESHOLDS = {
+    "answer_rate": 1.0,
+    "retrieval_recall": 1.0,
+    "keyword_recall": 1.0,
+    "page_accuracy": 1.0,
+    "groundedness": 0.5,
+    "abstention_accuracy": 1.0,
+    "entailment_rate": 0.9,
+}
+# 12 near-identical regional files (eval/build_stress_corpus.py): the only suite where the candidate pool
+# (RETRIEVAL_*_K) can decide whether the right chunk reaches the answer. See eval/README.md.
+STRESS_THRESHOLDS = {
+    "answer_rate": 0.9,
+    "retrieval_recall": 0.9,
+    "keyword_recall": 0.9,
+    "groundedness": 0.5,
+    "entailment_rate": 0.9,
+}
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
     "multilingual": MULTILINGUAL_THRESHOLDS,
     "conversation": CONVERSATION_THRESHOLDS,
+    "messy": MESSY_THRESHOLDS,
+    "stress": STRESS_THRESHOLDS,
 }
 # Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
 LLM_JUDGE_MIN = float(os.getenv("EVAL_LLM_JUDGE_MIN", "0.8"))
@@ -129,7 +152,7 @@ JUDGE_PROMPT = (
     "different languages. Reply with exactly one word: yes or no."
 )
 
-WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens")
+WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens", "messy", "stress")
 
 
 def seed_policy() -> None:
@@ -276,10 +299,14 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         result["context_recall"] = context_recall(sources, expected_sources)
         result["context_precision"] = context_precision(sources, expected_sources)
         result["keyword_recall"] = keyword_recall(answer, keywords)
+        expected_pages = case.get("expected_pages", [])
+        if expected_pages:
+            result["page_accuracy"] = page_accuracy(citations, expected_pages)
         result["groundedness"] = telemetry.get("groundedness_ratio")
         result["nli_supported"] = telemetry.get("nli_supported")
         result["passed"] = (
             result["context_recall"] == 1.0 and result["keyword_recall"] == 1.0 and not result["abstained"]
+            and result.get("page_accuracy", 1.0) == 1.0
         )
         if judge_llm is not None and not result["abstained"]:
             result["judge_supported"] = judge_support(judge_llm, values.get("documents", []), answer)

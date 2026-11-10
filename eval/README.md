@@ -7,8 +7,8 @@ Everything runs locally: a fresh index is built in `eval/out/`, and no productio
 
 - `corpus/` holds synthetic policy documents in six workspaces: `engineering`, `finance`, `hr` (English),
   `zurich` (German, with one confidential file), `geneve` (French), and `athens` (Greek).
-- `golden.json` has 159 cases. Each case has:
-  - `suite`: `en` (50), `multilingual` (98: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups).
+- `golden.json` has 189 cases. Each case has:
+  - `suite`: `en` (50), `multilingual` (98: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups), `messy` (14: DOCX, XLSX and PDF fixtures, below), `stress` (16: near-duplicate files, below).
   - `lang`: the question's language (`en`, `de`, `fr`, `el`). Cross-lingual cases ask in one language about documents in another.
   - `split`: `calibration` chooses thresholds; `test` is held out and gated.
   - `expect`: `answer` (default), `abstain`, `blocked` (prompt injection), `denied` (no grant), `fresh` (a negated or
@@ -17,6 +17,38 @@ Everything runs locally: a fresh index is built in `eval/out/`, and no productio
     conversations, sharing only the cache.
   - `expected_keywords`: facts the answer must contain; a list inside the list accepts any alternative, so an answer
     in the document's or the question's language both count (`["montag", "monday"]`).
+
+## The `messy` suite: non-Markdown documents
+
+`corpus/messy/` holds a Word table with an empty cell, a spreadsheet with sparse rows, a PDF whose first page is blank and a
+PDF table that flattens to one line per row (regenerate with `python eval/build_messy_corpus.py`). Every
+other suite reads clean Markdown, so without this one a parser regression would pass every gate. It is gated strictly (answer,
+recall, keywords, abstention and `page_accuracy` all 1.0): a case may name `expected_pages` (`"file.pdf (p. 3)"`), and the answer
+must cite exactly those labels. It found a real defect on its first run: the extractive answerer quoted a whole table for one
+cell, and the groundedness check then rejected it (entailment 0.5), so a table answer waited for review. Table rows are now
+quoted one at a time. Known limits it does not cover: scanned PDFs (refused at ingest), PDF tables with multi-line cells.
+
+## The `stress` suite: does the candidate pool matter?
+
+`corpus/stress/` is 12 regional policy files with the same six limits each (72 chunks that differ in a name and a unique figure;
+regenerate with `python eval/build_stress_corpus.py`). The ordinary corpus has 3-6 files per workspace, so every chunk always fits
+the candidate pool and `RETRIEVAL_*_K` cannot affect a result: a wide pool (20+20 -> 15 -> 5) and the default scored identically
+on every other suite. Here a question about one region and one limit competes with 11 other regions and 5 other limits.
+
+| Pool (dense + sparse -> fused -> final) | recall | keywords | entailment | median latency, one noisy run each |
+|---|---|---|---|---|
+| 1 + 1 -> 1 -> 1 | 0.92 | 0.92 | - | - |
+| 2 + 2 -> 3 -> 1 | 1.00 | 1.00 | - | - |
+| 5 + 5 -> 8 -> 3 (default) | 1.00 | 1.00 | 1.00 | 158 ms |
+| 10 + 10 -> 12 -> 3 | 1.00 | 1.00 | 1.00 | 250 ms |
+| 20 + 20 -> 15 -> 5 | 1.00 | 1.00 | 1.00 | 360 ms |
+
+Decision: the default stays. Hybrid retrieval plus the reranker finds the exact chunk even among near-duplicates, and a wider pool
+only adds latency (2x at 20+20). The suite starts to fail only at a pool of one, so it detects a pool set far too low, not a
+marginal one; raise K if a real corpus has far more near-duplicates than this. It also found two defects outside retrieval,
+both fixed: the extractive answerer ranked sentences without their heading, so "the Elm office" could not separate identical
+sentences from other regions (it quoted two regions' figures); and the NLI model scored a sentence quoted word for word from its
+source at 0.55, below the 0.7 bar, so a verbatim quote is now accepted without asking the model.
 
 ## Running
 
@@ -69,13 +101,15 @@ retrieval recall, keyword recall >= 0.7, groundedness and entailment).
 | conversation | llm | 1.00 | 1.00 | 0.89 | - | - | - | 0.89 |
 
 The tables above are the record of their milestones, measured on an earlier, smaller `golden.json`. A deterministic
-`make eval` on the current 159 cases (test split, 2026-11-05) gives:
+`make eval` on the current 189 cases (test split, 2026-11-10) gives:
 
 | Suite | Mode | answer | recall | keywords | abstain | security | cache | judge |
 |---|---|---|---|---|---|---|---|---|
 | en | deterministic | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | - |
 | multilingual | deterministic | 0.98 | 0.98 | 0.84 | 1.00 | 1.00 | 1.00 | - |
 | conversation | deterministic | 1.00 | 1.00 | 0.78 | - | - | - | - |
+| messy | deterministic | 1.00 | 1.00 | 1.00 | 1.00 | - | - | - |
+| stress | deterministic | 1.00 | 1.00 | 1.00 | - | - | - | - |
 
 A cache case is inconclusive when its earlier answer was never cached (a real model's terse answer went to
 review instead), so nothing could have been reused. Deterministic runs require every cache case to be conclusive.
