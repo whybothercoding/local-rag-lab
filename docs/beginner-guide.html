@@ -591,6 +591,11 @@ clearance: confidential
       <div class="card"><h3>Folder + sync</h3><p>Copy files to <code>knowledge_base/&lt;workspace&gt;/</code>, then run <code>make sync ADMIN=&lt;you&gt;</code>. Best for many files.</p></div>
       <div class="card"><h3>Web upload</h3><p>Administrators only: sidebar <b>Add Files to [workspace]</b>, choose files, press <b>Index into</b>. Indexed at once.</p></div>
     </div>
+    <h3>What reads well, and what does not</h3>
+    <div class="two">
+      <div class="card"><h3>Handled well</h3><p>Markdown and plain text. Word files keep their order and headings, so a piece knows its section. Tables in Word, PowerPoint, Excel and CSV are stored one row per line with the column names on every row (<code>Grade: G5 | Hotel cap EUR: 240</code>), so a number never loses what it measures. PDFs with a text layer: each answer cites <code>file.pdf (p. 12)</code>.</p></div>
+      <div class="card"><h3>Limits to know</h3><p>PDFs are plain text extraction: no OCR, so a scanned PDF is refused (and blank pages inside a PDF are skipped with a note). Tables inside a PDF come out as running text, and multi-column pages can read out of order. A sentence that crosses a PDF page break is split there. Headings are only recognised in Markdown and Word. Images and charts are ignored. For a scanned or table-heavy PDF, run OCR first or export the table to Excel or CSV.</p></div>
+    </div>
     <p>Each sync prints a note for every skipped file and every piece withheld because it contained planted instructions. Read them. Changed the models with <code>MODEL_PROFILE</code>? Run <code>make models PROFILE=…</code>, then <code>make sync ADMIN=&lt;you&gt; FORCE=1</code>.</p>
 
     <div class="callout warn" id="modes">
@@ -617,7 +622,7 @@ clearance: confidential
           <tr><td>Answers start "Based on available documentation:"</td><td>The chat model is not reachable.</td><td><code>make ollama-pull</code>, keep <code>ollama serve</code> running, then <code>make status</code>.</td></tr>
           <tr><td>"Degraded answer: not_indexed …"</td><td>The workspace was never synced.</td><td><code>make sync ADMIN=&lt;admin&gt; WS=&lt;ws&gt;</code></td></tr>
           <tr><td>"Degraded answer" about a model mismatch, and every answer waits for review</td><td>The models changed since the index was built. Dense search is off for that workspace, and even a "not found" reply waits for a reviewer.</td><td><code>make status</code> marks the workspace <code>[!!]</code>. Then run <code>make sync ADMIN=&lt;admin&gt; FORCE=1</code>.</td></tr>
-          <tr><td>A document never appears in answers</td><td>Unsupported format, bad clearance tag, asker's clearance too low, or a piece withheld for planted instructions.</td><td>Read the notes <code>make sync</code> prints, fix the file, sync again.</td></tr>
+          <tr><td>A document never appears in answers</td><td>Unsupported format, a scanned PDF with no text layer, bad clearance tag, asker's clearance too low, or a piece withheld for planted instructions.</td><td>Read the notes <code>make sync</code> prints, fix the file, sync again.</td></tr>
           <tr><td>Signed out unexpectedly</td><td>30 minutes idle, or the 8-hour session limit.</td><td>Sign in again.</td></tr>
           <tr><td>A <code>make</code> command refuses to run</td><td>Once the first administrator exists, commands that change users or workspaces need <code>ADMIN=&lt;admin&gt;</code>.</td><td>Add <code>ADMIN=&lt;your account&gt;</code> to the command.</td></tr>
         </tbody>

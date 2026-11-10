@@ -262,3 +262,37 @@ def test_xlsx_sparse_rows_keep_columns_aligned(tmp_path: Path):
     text = extract_text_from_file(path)
     assert "Team: Ops | Hard limit: 900" in text
     assert "Soft limit: 900" not in text
+
+
+def make_pdf(path: Path, pages: list[str]) -> None:
+    """Write a minimal text PDF, one page per entry ("" is a blank page with no text layer)."""
+    objects: list[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>"]
+    kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
+    objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode())
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for i, text in enumerate(pages):
+        stream = f"BT /F1 12 Tf 20 100 Td ({text}) Tj ET".encode() if text else b""
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Contents {5 + 2 * i} 0 R "
+            f"/Resources << /Font << /F1 3 0 R >> >> >>".encode()
+        )
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    path.write_bytes(out)
+
+
+def test_pdf_pages_are_separated_and_blank_pages_keep_their_number(tmp_path: Path):
+    path = tmp_path / "report.pdf"
+    make_pdf(path, ["", "Findings on page two.", "", "Closing on page four."])
+    pages = extract_text_from_file(path).split("\f")
+    assert len(pages) == 4  # the leading blank cover page is not stripped away
+    assert pages[0] == "" and pages[1] == "Findings on page two."
+    assert pages[3] == "Closing on page four."

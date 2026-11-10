@@ -14,6 +14,7 @@ import time
 from rag_lab.config import settings
 from rag_lab.pipeline import llm_provider
 from rag_lab.pipeline.llm_provider import DeterministicContextLLM
+from rag_lab.retrieval.citation import source_label
 from rag_lab.retrieval.embedding_provider import EmbeddingUnavailableError
 from rag_lab.retrieval.embedding_provider import embedding_fingerprint
 from rag_lab.retrieval.embedding_provider import get_embedding_model
@@ -158,7 +159,7 @@ def hybrid_retrieval_node(state: StateInput) -> dict[str, Any]:
             dense_candidates.append({
                 "id": hit.id,
                 "content": hit.document,
-                "citation": f"[{hit.id}] {hit.metadata.get('source', 'document')}",
+                "citation": f"[{hit.id}] {source_label(hit.metadata.get('source', 'document'), hit.metadata.get('page'))}",
                 "similarity": hit.similarity,
             })
     except WorkspaceNotIndexed:

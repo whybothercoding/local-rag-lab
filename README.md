@@ -295,7 +295,8 @@ make sync ADMIN=alice WS=accounting DIR=./knowledge_base/accounting FORCE=1
 * Workspaces are automatically sanitized (e.g., `Accounting & Tax` becomes `accounting_tax`).
 * Generates Chroma collections (`ws_<workspace_id>`) and SQLite FTS5 keyword indexes (`bm25_indices/<workspace_id>.db`).
 * Idempotent: unchanged files are automatically skipped based on SHA-256 manifests (a parser or chunker change bumps `CHUNKER_VERSION`, so the next sync re-indexes everything once).
-* Tables (DOCX, PPTX, XLSX, CSV) are written one row per line with the column names on every row (`Grade: G5 | Hotel cap EUR: 240`), so a chunk holding one row still says what each value is. DOCX keeps paragraphs and tables in document order and turns Heading styles into `#` lines, so chunks carry their section. PDFs are plain text extraction: no layout or OCR, so scanned or multi-column PDFs index poorly.
+* Tables (DOCX, PPTX, XLSX, CSV) are written one row per line with the column names on every row (`Grade: G5 | Hotel cap EUR: 240`), so a chunk holding one row still says what each value is. DOCX keeps paragraphs and tables in document order and turns Heading styles into `#` lines, so chunks carry their section. PDFs are chunked page by page, so every chunk and citation carries its page (`annual.pdf (p. 12)`, the `page` metadata field); a sentence that crosses a page break is split there. A PDF with no text layer is refused with a note, and blank pages inside one are skipped with a warning.
+* **Limits (by design, to stay simple and offline):** PDF extraction is plain text through `pypdf`: no OCR, no layout analysis, so tables inside a PDF flatten to running text and multi-column pages can read out of order. Headings are recognised in Markdown and DOCX only. Images, charts and legacy `.doc`/`.xls`/`.ppt` are not read. For those, run OCR first or export the table to XLSX/CSV.
 
 ---
 

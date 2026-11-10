@@ -21,6 +21,10 @@ def test_cited_sources_strips_chunk_ids():
     assert cited_sources(citations) == ["deployments.md", "rollback.md"]
 
 
+def test_cited_sources_strips_the_pdf_page():
+    assert cited_sources(["[reports_0_1_ab12] annual.pdf (p. 12)"]) == ["annual.pdf"]
+
+
 def test_context_recall_and_precision():
     cited = ["deployments.md", "rollback.md", "incidents.md"]
     assert context_recall(cited, ["deployments.md"]) == 1.0

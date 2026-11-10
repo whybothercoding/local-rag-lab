@@ -23,6 +23,7 @@ class ParseError(ValueError):
 PARSE_TIMEOUT_SEC = int(os.getenv("PARSE_TIMEOUT_SEC", "60"))
 PARSER_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
 MAX_PDF_PAGES = 1000
+PDF_PAGE_BREAK = "\f"
 ZIP_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx", ".xlsm", ".odt", ".epub"})
 # Formats whose whole "parser" is a decode: there is no structure to exploit, so no sandbox is needed. Each used
 # to cost a Python start-up (about 43 ms) in a child process, which dominated re-syncs of unchanged workspaces.
@@ -128,12 +129,9 @@ def _extract_pdf(file_path: Path) -> str:
         raise ValueError("password-protected PDF; remove the password and upload it again")
     if len(reader.pages) > MAX_PDF_PAGES:
         raise ParseError(f"PDF has more than {MAX_PDF_PAGES} pages")
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append(text.strip())
-    return "\n\n".join(pages)
+    # One entry per page, blank pages included, joined by a form feed: the ingester splits on it to number chunks,
+    # so a blank cover page must not shift every later page number.
+    return PDF_PAGE_BREAK.join((page.extract_text() or "").strip() for page in reader.pages)
 
 
 def _extract_docx(file_path: Path) -> str:
@@ -325,7 +323,8 @@ def _extract_in_process(file_path: Path) -> str:
         return ""
     if suffix in ZIP_SUFFIXES:
         _check_archive(file_path)
-    return parser(file_path).strip()
+    # strip() would also eat a form feed, so leading blank PDF pages would vanish and shift page numbers.
+    return parser(file_path).strip(" \t\r\n")
 
 
 def _limit_child_resources() -> None:

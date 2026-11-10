@@ -2,6 +2,8 @@
 import re
 from statistics import median
 
+from rag_lab.retrieval.citation import source_file
+
 _CITATION = re.compile(r"^\[[^\]]+\]\s*(.*)$")
 
 
@@ -10,7 +12,7 @@ def cited_sources(citations: list[str]) -> list[str]:
     sources = []
     for citation in citations:
         match = _CITATION.match(citation.strip())
-        sources.append((match.group(1) if match else citation).strip())
+        sources.append(source_file((match.group(1) if match else citation).strip()))
     return sources
 
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_lab.config import settings
+from rag_lab.retrieval.citation import source_file
 from rag_lab.security.vault import anchor_mac, base_mac, chain_mac, open_text, seal_text, subject_tag
 
 GENESIS_HASH = "0" * 64
@@ -325,7 +326,7 @@ def harvest_feedback(
         data = item.get("data", {})
         q = data.get("question") or ""
         seq = item.get("seq", 0)
-        cites = [c.split("] ")[-1] for c in data.get("citations", []) if "]" in c] or data.get("citations", [])
+        cites = [source_file(c.split("] ")[-1]) for c in data.get("citations", []) if "]" in c] or data.get("citations", [])
         candidates.append({
             "id": f"harvested-feedback-{seq}",
             "split": "test",

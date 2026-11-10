@@ -251,7 +251,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
       <span><b>5 + 5 → 8 → 3</b> search funnel (configurable)</span>
       <span><b>2 / 1</b> search / write retries</span>
       <span><b>159</b> golden test cases</span>
-      <span><b>1008</b> tests</span>
+      <span><b>1012</b> tests</span>
     </div>
   </div>
 
@@ -673,7 +673,8 @@ var G = [
   { c: 'core', t: 'Intent routing', d: 'A reception desk: small talk gets a canned reply, real questions go to the library.', x: 'Word lists, then similarity to chitchat examples for messages with three or fewer content words. The threshold is deliberately strict, because a real question routed to chat never reaches retrieval.', f: 'pipeline/entry.py' },
   { c: 'core', t: 'Contextualization', d: 'Turns "and the deadline?" into a complete question.', x: 'Rewrites a follow-up using released turns only, then re-scans and re-masks it. The cache key, retrieval and grading use this standalone form.', f: 'pipeline/context.py' },
 
-  { c: 'find', t: 'Chunking', d: 'Cutting documents into index cards so the search can find the right card, not the whole book.', x: 'Split on markdown headings, then by size: 600 characters with 100 overlap. Each chunk begins with the headings above it, so a piece from deep in a long section still knows its topic.', f: 'ingestion/ingest.py' },
+  { c: 'find', t: 'Chunking', d: 'Cutting documents into index cards so the search can find the right card, not the whole book.', x: 'Split on markdown headings, then by size: 600 characters with 100 overlap. Each chunk begins with the headings above it, so a piece from deep in a long section still knows its topic. PDFs are chunked page by page, so a citation reads file.pdf (p. 12); a sentence that crosses a page break is split there.', f: 'ingestion/ingest.py' },
+  { c: 'find', t: 'Document parsing', d: 'Turning files into clean text before anything else happens: most RAG failures start here.', x: 'Word keeps paragraphs and tables in order and turns Heading styles into # lines. Every table row (Word, PowerPoint, Excel, CSV) is written with its column names, so an isolated chunk still says what each value is. Limits: PDFs are plain text extraction, with no OCR (a scanned PDF is refused, blank pages inside one are skipped with a note), tables in PDFs flatten to running text, multi-column pages can read out of order, images are ignored.', f: 'ingestion/parsers.py' },
   { c: 'find', t: 'Embedding', d: 'Turns text into a list of numbers so that similar meanings land close together.', x: 'In-process ONNX models chosen by MODEL_PROFILE: multilingual (paraphrase-multilingual-MiniLM-L12-v2, default), multilingual-large (multilingual-e5-large, about 4.5 GB) or en (bge-small-en-v1.5). Similarity is cosine.', f: 'retrieval/embedding_provider.py' },
   { c: 'find', t: 'Vector store', d: 'A filing cabinet sorted by meaning instead of by letter.', x: 'One VectorStore interface: ChromaDB by default, Qdrant and pgvector opt in. Every query is filtered by clearance on the server, then passes guard_hits(). Scores stay on Chroma\'s 1 - distance cosine scale because the gates are calibrated on it.', f: 'storage/vector_store.py' },
   { c: 'find', t: 'Keyword search (BM25)', d: 'Ctrl+F with good ranking: finds exact words, codes and names that meaning-search can blur.', x: 'SQLite FTS5 with BM25 ranking and the trigram tokenizer (keyword-only recall@3 on 98 answerable cases: 86 against 80 for unicode61/porter). One database per workspace.', f: 'retrieval/sparse_search.py' },

@@ -34,7 +34,8 @@ from rag_lab.retrieval.embedding_provider import (
     get_embedding_model,
     stored_fingerprint,
 )
-from rag_lab.ingestion.parsers import SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
+from rag_lab.ingestion.parsers import PDF_PAGE_BREAK, SUPPORTED_EXTENSIONS, extract_text_from_file, unsupported_reason
+from rag_lab.retrieval.citation import source_label
 from rag_lab.retrieval.sparse_search import delete_sparse_index, has_sparse_index, index_sparse_chunks
 from rag_lab.storage.vector_store import get_vector_store
 from rag_lab.storage.workspace_manager import ensure_base_dirs, sanitize_workspace_id
@@ -67,8 +68,8 @@ class IngestResult:
 
 # Bump when chunk text changes for the same input, so unchanged files are still re-indexed.
 # Bump when parser or chunker output changes: every workspace then re-indexes its unchanged files on the next sync.
-# v2: DOCX in document order with headings, table rows labelled by column.
-CHUNKER_VERSION = "headings-v2"
+# v2: DOCX in document order with headings, table rows labelled by column. v3: PDFs chunked per page.
+CHUNKER_VERSION = "headings-v3"
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 
 
@@ -266,7 +267,7 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
             continue
         try:
             raw_content = extract_text_from_file(file_path)
-            if not raw_content:
+            if not raw_content.replace(PDF_PAGE_BREAK, "").strip():
                 skipped.append(f"{relative}: no extractable text (a scanned PDF has no text layer)")
                 continue
             clearance, content = _extract_doc_clearance(raw_content)
@@ -283,6 +284,24 @@ def _collect_documents(source_path: Path) -> tuple[list[dict], list[str]]:
             "doc_hash": hashlib.sha256(f"{clearance}\0{raw_content}".encode("utf-8")).hexdigest(),
         })
     return raw_docs, skipped
+
+
+def _chunks_with_pages(source: str, content: str, splitter) -> tuple[list[tuple[str, int | None]], list[int]]:
+    """Chunks with the page each came from (PDFs only), plus the pages that had no text.
+
+    A PDF is chunked page by page so a citation names an exact page; a sentence that runs across a page
+    break is therefore split there. Other formats have no pages.
+    """
+    if not source.lower().endswith(".pdf"):
+        return [(chunk, None) for chunk in chunk_document(content, splitter)], []
+    pieces: list[tuple[str, int | None]] = []
+    blank: list[int] = []
+    for number, page in enumerate(content.split(PDF_PAGE_BREAK), 1):
+        if not page.strip():
+            blank.append(number)
+            continue
+        pieces.extend((chunk, number) for chunk in chunk_document(page, splitter))
+    return pieces, blank
 
 
 def ingest_workspace(
@@ -407,7 +426,13 @@ def ingest_workspace(
     for doc_idx, doc in enumerate(raw_docs):
         doc_hash_short = doc["doc_hash"][:12]
         doc_clearance = doc.get("clearance", DEFAULT_CLEARANCE)
-        for chunk_idx, chunk_text in enumerate(chunk_document(doc["content"], splitter)):
+        pieces, blank_pages = _chunks_with_pages(doc["source"], doc["content"], splitter)
+        if blank_pages:
+            result.warnings.append(
+                f"{doc['source']}: page(s) {', '.join(map(str, blank_pages))} have no text layer (scanned?) "
+                "and were not indexed; OCR them first if they matter"
+            )
+        for chunk_idx, (chunk_text, page) in enumerate(pieces):
             chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:12]
             cid = f"{ws_id}_{doc_idx}_{chunk_idx}_{chunk_hash}"
             safe, reason = scan_chunk(chunk_text)
@@ -419,6 +444,7 @@ def ingest_workspace(
             chunks.append(chunk_text)
             metadatas.append({
                 "source": doc["source"],
+                **({"page": page} if page else {}),
                 "workspace": ws_id,
                 "clearance": doc_clearance,
                 "id": cid,
@@ -463,7 +489,7 @@ def ingest_workspace(
 
     # 2. Write SQLite FTS5 safe keyword index
     try:
-        sources = [m.get("source", "document") for m in metadatas]
+        sources = [source_label(m.get("source", "document"), m.get("page")) for m in metadatas]
         clearances = [m.get("clearance", DEFAULT_CLEARANCE) for m in metadatas]
         index_sparse_chunks(ws_id, chunk_ids, sources, chunks, clearances=clearances, base_dir=bm25_dir)
     except Exception as exc:

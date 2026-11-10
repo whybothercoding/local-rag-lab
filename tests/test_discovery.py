@@ -228,7 +228,7 @@ def test_a_new_chunker_version_re_indexes_unchanged_files(storage, monkeypatch):
     (ws_dir / "a.md").write_text("# Ops\nThe deploy window is Tuesday evening.")
     assert ingest_workspace("ops", str(ws_dir)).ok
     assert ingest_workspace("ops", str(ws_dir)).unchanged is True
-    monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-v3")
+    monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-next")
     assert ingest_workspace("ops", str(ws_dir)).unchanged is False
 
 
@@ -279,3 +279,44 @@ def test_a_workspace_literally_named_all_is_reserved(storage):
     (storage / "all").mkdir()
     assert all(ws_id != "all" for ws_id, _path in discover_knowledge_base_workspaces())
     assert "all" in RESERVED_WORKSPACE_IDS
+
+
+def _pdf_workspace(storage, pages):
+    from tests.test_file_parsers import make_pdf
+
+    ws_dir = storage / "reports"
+    ws_dir.mkdir()
+    make_pdf(ws_dir / "annual.pdf", pages)
+    return ws_dir
+
+
+def test_pdf_chunks_and_citations_carry_their_page(storage):
+    from rag_lab.retrieval.citation import source_file
+    from rag_lab.retrieval.sparse_search import search_sparse_chunks
+    from rag_lab.storage.vector_store import get_vector_store
+
+    ws_dir = _pdf_workspace(storage, ["Overview of the year.", "The retention period is seven years.", "Appendix."])
+    assert ingest_workspace("reports", str(ws_dir)).ok
+
+    hits = search_sparse_chunks("reports", "retention period", top_n=3, allowed_clearances=["public"], base_dir=settings.bm25_dir)
+    assert hits[0]["citation"].endswith("annual.pdf (p. 2)")
+    assert source_file("annual.pdf (p. 2)") == "annual.pdf"  # the eval and the audit harvest still see the file
+
+    collection = get_vector_store()
+    metas = [m for m in collection._collection("reports").get()["metadatas"]]
+    assert sorted(m["page"] for m in metas) == [1, 2, 3]
+
+
+def test_a_pdf_with_some_blank_pages_warns_and_a_fully_scanned_one_is_refused(storage, tmp_path):
+    ws_dir = _pdf_workspace(storage, ["Text on page one.", "", "Text on page three."])
+    result = ingest_workspace("reports", str(ws_dir))
+    assert result.ok
+    assert any("annual.pdf: page(s) 2 have no text layer" in w for w in result.warnings)
+
+    scanned = storage / "scans"
+    scanned.mkdir()
+    from tests.test_file_parsers import make_pdf
+
+    make_pdf(scanned / "scan.pdf", ["", "", ""])
+    refused = ingest_workspace("scans", str(scanned))
+    assert not refused.ok
