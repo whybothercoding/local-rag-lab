@@ -586,7 +586,7 @@ local-rag-lab/
 ├── docker-compose.yml       # PostgreSQL for durable checkpoints; opt-in profiles: qdrant, pgvector, vllm, caddy
 ├── deploy/                  # Caddyfile for the optional LAN TLS proxy
 ├── docs/                    # beginner-guide.html, concept-map.html, scaling.md, lan-tls.md, threat-model.md, architecture.mmd
-├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), wheels.yml
+├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), eval-llm.yml (weekly, non-blocking), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders
 └── tests/                   # ~1,000 unit, integration and security tests

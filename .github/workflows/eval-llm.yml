@@ -1,0 +1,78 @@
+name: Eval (real model)
+
+# Scores the real chat model on every suite (`make eval-llm`). Never gates a push or a pull request: it runs weekly
+# and on demand, so a model or prompt regression shows up without slowing CI. A CPU runner is slow; the job is capped
+# and its result is read in the run summary, not enforced.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  eval-llm:
+    name: eval-llm (non-blocking)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      - name: Restore embedding model cache
+        uses: actions/cache@v6
+        with:
+          path: models
+          key: embedding-model-${{ hashFiles('rag_lab/security/model_integrity.py') }}
+
+      - name: Fetch and verify pinned model weights
+        run: python -m rag_lab.ops.fetch_models
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Restore chat model cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.ollama
+          key: ollama-qwen3-8b
+
+      - name: Start Ollama and pull the chat model
+        run: |
+          (ollama serve > ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama pull "$(python -c 'from rag_lab import config; print(config.settings.chat_model)')"
+
+      - name: Evaluate answers from the real model
+        # A failed gate is reported below, not enforced: this job never turns the repository red.
+        continue-on-error: true
+        run: python -m rag_lab.ops.eval --llm 2>&1 | tee eval-llm.log
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### eval-llm (non-blocking)"
+            echo '```'
+            grep -E "^SUITE|^cases|entailment_rate|keyword_recall|retrieval_recall|judge_support|median_latency|FAILED|^  - " eval-llm.log || echo "no result"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: eval-llm-report
+          path: |
+            eval/out/report.json
+            eval-llm.log
+          if-no-files-found: ignore

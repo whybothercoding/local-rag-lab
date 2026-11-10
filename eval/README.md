@@ -55,6 +55,7 @@ source at 0.55, below the 0.7 bar, so a verbatim quote is now accepted without a
 ```bash
 make eval                     # deterministic synthesizer, all suites; this is what CI gates
 make eval-llm [SUITE=en]      # answers from the local Ollama model, LLM judge gated (needs 'ollama serve')
+                              # CI runs it weekly and on demand (.github/workflows/eval-llm.yml), non-blocking
 make eval-judge               # deterministic answers plus an advisory judge
 make eval-calibrate           # per-case retrieval signals for the calibration split
 ```
