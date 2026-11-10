@@ -228,7 +228,7 @@ def test_a_new_chunker_version_re_indexes_unchanged_files(storage, monkeypatch):
     (ws_dir / "a.md").write_text("# Ops\nThe deploy window is Tuesday evening.")
     assert ingest_workspace("ops", str(ws_dir)).ok
     assert ingest_workspace("ops", str(ws_dir)).unchanged is True
-    monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-v2")
+    monkeypatch.setattr("rag_lab.ingestion.ingest.CHUNKER_VERSION", "headings-v3")
     assert ingest_workspace("ops", str(ws_dir)).unchanged is False
 
 

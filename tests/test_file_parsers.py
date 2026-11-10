@@ -36,14 +36,14 @@ def test_extract_csv_and_tsv(tmp_path: Path):
     csv_file.write_text("Name,Role,Clearance\nAlice,Admin,secret\n,,\nBob,Reviewer,internal\n", encoding="utf-8")
     csv_text = extract_text_from_file(csv_file)
     assert "Name | Role | Clearance" in csv_text
-    assert "Alice | Admin | secret" in csv_text
-    assert "Bob | Reviewer | internal" in csv_text
+    assert "Name: Alice | Role: Admin | Clearance: secret" in csv_text
+    assert "Name: Bob | Role: Reviewer | Clearance: internal" in csv_text
 
     tsv_file = tmp_path / "table.tsv"
     tsv_file.write_text("Dept\tBudget\nEngineering\t500000\n", encoding="utf-8")
     tsv_text = extract_text_from_file(tsv_file)
     assert "Dept | Budget" in tsv_text
-    assert "Engineering | 500000" in tsv_text
+    assert "Dept: Engineering | Budget: 500000" in tsv_text
 
 
 def test_extract_json_and_jsonl(tmp_path: Path):
@@ -115,7 +115,7 @@ def test_extract_docx_paragraphs_and_tables(tmp_path: Path):
     assert "First paragraph." in extracted
     assert "Second paragraph." in extracted
     assert "Tier | SLA" in extracted
-    assert "Tier-1 | 5 minutes" in extracted
+    assert "Tier: Tier-1 | SLA: 5 minutes" in extracted
 
 
 def test_extract_pdf_and_limits(tmp_path: Path, monkeypatch):
@@ -194,4 +194,71 @@ def test_extract_pptx_and_xlsx(tmp_path: Path):
     xlsx_text = extract_text_from_file(xlsx_path)
     assert "Sheet Q4_Budget" in xlsx_text
     assert "Department | Allocation" in xlsx_text
-    assert "Security | 250000" in xlsx_text
+    assert "Department: Security | Allocation: 250000" in xlsx_text
+
+
+def _messy_docx(path: Path) -> None:
+    import docx
+
+    doc = docx.Document()
+    doc.add_heading("Travel Policy", level=1)
+    doc.add_paragraph("Reimbursement caps by grade.")
+    doc.add_heading("Hotel limits", level=2)
+    table = doc.add_table(rows=3, cols=4)
+    for col, text in enumerate(["Grade", "City", "Hotel cap EUR", "Notes"]):
+        table.cell(0, col).text = text
+    for col, text in enumerate(["G5", "Paris", "240", ""]):  # empty trailing cell
+        table.cell(1, col).text = text
+    table.cell(2, 0).text = "G7"
+    table.cell(2, 1).merge(table.cell(2, 2)).text = "Berlin"  # merged cell spans two columns
+    table.cell(2, 3).text = "approval needed"
+    doc.add_paragraph("Booking after the table.")
+    doc.save(str(path))
+
+
+def test_docx_keeps_document_order_and_headings(tmp_path: Path):
+    path = tmp_path / "policy.docx"
+    _messy_docx(path)
+    text = extract_text_from_file(path)
+    lines = text.splitlines()
+    assert lines[0] == "# Travel Policy"
+    assert "## Hotel limits" in lines
+    # The table sits between its intro and the closing paragraph, not appended at the end.
+    assert text.index("Hotel limits") < text.index("Grade: G5") < text.index("Booking after the table.")
+
+
+def test_table_rows_name_their_columns_even_when_cells_are_empty_or_merged(tmp_path: Path):
+    path = tmp_path / "policy.docx"
+    _messy_docx(path)
+    text = extract_text_from_file(path)
+    assert "Grade: G5 | City: Paris | Hotel cap EUR: 240" in text
+    assert "Notes: " not in text.split("Grade: G5")[1].splitlines()[0]  # empty cell dropped, no dangling label
+    assert "Grade: G7 | City: Berlin" in text  # merged cell appears once
+
+
+def test_a_chunk_cut_from_a_table_row_carries_column_names_and_section(tmp_path: Path):
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    from rag_lab.ingestion.ingest import chunk_document
+
+    path = tmp_path / "policy.docx"
+    _messy_docx(path)
+    chunks = chunk_document(extract_text_from_file(path), RecursiveCharacterTextSplitter(chunk_size=60, chunk_overlap=10))
+    hit = next(c for c in chunks if "240" in c)
+    assert "Hotel cap EUR: 240" in hit  # the number is never separated from what it measures
+    assert hit.startswith("# Travel Policy\n## Hotel limits")  # nor from its section
+
+
+def test_xlsx_sparse_rows_keep_columns_aligned(tmp_path: Path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "sparse.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Limits"
+    ws.append(["Team", "Soft limit", "Hard limit"])
+    ws.append(["Ops", None, 900])  # without labels "900" would read as the soft limit
+    wb.save(str(path))
+    text = extract_text_from_file(path)
+    assert "Team: Ops | Hard limit: 900" in text
+    assert "Soft limit: 900" not in text

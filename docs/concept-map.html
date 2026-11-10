@@ -251,7 +251,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
       <span><b>5 + 5 → 8 → 3</b> search funnel (configurable)</span>
       <span><b>2 / 1</b> search / write retries</span>
       <span><b>159</b> golden test cases</span>
-      <span><b>957</b> tests</span>
+      <span><b>1008</b> tests</span>
     </div>
   </div>
 
@@ -706,7 +706,7 @@ var G = [
   { c: 'safe', t: 'Workspaces (multi-tenancy)', d: 'Separate drawers that never mix.', x: 'Each workspace has its own Chroma collection (ws_&lt;id&gt;) and its own keyword database. Deleting one needs an admin and prunes grants.', f: 'storage/workspace_manager.py' },
   { c: 'safe', t: 'PII redaction (DLP)', d: 'Black out emails and phone numbers before anything is saved or shown.', x: 'Questions are sanitized and masked at the caller boundary via prepare_pipeline_input() before reaching checkpoints, answers before release, and audit payloads before sealing.', f: 'security/redaction.py, pipeline/entry.py' },
   { c: 'safe', t: 'Human in the loop', d: 'A person signs off, and never the person who asked.', x: 'Auto-release needs auto_approve, grounded and relevant checks and no blocking degradation. A reviewer needs the review permission, must not be the requester, and needs clearance at least equal to the requester\'s.', f: 'pipeline/review.py' },
-  { c: 'safe', t: 'Audit hash chain', d: 'A diary where each page carries a fingerprint of the page before, so a torn-out page shows.', x: 'Each event is HMAC-chained to the previous one with an AES-GCM sealed payload, and written before an answer is released. make audit-verify walks the chain; make audit-anchor records the head hash, optionally to a second location, to catch truncation.', f: 'security/audit.py' },
+  { c: 'safe', t: 'Audit hash chain', d: 'A diary where each page carries a fingerprint of the page before, so a torn-out page shows.', x: 'Each event is HMAC-chained to the previous one with an AES-GCM sealed payload, and written before an answer is released. make audit-verify walks the chain; make audit-anchor records the head hash, optionally to a second location, to catch truncation. After a retention prune the chain's new starting point carries a keyed tag and must match a sealed prune event, so records deleted outside retention are flagged.', f: 'security/audit.py' },
   { c: 'safe', t: 'Keys and encryption', d: 'Locks on stored data, with the key kept somewhere safer than the data.', x: 'The access key signs the policy and session tokens; the data key seals audit payloads, checkpoints and cache rows (AES-256-GCM). Both live in the OS keychain when usable, else owner-only files (KEY_STORE). make backup excludes keys.', f: 'security/keystore.py, vault.py' },
   { c: 'safe', t: 'Sign-in and sessions', d: 'Proving who you are, and for how long.', x: 'scrypt password hashes (12+ characters), HMAC-signed session tokens valid 8 hours, 30 minutes idle sign-out in the UI, 5 failures in 15 minutes lock the account. Optional TOTP for owners and admins; each code works once.', f: 'security/access.py' },
   { c: 'safe', t: 'Model pinning', d: 'A fingerprint on every downloaded model, so a swapped file is caught.', x: 'Each model file has a pinned SHA-256. make models downloads and verifies once; make verify-models re-checks offline. Changing a model means recalibrating its thresholds.', f: 'security/model_integrity.py' },

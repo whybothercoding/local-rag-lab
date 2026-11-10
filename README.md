@@ -20,7 +20,7 @@ Designed for complete data sovereignty, this system operates **100% air-gapped**
 | **Zero Trust** | **Fail-Closed Retrieval** | **9 / 10** | Server-side clearance filtering backed by base-class `guard_hits()`; unknown clearances drop files; missing keys halt execution. |
 | **Zero Trust** | **Tamper-Evident Audit** | **8.5 / 10** | Forward-secure HMAC-SHA256 hash chain with AES-256-GCM sealed payloads; signed head anchors replicated to off-host copies (`AUDIT_ANCHOR_COPY_DIR`). |
 | **Zero Trust** | **Caller Isolation & DLP** | **8.5 / 10** | `prepare_pipeline_input()` sanitizes queries before state serialization; initial checkpoints and audit logs never persist unredacted PII. |
-| **Zero Trust** | **Cryptographic Supply Chain** | **8.5 / 10** | Model weights pinned by hardcoded SHA-256 digests; all 163 package dependencies cryptographically hash-pinned in `requirements.lock`. |
+| **Zero Trust** | **Cryptographic Supply Chain** | **8.5 / 10** | Model weights pinned by hardcoded SHA-256 digests; all 164 package dependencies cryptographically hash-pinned in `requirements.lock`. |
 | **Zero Trust** | **Network Boundary & Transport** | **8 / 10** | UI binds loopback `127.0.0.1` by default; network access requires explicit opt-in (`LAN=1`); local CA TLS via Caddy ([docs/lan-tls.md](docs/lan-tls.md)). |
 | **AI Systems** | **Compound Architecture** | **9 / 10** | Directed acyclic & cyclic LangGraph state machine with explicit retry budgets and decoupled retrieval/grading nodes. |
 | **AI Systems** | **Reproducibility** | **9 / 10** | Pinned ONNX models; fp32 NLI yielding identical cross-entropy scores on arm64 and x86; deterministic extractive baseline. |
@@ -42,7 +42,7 @@ Clone the repository and run the test suite locally in under 3 minutes:
 ```bash
 make setup          # Create virtualenv and install dependencies
 make models         # Download and verify pinned SHA-256 ONNX models offline
-make test           # Run comprehensive 850+ test suite (offline)
+make test           # Run the full test suite (1,000+ tests, offline)
 make eval           # Run 159-case golden evaluation gate
 make ui             # Launch Streamlit web interface (binds 127.0.0.1)
 ```
@@ -287,14 +287,15 @@ make delete-workspace WS=legal YES=1
 # Sync all workspace directories (requires admin credentials)
 make sync ADMIN=alice
 
-# Sync a single workspace (auto-discovers knowledge_base/<ws>/ or accepts a custom DIR, plus optional FORCE=1)
+# Sync a single workspace (auto-discovers knowledge_base/<ws>/ or accepts a custom DIR, which needs WS; optional FORCE=1)
 make sync ADMIN=alice WS=accounting
 make sync ADMIN=alice WS=accounting DIR=./knowledge_base/accounting FORCE=1
 ```
 
 * Workspaces are automatically sanitized (e.g., `Accounting & Tax` becomes `accounting_tax`).
 * Generates Chroma collections (`ws_<workspace_id>`) and SQLite FTS5 keyword indexes (`bm25_indices/<workspace_id>.db`).
-* Idempotent: unchanged files are automatically skipped based on SHA-256 manifests.
+* Idempotent: unchanged files are automatically skipped based on SHA-256 manifests (a parser or chunker change bumps `CHUNKER_VERSION`, so the next sync re-indexes everything once).
+* Tables (DOCX, PPTX, XLSX, CSV) are written one row per line with the column names on every row (`Grade: G5 | Hotel cap EUR: 240`), so a chunk holding one row still says what each value is. DOCX keeps paragraphs and tables in document order and turns Heading styles into `#` lines, so chunks carry their section. PDFs are plain text extraction: no layout or OCR, so scanned or multi-column PDFs index poorly.
 
 ---
 
@@ -360,7 +361,7 @@ make audit-feedback N=20 WS=accounting
 make audit-harvest
 make audit-harvest N=50 OUT=eval/feedback_candidates.json
 
-# Anchor the audit head hash (run periodically to detect truncation). Set AUDIT_ANCHOR_COPY_DIR to a second
+# Anchor the audit head hash (run periodically to detect truncation; after a retention prune the new chain base carries a keyed integrity tag, so `make audit-verify` also flags a base edited to hide deleted records). Set AUDIT_ANCHOR_COPY_DIR to a second
 # location (another disk, a mounted share): every anchor is written to both, `make audit-verify` checks both and
 # compares them, so deleting or rewinding the anchor file on this host is detected. If the copy cannot be
 # updated (an unmounted drive), the command exits non-zero; the primary anchor is still recorded.
@@ -378,7 +379,7 @@ make backup
 make backups
 make backup-verify DIR=backups/backup-<timestamp>
 
-# Zero-trace factory reset (wipes all users, audit logs, checkpoints, keys, and vectors)
+# Zero-trace factory reset (wipes all users, audit logs, checkpoints, keys, vectors, and the source documents in knowledge_base/ and uploads/)
 make factory-reset
 # Or bypass confirmation prompt:
 make factory-reset CONFIRM=yes
@@ -414,7 +415,7 @@ make eval-calibrate
 make graph
 ```
 
-About 920 tests. Services are optional locally: a test that needs PostgreSQL, Qdrant or pgvector probes it and skips when it is not running. GitHub Actions (`.github/workflows/ci.yml`) runs lint, mypy and the whole suite twice (online, then with sockets blocked) against real PostgreSQL, Qdrant and pgvector services and fails instead of skipping; a run takes about 20 minutes. The `wheels` workflow builds the Rust accelerator wheels.
+About 1,000 tests. Services are optional locally: a test that needs PostgreSQL, Qdrant or pgvector probes it and skips when it is not running. GitHub Actions (`.github/workflows/ci.yml`) runs lint, mypy and the whole suite twice (online, then with sockets blocked) against real PostgreSQL, Qdrant and pgvector services and fails instead of skipping; a run takes about 20 minutes. The `wheels` workflow builds the Rust accelerator wheels.
 
 ---
 
@@ -585,7 +586,7 @@ local-rag-lab/
 ├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders
-└── tests/                   # 957 unit, integration and security tests
+└── tests/                   # ~1,000 unit, integration and security tests
 ```
 
 ---

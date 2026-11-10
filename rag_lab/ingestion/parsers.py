@@ -69,13 +69,8 @@ def _extract_html(file_path: Path) -> str:
 
 def _extract_csv(file_path: Path) -> str:
     delimiter = "\t" if file_path.suffix.lower() == ".tsv" else ","
-    lines: list[str] = []
     with open(file_path, newline="", encoding="utf-8", errors="replace") as handle:
-        for row in csv.reader(handle, delimiter=delimiter):
-            cells = [cell.strip() for cell in row if cell and cell.strip()]
-            if cells:
-                lines.append(" | ".join(cells))
-    return "\n".join(lines)
+        return "\n".join(_table_lines(list(csv.reader(handle, delimiter=delimiter))))
 
 
 def _extract_json(file_path: Path) -> str:
@@ -105,6 +100,26 @@ def _extract_xml(file_path: Path) -> str:
     return "\n".join(part.strip() for part in root.itertext() if part and part.strip())
 
 
+def _table_lines(rows: list[list[str]]) -> list[str]:
+    """Render a table so every row names its columns: a chunk holding one row still says what each value is.
+
+    The header row is kept as `A | B | C`; each data row becomes `A: x | B: y | C: z`. Empty cells are
+    dropped from a row but the labels keep the remaining values in their columns. A table without a
+    second non-empty row has no header to carry and is joined plainly.
+    """
+    rows = [[" ".join(cell.split()) for cell in row] for row in rows]
+    rows = [row for row in rows if any(row)]
+    if len(rows) < 2:
+        return [" | ".join(cell for cell in row if cell) for row in rows]
+    header = rows[0]
+    lines = [" | ".join(cell for cell in header if cell)]
+    for row in rows[1:]:
+        cells = [f"{header[i]}: {cell}" if i < len(header) and header[i] else cell
+                 for i, cell in enumerate(row) if cell]
+        lines.append(" | ".join(cells))
+    return lines
+
+
 def _extract_pdf(file_path: Path) -> str:
     import pypdf
 
@@ -122,15 +137,40 @@ def _extract_pdf(file_path: Path) -> str:
 
 
 def _extract_docx(file_path: Path) -> str:
+    """Paragraphs and tables in document order; Heading/Title styles become `#` lines so chunks keep their section."""
     import docx
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     document = docx.Document(str(file_path))
-    parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
-    for table in document.tables:
-        for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
+    parts: list[str] = []
+    for element in document.element.body.iterchildren():
+        if element.tag.endswith("}p"):
+            paragraph = Paragraph(element, document)
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            style = (paragraph.style.name if paragraph.style is not None else "") or ""
+            match = re.fullmatch(r"Heading (\d)", style)
+            if match:
+                text = f"{'#' * min(int(match.group(1)), 6)} {text}"
+            elif style == "Title":
+                text = f"# {text}"
+            parts.append(text)
+        elif element.tag.endswith("}tbl"):
+            table = Table(element, document)
+            rows = []
+            for row in table.rows:
+                seen: set[int] = set()
+                cells = []
+                for cell in row.cells:
+                    if id(cell._tc) not in seen:  # a merged cell is returned once per column it spans
+                        seen.add(id(cell._tc))
+                        cells.append(cell.text)
+                rows.append(cells)
+            lines = _table_lines(rows)
+            if lines:
+                parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
 
@@ -147,10 +187,7 @@ def _extract_pptx(file_path: Path) -> str:
                 if text:
                     bits.append(text)
             if getattr(shape, "has_table", False):
-                for row in shape.table.rows:
-                    cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
-                    if cells:
-                        bits.append(" | ".join(cells))
+                bits.extend(_table_lines([[cell.text or "" for cell in row.cells] for row in shape.table.rows]))
         if bits:
             slides.append(f"Slide {index}\n" + "\n".join(bits))
     return "\n\n".join(slides)
@@ -163,11 +200,8 @@ def _extract_xlsx(file_path: Path) -> str:
     try:
         sheets: list[str] = []
         for worksheet in workbook.worksheets:
-            rows: list[str] = []
-            for row in worksheet.iter_rows(values_only=True):
-                cells = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
-                if cells:
-                    rows.append(" | ".join(cells))
+            rows = _table_lines([["" if cell is None else str(cell) for cell in row]
+                                 for row in worksheet.iter_rows(values_only=True)])
             if rows:
                 sheets.append(f"Sheet {worksheet.title}\n" + "\n".join(rows))
         return "\n\n".join(sheets)

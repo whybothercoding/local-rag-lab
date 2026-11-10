@@ -66,7 +66,9 @@ class IngestResult:
 
 
 # Bump when chunk text changes for the same input, so unchanged files are still re-indexed.
-CHUNKER_VERSION = "headings-v1"
+# Bump when parser or chunker output changes: every workspace then re-indexes its unchanged files on the next sync.
+# v2: DOCX in document order with headings, table rows labelled by column.
+CHUNKER_VERSION = "headings-v2"
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 
 
