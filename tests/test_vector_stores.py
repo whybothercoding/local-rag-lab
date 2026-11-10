@@ -138,6 +138,16 @@ def test_publish_stores_chunks_text_metadata_and_the_model_stamp(store):
         assert by_id[cid].metadata["source"] == meta["source"] and by_id[cid].metadata["clearance"] == meta["clearance"]
 
 
+def test_a_pdf_page_in_the_metadata_comes_back_as_an_integer(store):
+    ids, docs, metas, vectors = corpus("pdfs", n=4)
+    for number, meta in enumerate(metas, 1):
+        meta["page"] = number
+    store.publish("pdfs", ids, docs, metas, vectors.tolist(), FINGERPRINT)
+    hits = store.query("pdfs", [1.0] * DIM, 4, CLEARANCES)
+    assert sorted(hit.metadata["page"] for hit in hits) == [1, 2, 3, 4]
+    assert all(isinstance(hit.metadata["page"], int) for hit in hits)
+
+
 def test_similarity_is_cosine_on_chromas_scale_and_ranked_best_first(store):
     """The relevance gates are calibrated on `1 - cosine distance`; the value must agree, not just the order."""
     ids, _, metas, vectors = publish(store, "ops")
