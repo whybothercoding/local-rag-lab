@@ -209,6 +209,26 @@ test split, memory, and an independent judge (`--judge-only`, a model from the o
 more, `OLLAMA_MODEL=gemma4:12b` answers follow-ups better. Apertus (Swiss, Apache 2.0, 1,800+ languages) has no
 official Ollama build yet, so it was not compared.
 
+### LLM answers on every suite (`make eval-llm`, qwen3:8b, thinking off, test split)
+
+| Suite | cases | keywords | entailment | judge | median latency |
+|---|---|---|---|---|---|
+| en | 28 | 1.00 | 0.94 | 0.94 | 1.2 s |
+| multilingual | 71 | 0.95 | 0.93 | 0.91 | 1.8 s |
+| conversation | 9 | 0.89 | 1.00 | 1.00 | 2.9 s |
+| messy | 11 | 1.00 | 1.00 | 1.00 | 1.6 s |
+| stress | 12 | 1.00 | 1.00 | 1.00 | 1.8 s |
+
+All gates pass; retrieval recall is 1.0 everywhere and messy `page_accuracy` is 1.0. Three answerable cases still
+fail on keywords (`fr-usb`, `x-en-fr-laptop`, `conv-en-travel`: a correct answer worded differently from the expected
+key fact). Run suites one at a time: a concurrent test run shares eval state and produced false failures once.
+
+The stress run found a grader defect. The model answered correctly ("the hotel cap at the Alder office is 100 EUR")
+but only 1 of 12 answers was entailed (0.08), because the office is named only in a heading and headings are not
+premises. A titled premise ("Alder office policy. Hotel cap. The hotel cap is 100 EUR per night.") is now offered
+when the heading supplies words of the claim the sentence lacks; stress entailment is 1.00 and the German
+contradiction calibration case is unchanged.
+
 ## Threshold calibration (per model profile)
 
 Model scores live on different scales, so every profile has its own thresholds (`rag_lab/config.py`), chosen
