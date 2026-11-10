@@ -4,7 +4,7 @@
 [![Zero-Trust RBAC](https://img.shields.io/badge/Security-Zero--Trust%20v3-blue)](#)
 [![Audit](https://img.shields.io/badge/Audit-HMAC%20Tamper--Evident-orange)](#)
 [![Verification](https://img.shields.io/badge/Groundedness-NLI%20fp32%20Entailment-purple)](#)
-[![Benchmark](https://img.shields.io/badge/Evaluation-159%20Golden%20Cases-informational)](#)
+[![Benchmark](https://img.shields.io/badge/Evaluation-189%20Golden%20Cases-informational)](#)
 
 An enterprise-grade, fully local **Compound AI** retrieval, reasoning, and governance platform built with **LangGraph**, **Ollama (`qwen3:8b`)** or any OpenAI-compatible server (vLLM), **ChromaDB** (with opt-in Qdrant / pgvector), **SQLite FTS5 / BM25**, and **PostgreSQL / SQLite**.
 
@@ -27,7 +27,7 @@ Designed for complete data sovereignty, this system operates **100% air-gapped**
 | **AI Systems** | **Doc & Code Fidelity** | **9 / 10** | Automated CI tests enforce that architecture diagrams, Makefile commands, and golden set metrics match codebase reality. |
 | **AI Systems** | **Groundedness & Output Gates**| **8.5 / 10** | Quantitative figure extraction and cross-lingual NLI sentence entailment (`mDeBERTa-v3`) with self-corrective prompt feedback. |
 | **AI Systems** | **Tunability & Feedback Loop** | **8.5 / 10** | Parametric candidate retrieval widths (`RETRIEVAL_*_K`); automated harvesting of reviewer compliance rejections (`make audit-harvest`). |
-| **AI Systems** | **Evaluation Benchmark** | **8.5 / 10** | 159 golden benchmark cases (108 held-out test split) across 4 languages with committed reference baselines ([eval/README.md](eval/README.md)). |
+| **AI Systems** | **Evaluation Benchmark** | **8.5 / 10** | 189 golden benchmark cases (131 held-out test split) across 4 languages, a messy-document suite (DOCX, XLSX, PDF) and a near-duplicate stress suite that measures the candidate pool with committed reference baselines ([eval/README.md](eval/README.md)). |
 
 *Full security threat model and cryptographic boundaries: see [docs/threat-model.md](docs/threat-model.md).*  
 *Interactive visual guides: see [Beginner Guide](docs/beginner-guide.html) and [Concept Map](docs/concept-map.html).*  
@@ -43,7 +43,7 @@ Clone the repository and run the test suite locally in under 3 minutes:
 make setup          # Create virtualenv and install dependencies
 make models         # Download and verify pinned SHA-256 ONNX models offline
 make test           # Run the full test suite (1,000+ tests, offline)
-make eval           # Run 159-case golden evaluation gate
+make eval           # Run 189-case golden evaluation gate
 make ui             # Launch Streamlit web interface (binds 127.0.0.1)
 ```
 

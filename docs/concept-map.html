@@ -250,8 +250,8 @@ footer { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; color: var(
       <span><b>600 / 100</b> chunk size / overlap</span>
       <span><b>5 + 5 → 8 → 3</b> search funnel (configurable)</span>
       <span><b>2 / 1</b> search / write retries</span>
-      <span><b>159</b> golden test cases</span>
-      <span><b>1016</b> tests</span>
+      <span><b>189</b> golden test cases</span>
+      <span><b>1022</b> tests</span>
     </div>
   </div>
 
@@ -717,7 +717,7 @@ var G = [
   { c: 'eval', t: 'Harvest audit rejections', d: 'Turn human rejections into new evaluation test cases.', x: 'make audit-harvest queries the HMAC-chained audit log for human rejections, extracts the rejected questions, and formats them as candidate cases for eval/golden.json to close the feedback loop.', f: 'security/audit.py, ops/eval.py' },
   { c: 'safe', t: 'Supply chain hash pinning', d: 'Verify every package against cryptographic hashes so dependencies cannot be tampered with.', x: 'requirements.lock pins every direct and transitive wheel and sdist with multi-platform SHA-256 hashes, enforced by pip --require-hashes. test_requirements_lock_is_hash_pinned guards against unpinned additions.', f: 'requirements.lock, tests/test_packaging.py' },
   { c: 'safe', t: 'Threat model & trust boundaries', d: 'Documenting what we trust, what we mistrust, and where the barriers sit.', x: 'docs/threat-model.md formalizes trust boundaries (user edge, execution sandbox, storage boundary, model weights). Streamlit binds to 127.0.0.1 by default; LAN requires explicit LAN=1 opt-in.', f: 'docs/threat-model.md' },
-  { c: 'eval', t: 'Golden set', d: 'An answer key: questions with known-good outcomes to test the whole system.', x: 'eval/golden.json: 159 cases over a synthetic corpus in six workspaces. Suites: en 50, multilingual 98 (de, fr, el, cross-lingual), conversation 11. Each case expects answer, abstain, blocked, denied, fresh or cached.', f: 'eval/golden.json' },
+  { c: 'eval', t: 'Golden set', d: 'An answer key: questions with known-good outcomes to test the whole system.', x: 'eval/golden.json: 189 cases over a synthetic corpus in eight workspaces. Suites: en 50, multilingual 98 (de, fr, el, cross-lingual), conversation 11, messy 14 (DOCX, XLSX and PDF fixtures: tables, sparse rows, blank first page, page citations), stress 16 (72 near-duplicate chunks: tests whether the candidate pool is wide enough). Each case expects answer, abstain, blocked, denied, fresh or cached.', f: 'eval/golden.json' },
   { c: 'eval', t: 'Calibration and test split', d: 'Tune on one half, grade on the other, so you do not mark yourself on questions you studied.', x: 'The calibration split picks thresholds; the test split is held out and gated. A false accept is worse than a miss, so each threshold sits above the highest score of the wrong class.', f: 'ops/calibrate.py' },
   { c: 'eval', t: 'Quality gates', d: 'Pass or fail bars the build must clear.', x: 'make eval runs the real graph and gates per suite, for example answer_rate ≥ 0.9, retrieval_recall ≥ 0.9, keyword_recall ≥ 0.8, abstention_accuracy ≥ 0.8, security_accuracy = 1.0, cache_accuracy = 1.0, entailment_rate ≥ 0.9.', f: 'ops/eval.py' },
   { c: 'eval', t: 'Per-model thresholds', d: 'Each model measures on its own ruler, so each needs its own pass mark.', x: 'Every profile has its own numbers in config.py: evidence gate -4.5, groundedness fallback -3.0, cache similarity 0.92 (0.94 large). make calibrate-models suggests them from the calibration split.', f: 'config.py' },
