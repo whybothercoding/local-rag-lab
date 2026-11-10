@@ -117,7 +117,15 @@ def _premises(passages: list[str], hypothesis: str) -> list[str]:
     return list(dict.fromkeys(p for p in singles + pairs if p.strip()))
 
 
+_VERBATIM_MIN_CHARS = 20  # a short fragment ("yes", "5 days") is not evidence by being found somewhere
+
+
 def sentence_support(sentence: str, passages: list[str]) -> float:
     """Best entailment of one answer sentence by any premise built from the passages (see _premises)."""
+    # A sentence quoted word for word from a source is stated by that source. The NLI model is not asked: it scored
+    # "A single taxi ride may cost at most 141 EUR." against itself 0.55, below the 0.7 bar.
+    folded = " ".join(sentence.lower().split())
+    if len(folded) >= _VERBATIM_MIN_CHARS and any(folded in " ".join(p.lower().split()) for p in passages):
+        return 1.0
     scores = entailment_scores(_premises(passages, sentence), sentence)
     return max(scores) if scores else 0.0

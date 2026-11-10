@@ -29,6 +29,29 @@ _EXTRACTOR_IGNORE = STOPWORDS | {"is", "our", "the", "are", "for", "to", "in", "
 logger = logging.getLogger("llm_provider")
 
 
+_TABLE_ROW = re.compile(r"\S \| \S")
+
+
+def _units(chunk: str) -> list[str]:
+    """Quotable units of one chunk: each table row (`A: x | B: y`) on its own, prose lines joined into one run.
+
+    A table has no full stops, so splitting only at sentence ends would quote the whole table for one cell.
+    """
+    units: list[str] = []
+    prose: list[str] = []
+    for line in chunk.splitlines():
+        if _TABLE_ROW.search(line):
+            if prose:
+                units.append(" ".join(" ".join(prose).split()))
+                prose = []
+            units.append(" ".join(line.split()))
+        elif line.strip():
+            prose.append(line.strip())
+    if prose:
+        units.append(" ".join(" ".join(prose).split()))
+    return units
+
+
 class DeterministicContextLLM(BaseChatModel):
     """In-process, zero-dependency synthesizer that extracts and constructs answers
 
@@ -50,11 +73,20 @@ class DeterministicContextLLM(BaseChatModel):
                 ctx_part = ctx_part[len("Context:"):].strip()
             else:
                 ctx_part = ctx_part.replace("Context:", "", 1).strip()
-            # Remove document tags, separators, and markdown headings: only document sentences may be quoted.
+            # Remove document tags and separators; only document sentences may be quoted. A chunk's markdown
+            # headings are not quoted either, but they count when ranking its sentences (see below): a sentence
+            # such as "The hotel cap is 124 EUR" belongs to the region named in its heading.
             ctx_part = re.sub(r"</?documents?\b[^>]*>", "\n", ctx_part)
-            ctx_part = re.sub(r"(?m)^\s*#.*$", "", ctx_part)
             chunks = [c.strip() for c in re.split(r"\n\s*---\s*\n|\n{2,}", ctx_part) if c.strip()]
-            context = " ".join(" ".join(c.split()) for c in chunks)
+            bodies: list[str] = []
+            units: list[tuple[str, set[str]]] = []
+            for chunk in chunks:
+                lines = chunk.splitlines()
+                heading_words = set(words(" ".join(ln for ln in lines if ln.lstrip().startswith("#"))))
+                body = "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+                bodies.append(body)
+                units += [(unit, heading_words) for unit in _units(body)]
+            context = " ".join(" ".join(b.split()) for b in bodies if b.strip())
 
             if "\n\nAnswer" in q_part:
                 question = q_part.rsplit("\n\nAnswer", 1)[0].strip()
@@ -64,6 +96,7 @@ class DeterministicContextLLM(BaseChatModel):
                 question = q_part.strip()
         else:
             context = prompt
+            units = [(context, set())]
             question = ""
 
         if not context:
@@ -71,16 +104,19 @@ class DeterministicContextLLM(BaseChatModel):
 
         # Find the most relevant sentences in context matching question tokens
         q_tokens = set(words(question)) - _EXTRACTOR_IGNORE
-        sentences = re.split(r"(?<=[.!?])\s+", context)
+        sentences = [(s, heading_words) for unit, heading_words in units for s in (
+            [unit] if _TABLE_ROW.search(unit) else re.split(r"(?<=[.!?])\s+", unit))]
 
         matched_sentences = []
-        for s in sentences:
+        for s, heading_words in sentences:
             s_clean = s.strip()
             if not s_clean:
                 continue
             s_tokens = set(words(s_clean))
             overlap = sum(1 for q in q_tokens if any(_same_word(q, t) for t in s_tokens))
             if overlap > 0:
+                # The chunk's headings break ties between sentences that read alike (same limit, other region).
+                overlap += sum(1 for q in q_tokens if any(_same_word(q, t) for t in heading_words))
                 matched_sentences.append((overlap, s_clean))
 
         if matched_sentences:
@@ -90,7 +126,7 @@ class DeterministicContextLLM(BaseChatModel):
             return " ".join(best_sentences)
 
         # Fallback to the first sentence of context
-        first_sentence = sentences[0].strip() if sentences else context[:200]
+        first_sentence = sentences[0][0].strip() if sentences else context[:200]
         return f"Based on available documentation: {first_sentence}"
 
     def _generate(

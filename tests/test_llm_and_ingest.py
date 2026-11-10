@@ -6,6 +6,39 @@ from rag_lab.ingestion.ingest import ingest_workspace
 from rag_lab.config import settings
 
 
+def test_extractive_answer_quotes_one_table_row_not_the_whole_table():
+    """A table has no full stops: without per-row units the answer was the entire table, which no single
+    source row entails, so the groundedness check rejected it."""
+    table = (
+        "Grade | City | Hotel cap EUR\n"
+        "Grade: G5 | City: Paris | Hotel cap EUR: 240\n"
+        "Grade: G7 | City: Berlin | Hotel cap EUR: 260\n"
+        "Grade: G7 | City: Paris | Hotel cap EUR: 310"
+    )
+    prompt = f"Context:\n{table}\n\nQuestion: What is the hotel cap for grade G7 in Berlin?\n\nAnswer concisely based strictly on the context:"
+    answer = DeterministicContextLLM().invoke(prompt).content
+    assert answer == "Grade: G7 | City: Berlin | Hotel cap EUR: 260"
+
+
+def test_a_chunks_heading_breaks_a_tie_between_sentences_that_read_alike():
+    """Same limit, other region: the sentence alone cannot say which region it is about, its heading can."""
+    prompt = (
+        "Context:\n# Alder office policy\n## Taxi limit\nA single taxi ride may cost at most 105 EUR.\n\n---\n\n"
+        "# Elm office policy\n## Taxi limit\nA single taxi ride may cost at most 129 EUR.\n\n"
+        "Question: What is the maximum cost of a single taxi ride at the Elm office?\n\n"
+        "Answer concisely based strictly on the context:"
+    )
+    assert DeterministicContextLLM().invoke(prompt).content == "A single taxi ride may cost at most 129 EUR."
+
+
+def test_prose_around_a_table_is_still_split_into_sentences():
+    prompt = (
+        "Context:\nTravel is booked early. Hotels are capped.\nGrade: G5 | Hotel cap EUR: 240\n\n"
+        "Question: Which hotels are capped?\n\nAnswer concisely based strictly on the context:"
+    )
+    assert DeterministicContextLLM().invoke(prompt).content == "Hotels are capped."
+
+
 def test_deterministic_context_llm_extraction():
     llm = DeterministicContextLLM()
     prompt = (

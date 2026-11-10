@@ -166,3 +166,23 @@ def test_entailment_scores_handles_large_premise_batches_without_tile_error():
     assert len(scores) == 50
     assert all(0.0 <= s <= 1.0 for s in scores)
 
+
+
+def test_a_verbatim_quote_is_supported_without_asking_the_model(monkeypatch):
+    """The model scored this sentence against itself 0.55 (below the 0.7 bar); a quote is stated by definition."""
+    def boom(*args, **kwargs):
+        raise AssertionError("the NLI model must not be consulted for a verbatim quote")
+
+    monkeypatch.setattr("rag_lab.retrieval.nli.entailment_scores", boom)
+    passage = "# Ginkgo office policy\n## Taxi limit\nA single taxi ride may cost at most 141 EUR."
+    assert sentence_support("A single taxi ride may cost at most 141 EUR.", [passage]) == 1.0
+    assert sentence_support("a single  taxi ride may cost AT MOST 141 EUR.", [passage]) == 1.0  # case and spacing
+
+
+def test_a_quote_with_a_changed_figure_or_a_short_fragment_still_goes_to_the_model(monkeypatch):
+    calls = []
+    monkeypatch.setattr("rag_lab.retrieval.nli.entailment_scores", lambda premises, hypothesis: calls.append(hypothesis) or [0.1])
+    passage = "A single taxi ride may cost at most 141 EUR."
+    assert sentence_support("A single taxi ride may cost at most 151 EUR.", [passage]) == 0.1
+    assert sentence_support("141 EUR.", [passage]) == 0.1  # too short to count as a quotation
+    assert len(calls) == 2
