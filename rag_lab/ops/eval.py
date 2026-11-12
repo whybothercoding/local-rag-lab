@@ -43,7 +43,7 @@ from rag_lab.ops.eval_metrics import (  # pure functions: importing them loads n
 )
 
 
-def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
+def redirect_stores(out_dir: Path, llm_mode: bool, graph_rag: bool = False) -> None:
     """Point every store at out_dir (wiping it) before any project module that reads settings is imported.
 
     settings is built from the environment on its first import, so this must run first. Importing this
@@ -52,6 +52,10 @@ def redirect_stores(out_dir: Path, llm_mode: bool) -> None:
     shutil.rmtree(out_dir, ignore_errors=True)
     os.environ["CHROMA_PATH"] = str(out_dir / "chroma")
     os.environ["BM25_DIR"] = str(out_dir / "bm25")
+    # Ingestion writes one knowledge graph per workspace; the eval workspaces share names with real ones.
+    os.environ["GRAPHS_DIR"] = str(out_dir / "graphs")
+    # Graph retrieval is part of the result, so the run states it instead of inheriting it from .env or the shell.
+    os.environ["ENABLE_GRAPH_RAG"] = "true" if graph_rag else "false"
     os.environ["UPLOADS_DIR"] = str(out_dir / "uploads")
     os.environ["AUDIT_DB_PATH"] = str(out_dir / "audit.db")
     os.environ["CACHE_DB_PATH"] = str(out_dir / "cache.db")

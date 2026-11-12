@@ -54,6 +54,7 @@ os.environ["DB_URI"] = f"sqlite:///{os.path.join(_scratch_dir, 'checkpoints.db')
 # knowledge_base/ stays real; tests only read it.
 os.environ["CHROMA_PATH"] = os.path.join(_scratch_dir, "chroma")
 os.environ["BM25_DIR"] = os.path.join(_scratch_dir, "bm25")
+os.environ["GRAPHS_DIR"] = os.path.join(_scratch_dir, "graphs")
 os.environ["UPLOADS_DIR"] = os.path.join(_scratch_dir, "uploads")
 # Tests never depend on a running model server; the deterministic synthesizer keeps answers reproducible.
 os.environ["LLM_PROVIDER"] = "deterministic"

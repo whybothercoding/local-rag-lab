@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -280,3 +281,18 @@ def test_language_breakdown_survives_a_language_with_no_conclusive_cases(capsys)
     out = capsys.readouterr().out
     assert "de" in out and "no conclusive cases" in out
     assert "1.00" in out
+
+
+def test_redirect_stores_keeps_knowledge_graphs_and_the_graph_switch_inside_the_out_dir(tmp_path):
+    """Ingestion writes data/graphs/<workspace>.json: the eval corpus must never reach the real graphs."""
+    code = (
+        "import os, sys; from pathlib import Path; from rag_lab.ops.eval import redirect_stores;"
+        "out = Path(sys.argv[1]); redirect_stores(out, False);"
+        "print(os.environ['GRAPHS_DIR'], os.environ['ENABLE_GRAPH_RAG']);"
+        "redirect_stores(out, False, graph_rag=True); print(os.environ['ENABLE_GRAPH_RAG'])"
+    )
+    env = {**os.environ, "ENABLE_GRAPH_RAG": "true", "GRAPHS_DIR": str(tmp_path / "real")}
+    done = subprocess.run([sys.executable, "-c", code, str(tmp_path / "out")], cwd=ROOT, capture_output=True,
+                          text=True, env=env)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == [str(tmp_path / "out" / "graphs"), "false", "true"]
