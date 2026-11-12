@@ -74,9 +74,25 @@ Most synthetic suites score 1.00 on their held-out split. That means the suites 
 
 (`passed` counts every case, including abstention, security and cache cases.) A 17/17 only excludes true rates below 0.82.
 
-### Judge model
+### Judge model: a different family rejudged the real-model answers
 
-`make eval-llm` and `--judge` record the judge in `report.json` (`judge_model`; the answering model when `EVAL_JUDGE_MODEL` is unset). **A rejudge by a model from another family was not run for this revision:** only `qwen3:8b` is installed on the machine that produced these numbers, and a second model needs a download. The `judge` columns in the chat-model and LLM-answer tables below come from earlier runs and, where the judge is the answering model, are lenient; read them as a signal, not a verdict. To rejudge: `ollama pull <other family>`, `make eval-llm`, then `EVAL_JUDGE_MODEL=<model> python -m rag_lab.ops.eval --judge-only eval/out/report.json`.
+`qwen3:8b` (thinking off) answered every suite with `make eval-llm` on 2026-11-12, graph retrieval off. The saved answers were then judged in one pass by **`gemma4:12b`** (Google family, digest `c7597fc90b86`, nvfp4), a different family from the answerer, with `EVAL_JUDGE_MODEL=gemma4:12b python -m rag_lab.ops.eval --judge-only eval/out/report.json`. The judge was named before any result was seen. Committed run: `baselines/llm_qwen3-8b_judge_gemma4-12b_2026-11-13.json` (without per-case rows). Test split; brackets are 95% Wilson intervals over the answered cases.
+
+| Suite | cases | keyword recall | entailed | judge supported (gemma4:12b) | median latency |
+|---|---|---|---|---|---|
+| en | 28 | 1.00 | 16/17 [0.73, 0.99] | 16/17 [0.73, 0.99] | 1.3 s |
+| multilingual | 71 | 0.95 | 41/44 [0.82, 0.98] | 44/44 [0.92, 1.00] | 1.9 s |
+| conversation | 9 | 0.89 | 9/9 [0.70, 1.00] | 8/9 [0.57, 0.98] | 3.3 s |
+| messy | 11 | 1.00 | 10/10 [0.72, 1.00] | 10/10 [0.72, 1.00] | 1.7 s |
+| stress | 12 | 1.00 | 12/12 [0.76, 1.00] | 12/12 [0.76, 1.00] | 1.7 s |
+| graph (not gated) | 12 | 0.50 | 9/12 [0.47, 0.91] | 7/12 [0.32, 0.81] | 3.9 s |
+
+Every gated suite clears the judge gate (0.8) and its other gates. Reading it:
+
+- Against the earlier same-model judge figures the independent judge agrees on en (0.94) and messy and stress (1.00), is higher on multilingual (1.00 against 0.91) and lower on conversation (0.89 against 1.00, one case of 9). It was not uniformly harsher than the answering model, so self-grading did not visibly inflate those figures. One judge, one run: intervals this wide (9 to 44 cases) settle little.
+- The judge is more lenient than the entailment grader on multilingual: it supported 44 of 44 answers while the NLI grader entailed 41 of 44, so the three that the grader rejects, and sends to review, are ones the judge accepts.
+- The graph suite is the weak one with a real model too: 7 of 12 judged supported, 9 of 12 entailed, keyword recall 0.50 (graph retrieval off, as the default).
+- Not done: a second judge family, and `make eval-llm` on the XQuAD slice.
 
 ## External slice (XQuAD)
 
@@ -327,4 +343,4 @@ answerable cases was 86 (trigram) vs 80 (unicode61, porter).
 ## Known limitations
 
 - The default answer source is the deterministic synthesizer, which picks sentences by lexical overlap. It cannot match paraphrases such as "roll back" against "rollback", so keyword recall is lower than a model-written answer would achieve. Run `make eval-llm` to score the real model.
-- The judge is a 7B model and, by default, the same model that wrote the answers, so it is lenient (it approved 94-100% in the baseline). Use `EVAL_JUDGE_MODEL` for an independent judge, and treat `judge_support` as a signal to investigate, not as a verdict.
+- By default the judge is the model that wrote the answers, so it is lenient (it approved 94-100% in the baseline). The 2026-11-13 run above used an independent judge (`gemma4:12b`); set `EVAL_JUDGE_MODEL` for that, and treat `judge_support` as a signal to investigate, not as a verdict.
