@@ -105,6 +105,41 @@ def summarize(results: list[dict]) -> dict:
     }
 
 
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for k successes in n trials; (0, 1) when n is 0."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    denominator = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denominator
+    margin = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denominator
+    return round(max(0.0, centre - margin), 4), round(min(1.0, centre + margin), 4)
+
+
+def binary_counts(results: list[dict]) -> dict[str, dict]:
+    """Per-case yes/no outcomes as k of n with a Wilson interval.
+
+    Only outcomes that are a single yes or no per case belong here. keyword_recall, retrieval_recall and
+    groundedness are means of fractions, not proportions, so they get no interval.
+    """
+    answerable = [r for r in results if r["expect"] == "answer" and r.get("passed") is not None]
+    answered = [r for r in answerable if not r["abstained"]]
+    outcomes = {
+        "passed": [bool(r["passed"]) for r in results if r.get("passed") is not None],
+        "answered": [not r["abstained"] for r in answerable],
+        "gold_source_cited": [r.get("context_recall") == 1.0 for r in answerable],
+        "all_keywords_in_answer": [r.get("keyword_recall") == 1.0 for r in answerable],
+        "entailed": [bool(r["nli_supported"]) for r in answered if r.get("nli_supported") is not None],
+        "judge_supported": [bool(r["judge_supported"]) for r in answerable if r.get("judge_supported") is not None],
+    }
+    counts = {}
+    for name, flags in outcomes.items():
+        if flags:
+            low, high = wilson_interval(sum(flags), len(flags))
+            counts[name] = {"k": sum(flags), "n": len(flags), "ci95": [low, high]}
+    return counts
+
+
 def check_thresholds(summary: dict, thresholds: dict[str, float]) -> list[str]:
     failures = []
     for metric, minimum in thresholds.items():

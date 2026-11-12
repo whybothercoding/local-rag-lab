@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-harvest audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password scale-up scale-down lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
+.PHONY: help status setup rust-build models verify-models calibrate-models up down ollama-pull test test-offline lint typecheck coverage workspaces create-workspace delete-workspace sync ingest ui audit-verify audit-tail audit-feedback audit-harvest audit-anchor audit-export retention backup backups backup-verify add-user grant revoke set-clearance set-admin set-role set-default team-mode groups create-group delete-group add-to-group remove-from-group grant-group set-password revoke-sessions delete-user users reset-users factory-reset recover db-password scale-up scale-down lan-tls lan-tls-down lan-tls-ca migrate-keys totp-enroll totp-recovery totp-disable eval eval-external eval-judge eval-llm eval-calibrate graph clean reviews review approve reject
 
 # 0. Command Reference & System Readiness
 help:
@@ -81,6 +81,7 @@ help:
 	@echo "  make typecheck                                 Type-check the rag_lab package with mypy"
 	@echo "  make coverage                                  Run the suite with a per-module coverage report"
 	@echo "  make eval                                      Run offline RAG evaluation gate (eval/golden.json)"
+	@echo "  make eval-external                             Public XQuAD slice (en/de/el), reported not gated (eval/external/)"
 	@echo "  make eval-judge                                Run evaluation with local Ollama LLM-as-a-judge"
 	@echo "  make eval-llm [SUITE=en]                       Evaluate answers from the local Ollama model, judge gated"
 	@echo "  make eval-calibrate                            Print retrieval calibration split signals"
@@ -368,6 +369,10 @@ reject:
 # 13. Offline evaluation gate: retrieval, answer, and access-control metrics on eval/corpus
 eval:
 	./venv/bin/python -m rag_lab.ops.eval
+
+# Public XQuAD slice (eval/external/): reported, never gated; takes about 10 minutes
+eval-external:
+	./venv/bin/python -m rag_lab.ops.eval --external
 
 # Same gates, plus an advisory answer-support check by the local Ollama model
 eval-judge:

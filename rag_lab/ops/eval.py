@@ -40,6 +40,7 @@ from rag_lab.ops.eval_metrics import (  # pure functions: importing them loads n
     keyword_recall,
     page_accuracy,
     summarize,
+    binary_counts,
 )
 
 
@@ -156,7 +157,11 @@ JUDGE_PROMPT = (
     "different languages. Reply with exactly one word: yes or no."
 )
 
-WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens", "messy", "stress")
+WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens", "messy", "stress",
+              "xquad_en", "xquad_de", "xquad_el")
+# `--external`: a fixed slice of public XQuAD data (eval/external/README.md), reported and never gated.
+EXTERNAL_DIR = EVAL_DIR / "external"
+EXTERNAL_SUITE = "external"
 
 
 def seed_policy() -> None:
@@ -187,10 +192,10 @@ def seed_policy() -> None:
     })
 
 
-def build_indices() -> None:
+def build_indices(corpus_dir: Path = CORPUS_DIR) -> None:
     from rag_lab.ingestion.ingest import ingest_workspace
 
-    for workspace_dir in sorted(p for p in CORPUS_DIR.iterdir() if p.is_dir()):
+    for workspace_dir in sorted(p for p in corpus_dir.iterdir() if p.is_dir()):
         result = ingest_workspace(workspace_dir.name, str(workspace_dir))
         if not result.ok:
             raise SystemExit(f"Indexing failed for '{workspace_dir.name}': {result.error}")
@@ -344,6 +349,13 @@ def print_table(results: list[dict], summary: dict, title: str) -> None:
         print(f"{key:<22} {value}")
 
 
+def print_counts(results: list[dict], title: str) -> None:
+    """Yes/no outcomes as k/n with a 95% Wilson interval: at n this small, 1.00 still allows a much lower true rate."""
+    print(f"\n{title}: k/n and 95% Wilson interval")
+    for name, c in binary_counts(results).items():
+        print(f"  {name:<24}{c['k']:>4}/{c['n']:<4} [{c['ci95'][0]:.2f}, {c['ci95'][1]:.2f}]")
+
+
 def print_language_breakdown(results: list[dict]) -> None:
     """Pass rate per question language across every suite's test split."""
     print(f"\n{'language':<10}{'cases':>7}{'passed':>8}{'rate':>7}")
@@ -375,6 +387,7 @@ def judge_report(path: Path) -> int:
     for suite in report["suites"]:
         test = [r for r in report["results"] if r["suite"] == suite and r["split"] == "test"]
         report["suites"][suite]["test"] = summarize(test)
+        report["suites"][suite]["test_counts"] = binary_counts(test)
         print(f"{suite:<13} judge_support={report['suites'][suite]['test']['judge_support']}")
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return 0
@@ -405,6 +418,10 @@ def main() -> int:
     parser.add_argument("--judge-only", type=Path, metavar="REPORT",
                         help="Judge the answers saved in REPORT with EVAL_JUDGE_MODEL, in one pass (the judge "
                              "loads once instead of swapping with the answering model on every case)")
+    parser.add_argument("--external", action="store_true",
+                        help="Run the public XQuAD slice in eval/external/ instead of golden.json (reported, not gated)")
+    parser.add_argument("--graph-rag", choices=("on", "off"), default="off",
+                        help="Graph-augmented retrieval for this run (default off, as in CI)")
     parser.add_argument("--suite", action="append", choices=sorted(SUITE_GATES),
                         help="Run only these suites (repeatable); default all")
     args = parser.parse_args()
@@ -413,7 +430,8 @@ def main() -> int:
     if args.judge_only:
         return judge_report(args.judge_only)
 
-    redirect_stores(OUT_DIR, args.llm)
+    out_dir = OUT_DIR / "external" if args.external else OUT_DIR
+    redirect_stores(out_dir, args.llm, graph_rag=args.graph_rag == "on")
     from langchain_core.language_models import BaseChatModel
     from langgraph.checkpoint.memory import MemorySaver
 
@@ -441,8 +459,8 @@ def main() -> int:
                 judge_llm = get_chat_llm("ollama")
 
     seed_policy()
-    build_indices()
-    cases = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+    build_indices(EXTERNAL_DIR / "corpus" if args.external else CORPUS_DIR)
+    cases = json.loads((EXTERNAL_DIR / "cases.json" if args.external else GOLDEN_PATH).read_text(encoding="utf-8"))
     if args.suite:
         cases = [c for c in cases if c.get("suite", "en") in args.suite]
 
@@ -453,9 +471,13 @@ def main() -> int:
         print_calibration([r for r in results if r["split"] == "calibration"])
         return 0
 
-    report: dict = {"mode": "llm" if args.llm else "deterministic", "suites": {}, "results": results}
+    report: dict = {"mode": "llm" if args.llm else "deterministic", "graph_rag": args.graph_rag, "suites": {},
+                    "results": results}
+    if judge_llm is not None:
+        report["judge_model"] = os.getenv("EVAL_JUDGE_MODEL") or "(the answering model)"
     all_failures: list[str] = []
-    for suite in [s for s in SUITE_GATES if any(r["suite"] == s for r in results)]:
+    suites = [EXTERNAL_SUITE] if args.external else [s for s in SUITE_GATES if any(r["suite"] == s for r in results)]
+    for suite in suites:
         rows = [r for r in results if r["suite"] == suite]
         calibration = [r for r in rows if r["split"] == "calibration"]
         test = [r for r in rows if r["split"] == "test"]
@@ -465,20 +487,42 @@ def main() -> int:
         all_failures += [f"[{suite}] {f}" for f in failures]
         report["suites"][suite] = {
             "calibration": cal_summary, "test": test_summary, "thresholds": gates, "failures": failures,
+            "test_counts": binary_counts(test),
         }
+        if args.external:
+            # Question language -> document language, so cross-lingual cases (de -> en) stay apart from monolingual ones.
+            report["suites"][suite]["by_pair"] = {
+                pair: {"summary": summarize(group), "counts": binary_counts(group)}
+                for pair in sorted({f"{r['lang']}->{r['workspace'][-2:]}" for r in test})
+                for group in [[r for r in test if f"{r['lang']}->{r['workspace'][-2:]}" == pair]]
+            }
         status = "gated" if gates is not None else "reported, not gated yet"
-        print_table(test, test_summary, f"SUITE {suite.upper()}: TEST SPLIT ({status})")
+        if args.external:
+            print(f"\nSUITE {suite.upper()}: {len(test)} cases ({status})")
+            for pair, group in report["suites"][suite]["by_pair"].items():
+                print(f"\n[{pair}] answer_rate={group['summary']['answer_rate']} "
+                      f"entailment_rate={group['summary']['entailment_rate']} median_latency_ms="
+                      f"{group['summary']['median_latency_ms']}")
+                for name, c in group["counts"].items():
+                    print(f"  {name:<24}{c['k']:>4}/{c['n']:<4} [{c['ci95'][0]:.2f}, {c['ci95'][1]:.2f}]")
+        else:
+            print_table(test, test_summary, f"SUITE {suite.upper()}: TEST SPLIT ({status})")
+            print_counts(test, f"{suite} test split")
 
-    print_language_breakdown([r for r in results if r["split"] == "test"])
+    if not args.external:
+        print_language_breakdown([r for r in results if r["split"] == "test"])
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     if all_failures:
         print("\nFAILED thresholds:")
         for failure in all_failures:
             print(f"  - {failure}")
         return 1
-    print("\nAll gated suites met their thresholds. Report: eval/out/report.json")
+    if args.external:
+        print(f"\nExternal slice reported, not gated. Report: {out_dir}/report.json")
+        return 0
+    print(f"\nAll gated suites met their thresholds. Report: {out_dir.relative_to(ROOT) if out_dir.is_relative_to(ROOT) else out_dir}/report.json")
     return 0
 
 

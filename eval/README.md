@@ -50,6 +50,56 @@ both fixed: the extractive answerer ranked sentences without their heading, so "
 sentences from other regions (it quoted two regions' figures); and the NLI model scored a sentence quoted word for word from its
 source at 0.55, below the 0.7 bar, so a verbatim quote is now accepted without asking the model.
 
+## Saturation, and what the synthetic scores mean
+
+Most synthetic suites score 1.00 on their held-out split. That means the suites are **saturated**: they catch a regression, but they cannot show that one change is better than another, and a 1.00 here is not evidence of a 1.00 elsewhere. Reasons, all in this repository:
+
+- The corpus and the questions were written by the same author, so questions echo the documents' wording.
+- The gated run answers with a deterministic extractive synthesizer, not a model; the real-model run (`make eval-llm`) is weekly and never gates.
+- The held-out splits are small (28, 71, 9, 11 and 12 cases), so a perfect score still allows a much lower true rate (table below).
+- Thresholds were calibrated on the same corpus family, so the test split is held out from the thresholds but not from the author's style.
+- The LLM judge, when used, is by default the model that wrote the answers (see Known limitations).
+
+### Held-out counts with 95% Wilson intervals
+
+`make eval` prints these under every suite (`test_counts` in `report.json`; committed run: `baselines/deterministic_synthetic_2026-11-12.json`). Only yes/no outcomes get an interval; `keyword_recall`, `retrieval_recall` and `groundedness` are means of fractions, not proportions. `answered`, `gold source cited`, `keywords` and `entailed` are counted over the answerable cases (entailed: over answered ones).
+
+| Suite (test split) | passed | answered | gold source cited | all keywords in answer | entailed |
+|---|---|---|---|---|---|
+| en | 28/28 [0.88, 1.00] | 17/17 [0.82, 1.00] | 17/17 [0.82, 1.00] | 17/17 [0.82, 1.00] | 17/17 [0.82, 1.00] |
+| multilingual | 64/71 [0.81, 0.95] | 43/44 [0.88, 1.00] | 43/44 [0.88, 1.00] | 37/44 [0.71, 0.92] | 43/43 [0.92, 1.00] |
+| conversation | 7/9 [0.45, 0.94] | 9/9 [0.70, 1.00] | 9/9 [0.70, 1.00] | 7/9 [0.45, 0.94] | 9/9 [0.70, 1.00] |
+| messy | 11/11 [0.74, 1.00] | 10/10 [0.72, 1.00] | 10/10 [0.72, 1.00] | 10/10 [0.72, 1.00] | 10/10 [0.72, 1.00] |
+| stress | 12/12 [0.76, 1.00] | 12/12 [0.76, 1.00] | 12/12 [0.76, 1.00] | 12/12 [0.76, 1.00] | 12/12 [0.76, 1.00] |
+
+(`passed` counts every case, including abstention, security and cache cases.) A 17/17 only excludes true rates below 0.82.
+
+### Judge model
+
+`make eval-llm` and `--judge` record the judge in `report.json` (`judge_model`; the answering model when `EVAL_JUDGE_MODEL` is unset). **A rejudge by a model from another family was not run for this revision:** only `qwen3:8b` is installed on the machine that produced these numbers, and a second model needs a download. The `judge` columns in the chat-model and LLM-answer tables below come from earlier runs and, where the judge is the answering model, are lenient; read them as a signal, not a verdict. To rejudge: `ollama pull <other family>`, `make eval-llm`, then `EVAL_JUDGE_MODEL=<model> python -m rag_lab.ops.eval --judge-only eval/out/report.json`.
+
+## External slice (XQuAD)
+
+`make eval-external` (about 10 minutes, opt-in) runs 895 cases from a public benchmark, XQuAD (CC BY-SA 4.0), in English, German and Greek (no French in the source): 179 questions over 90 Wikipedia paragraphs, each asked in the document's language and, for German and Greek, also against the English documents. Provenance, licence and the selection rule fixed before any run: [external/README.md](external/README.md). It is reported as measured, **not gated, and no threshold was tuned on it**. Answers are from the deterministic extractive answerer; the committed run is `baselines/external_xquad_deterministic.json`.
+
+| Question to documents | cases | answered | gold source cited | gold answer span in answer | entailed (of answered) |
+|---|---|---|---|---|---|
+| en to en | 179 | 179 [0.98, 1.00] | 179 [0.98, 1.00] | 157 [0.82, 0.92] | 179/179 |
+| de to de | 179 | 178 [0.97, 1.00] | 177 [0.96, 1.00] | 145 [0.75, 0.86] | 177/177 |
+| el to el | 179 | 177 [0.96, 1.00] | 177 [0.96, 1.00] | 149 [0.77, 0.88] | 177/177 |
+| de to en (cross-lingual) | 179 | 163 [0.86, 0.94] | 162 [0.85, 0.94] | 135 [0.69, 0.81] | 161/162 |
+| el to en (cross-lingual) | 179 | 156 [0.81, 0.91] | 156 [0.81, 0.91] | 122 [0.61, 0.75] | 153/156 |
+| **all** | **895** | **853 [0.94, 0.97]** | **851 [0.93, 0.96]** | **708 [0.76, 0.82]** | **847/851 [0.99, 1.00]** |
+
+(Counts out of 179 per row; brackets are 95% Wilson intervals; `passed` equals the span column because a case passes only if the source is cited and the span is present.)
+
+Reading, including the weak parts:
+
+- Retrieval holds up on data the author did not write: the gold paragraph is cited in 851 of 895 cases. Entailment holds too (847 of 851 answered cases).
+- The weak number is the answer itself: the gold span appears in 708 of 895 answers (79.1%, interval 0.76 to 0.82), lowest cross-lingual (Greek to English 122/179, 68.2%). The right paragraph is cited far more often than the span is found (143 of the 851 cases that cite it lack the span), so the misses sit after retrieval; the likely cause is the extractive answerer quoting another sentence of the paragraph, but the 143 answers were not inspected one by one. That is a limit of the deterministic answerer, not a measurement of the real model; `make eval-llm` has not been run on this slice.
+- Cross-lingual questions abstain more: 16 of 179 (de to en) and 23 of 179 (el to en) against 0 to 2 for the same-language pairs. The relevance gate is calibrated on the synthetic corpus, and it declines more of these questions than the same-language ones. It was left as it is.
+- Not covered: French, multi-hop questions, unanswerable questions (SQuAD v1.1 has none, so abstention accuracy is not measured here), the real model.
+
 ## Running
 
 ```bash
@@ -57,6 +107,7 @@ make eval                     # deterministic synthesizer, all suites; this is w
 make eval-llm [SUITE=en]      # answers from the local Ollama model, LLM judge gated (needs 'ollama serve')
                               # CI runs it weekly and on demand (.github/workflows/eval-llm.yml), non-blocking
 make eval-judge               # deterministic answers plus an advisory judge
+make eval-external            # public XQuAD slice (en/de/el), reported not gated, about 10 minutes
 make eval-calibrate           # per-case retrieval signals for the calibration split
 ```
 

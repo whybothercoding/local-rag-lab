@@ -13,6 +13,8 @@ from rag_lab.ops.eval_metrics import (
     keyword_recall,
     page_accuracy,
     summarize,
+    binary_counts,
+    wilson_interval,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -296,3 +298,49 @@ def test_redirect_stores_keeps_knowledge_graphs_and_the_graph_switch_inside_the_
                           text=True, env=env)
     assert done.returncode == 0, done.stderr
     assert done.stdout.split() == [str(tmp_path / "out" / "graphs"), "false", "true"]
+
+
+def test_wilson_interval_matches_known_values_and_never_leaves_zero_to_one():
+    low, high = wilson_interval(17, 17)
+    assert (low, high) == (0.8157, 1.0)  # 17 of 17 only rules out true rates below about 0.82
+    low, high = wilson_interval(0, 10)
+    assert low == 0.0 and 0.27 < high < 0.29
+    assert wilson_interval(5, 10) == (0.2366, 0.7634)
+    assert wilson_interval(0, 0) == (0.0, 1.0)
+
+
+def test_binary_counts_use_only_yes_no_outcomes():
+    rows = [
+        {"expect": "answer", "abstained": False, "passed": True, "context_recall": 1.0, "keyword_recall": 1.0,
+         "nli_supported": True, "judge_supported": True},
+        {"expect": "answer", "abstained": False, "passed": False, "context_recall": 1.0, "keyword_recall": 0.5,
+         "nli_supported": False, "judge_supported": None},
+        {"expect": "answer", "abstained": True, "passed": False, "context_recall": 0.0, "keyword_recall": 0.0},
+        {"expect": "abstain", "abstained": True, "passed": True},
+    ]
+    counts = binary_counts(rows)
+    assert (counts["passed"]["k"], counts["passed"]["n"]) == (2, 4)
+    assert (counts["answered"]["k"], counts["answered"]["n"]) == (2, 3)
+    assert (counts["gold_source_cited"]["k"], counts["gold_source_cited"]["n"]) == (2, 3)
+    assert (counts["all_keywords_in_answer"]["k"], counts["all_keywords_in_answer"]["n"]) == (1, 3)
+    assert (counts["entailed"]["k"], counts["entailed"]["n"]) == (1, 2)
+    assert (counts["judge_supported"]["k"], counts["judge_supported"]["n"]) == (1, 1)
+    assert "keyword_recall" not in counts and "retrieval_recall" not in counts
+
+
+def test_external_slice_is_self_consistent_and_carries_its_licence():
+    """Every case points at a committed document; the share-alike licence travels with the data."""
+    external = ROOT / "eval" / "external"
+    cases = json.loads((external / "cases.json").read_text(encoding="utf-8"))
+    assert len({c["id"] for c in cases}) == len(cases)
+    for case in cases:
+        assert case["suite"] == "external" and case["split"] == "test"
+        for source in case["expected_sources"]:
+            assert (external / "corpus" / case["workspace"] / source).is_file(), case["id"]
+        assert case["expected_keywords"] and all(case["expected_keywords"])
+    assert {c["lang"] for c in cases} == {"en", "de", "el"}  # XQuAD has no French
+    assert "Attribution-ShareAlike 4.0" in (external / "LICENSE-CC-BY-SA-4.0.txt").read_text(encoding="utf-8")
+    notice = (external / "README.md").read_text(encoding="utf-8")
+    assert "CC BY-SA 4.0" in notice and "7d30520c717524000f0d9d2f9c10a069acd9d285" in notice
+    golden = json.loads((ROOT / "eval" / "golden.json").read_text(encoding="utf-8"))
+    assert not {c["id"] for c in cases} & {c["id"] for c in golden}, "external cases must not leak into golden.json"

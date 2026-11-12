@@ -1,0 +1,408 @@
+{
+ "mode": "deterministic",
+ "graph_rag": "off",
+ "suites": {
+  "external": {
+   "calibration": {
+    "cases": 0,
+    "inconclusive": 0,
+    "answer_rate": null,
+    "retrieval_recall": null,
+    "context_precision": null,
+    "page_accuracy": null,
+    "keyword_recall": null,
+    "groundedness": null,
+    "entailment_rate": null,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": null,
+    "degraded_cases": 0,
+    "median_latency_ms": null
+   },
+   "test": {
+    "cases": 895,
+    "inconclusive": 0,
+    "answer_rate": 0.9531,
+    "retrieval_recall": 0.9508,
+    "context_precision": 0.8952,
+    "page_accuracy": null,
+    "keyword_recall": 0.7911,
+    "groundedness": 0.9719,
+    "entailment_rate": 0.9953,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": null,
+    "degraded_cases": 0,
+    "median_latency_ms": 604.8
+   },
+   "thresholds": null,
+   "failures": [],
+   "test_counts": {
+    "passed": {
+     "k": 708,
+     "n": 895,
+     "ci95": [
+      0.7632,
+      0.8164
+     ]
+    },
+    "answered": {
+     "k": 853,
+     "n": 895,
+     "ci95": [
+      0.9372,
+      0.9651
+     ]
+    },
+    "gold_source_cited": {
+     "k": 851,
+     "n": 895,
+     "ci95": [
+      0.9346,
+      0.9632
+     ]
+    },
+    "all_keywords_in_answer": {
+     "k": 708,
+     "n": 895,
+     "ci95": [
+      0.7632,
+      0.8164
+     ]
+    },
+    "entailed": {
+     "k": 847,
+     "n": 851,
+     "ci95": [
+      0.988,
+      0.9982
+     ]
+    }
+   },
+   "by_pair": {
+    "de->de": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9944,
+      "retrieval_recall": 0.9888,
+      "context_precision": 0.9488,
+      "page_accuracy": null,
+      "keyword_recall": 0.8101,
+      "groundedness": 1.0,
+      "entailment_rate": 1.0,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": null,
+      "degraded_cases": 0,
+      "median_latency_ms": 604.8
+     },
+     "counts": {
+      "passed": {
+       "k": 145,
+       "n": 179,
+       "ci95": [
+        0.7463,
+        0.8608
+       ]
+      },
+      "answered": {
+       "k": 178,
+       "n": 179,
+       "ci95": [
+        0.969,
+        0.999
+       ]
+      },
+      "gold_source_cited": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 145,
+       "n": 179,
+       "ci95": [
+        0.7463,
+        0.8608
+       ]
+      },
+      "entailed": {
+       "k": 177,
+       "n": 177,
+       "ci95": [
+        0.9788,
+        1.0
+       ]
+      }
+     }
+    },
+    "de->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9106,
+      "retrieval_recall": 0.905,
+      "context_precision": 0.8371,
+      "page_accuracy": null,
+      "keyword_recall": 0.7542,
+      "groundedness": 0.966,
+      "entailment_rate": 0.9938,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": null,
+      "degraded_cases": 0,
+      "median_latency_ms": 625.2
+     },
+     "counts": {
+      "passed": {
+       "k": 135,
+       "n": 179,
+       "ci95": [
+        0.6862,
+        0.8115
+       ]
+      },
+      "answered": {
+       "k": 163,
+       "n": 179,
+       "ci95": [
+        0.8597,
+        0.9442
+       ]
+      },
+      "gold_source_cited": {
+       "k": 162,
+       "n": 179,
+       "ci95": [
+        0.8532,
+        0.9399
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 135,
+       "n": 179,
+       "ci95": [
+        0.6862,
+        0.8115
+       ]
+      },
+      "entailed": {
+       "k": 161,
+       "n": 162,
+       "ci95": [
+        0.9659,
+        0.9989
+       ]
+      }
+     }
+    },
+    "el->el": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9888,
+      "retrieval_recall": 0.9888,
+      "context_precision": 0.9451,
+      "page_accuracy": null,
+      "keyword_recall": 0.8324,
+      "groundedness": 1.0,
+      "entailment_rate": 1.0,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": null,
+      "degraded_cases": 0,
+      "median_latency_ms": 724.3
+     },
+     "counts": {
+      "passed": {
+       "k": 149,
+       "n": 179,
+       "ci95": [
+        0.7708,
+        0.88
+       ]
+      },
+      "answered": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "gold_source_cited": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 149,
+       "n": 179,
+       "ci95": [
+        0.7708,
+        0.88
+       ]
+      },
+      "entailed": {
+       "k": 177,
+       "n": 177,
+       "ci95": [
+        0.9788,
+        1.0
+       ]
+      }
+     }
+    },
+    "el->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.8715,
+      "retrieval_recall": 0.8715,
+      "context_precision": 0.8268,
+      "page_accuracy": null,
+      "keyword_recall": 0.6816,
+      "groundedness": 0.882,
+      "entailment_rate": 0.9808,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": null,
+      "degraded_cases": 0,
+      "median_latency_ms": 442.7
+     },
+     "counts": {
+      "passed": {
+       "k": 122,
+       "n": 179,
+       "ci95": [
+        0.6101,
+        0.7454
+       ]
+      },
+      "answered": {
+       "k": 156,
+       "n": 179,
+       "ci95": [
+        0.8146,
+        0.9128
+       ]
+      },
+      "gold_source_cited": {
+       "k": 156,
+       "n": 179,
+       "ci95": [
+        0.8146,
+        0.9128
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 122,
+       "n": 179,
+       "ci95": [
+        0.6101,
+        0.7454
+       ]
+      },
+      "entailed": {
+       "k": 153,
+       "n": 156,
+       "ci95": [
+        0.945,
+        0.9934
+       ]
+      }
+     }
+    },
+    "en->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 1.0,
+      "retrieval_recall": 1.0,
+      "context_precision": 0.9181,
+      "page_accuracy": null,
+      "keyword_recall": 0.8771,
+      "groundedness": 1.0,
+      "entailment_rate": 1.0,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": null,
+      "degraded_cases": 0,
+      "median_latency_ms": 580.5
+     },
+     "counts": {
+      "passed": {
+       "k": 157,
+       "n": 179,
+       "ci95": [
+        0.8209,
+        0.9174
+       ]
+      },
+      "answered": {
+       "k": 179,
+       "n": 179,
+       "ci95": [
+        0.979,
+        1.0
+       ]
+      },
+      "gold_source_cited": {
+       "k": 179,
+       "n": 179,
+       "ci95": [
+        0.979,
+        1.0
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 157,
+       "n": 179,
+       "ci95": [
+        0.8209,
+        0.9174
+       ]
+      },
+      "entailed": {
+       "k": 179,
+       "n": 179,
+       "ci95": [
+        0.979,
+        1.0
+       ]
+      }
+     }
+    }
+   }
+  }
+ },
+ "n_results": 895
+}
