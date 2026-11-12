@@ -1,0 +1,514 @@
+{
+ "mode": "deterministic",
+ "graph_rag": "off",
+ "suites": {
+  "graph": {
+   "calibration": {
+    "cases": 0,
+    "inconclusive": 0,
+    "answer_rate": null,
+    "retrieval_recall": null,
+    "context_precision": null,
+    "page_accuracy": null,
+    "keyword_recall": null,
+    "groundedness": null,
+    "entailment_rate": null,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": null,
+    "degraded_cases": 0,
+    "median_latency_ms": null
+   },
+   "test": {
+    "cases": 12,
+    "inconclusive": 0,
+    "answer_rate": 1.0,
+    "retrieval_recall": 0.3611,
+    "context_precision": 0.6389,
+    "page_accuracy": null,
+    "keyword_recall": 0.4167,
+    "groundedness": 1.0,
+    "entailment_rate": 1.0,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": null,
+    "degraded_cases": 0,
+    "median_latency_ms": 248.6
+   },
+   "thresholds": null,
+   "failures": [],
+   "test_counts": {
+    "passed": {
+     "k": 0,
+     "n": 12,
+     "ci95": [
+      0.0,
+      0.2425
+     ]
+    },
+    "answered": {
+     "k": 12,
+     "n": 12,
+     "ci95": [
+      0.7575,
+      1.0
+     ]
+    },
+    "gold_source_cited": {
+     "k": 0,
+     "n": 12,
+     "ci95": [
+      0.0,
+      0.2425
+     ]
+    },
+    "all_keywords_in_answer": {
+     "k": 5,
+     "n": 12,
+     "ci95": [
+      0.1933,
+      0.6805
+     ]
+    },
+    "entailed": {
+     "k": 12,
+     "n": 12,
+     "ci95": [
+      0.7575,
+      1.0
+     ]
+    }
+   }
+  }
+ },
+ "results": [
+  {
+   "id": "graph-en1",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "How long does the access ticket last for the system whose access Eleni Vance signs off?",
+   "standalone_question": "How long does the access ticket last for the system whose access Eleni Vance signs off?",
+   "answer": "The LD-7 Access Ticket applies to the Ledger Database.",
+   "citations": [
+    "[graph_2_0_abf7354fd0ff] de1_tickets.md",
+    "[graph_17_0_2db5b6b67705] en2_tickets.md",
+    "[graph_12_0_00dd46f32ba0] en1_directory.md"
+   ],
+   "documents": [
+    "# Tickets für das Archivsystem\nDas AS-5 Zugriffsticket gilt für das Archivsystem.\nEin AS-5 Ticket läuft nach 8 Stunden ab.",
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes.",
+    "# Security team directory\nEleni Vance is the Infrastructure Security Lead.\nThe team sits on the third floor and meets every Monday."
+   ],
+   "latency_ms": 1036.6,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5608,
+   "best_coverage": 0.25,
+   "best_rerank_score": -0.7334,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 0.3333333333333333,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-en2",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "What is the validity period of the ticket needed for the database that Marc Okafor must approve access to?",
+   "standalone_question": "What is the validity period of the ticket needed for the database that Marc Okafor must approve access to?",
+   "answer": "The LD-7 Access Ticket applies to the Ledger Database.",
+   "citations": [
+    "[graph_17_0_2db5b6b67705] en2_tickets.md",
+    "[graph_2_0_abf7354fd0ff] de1_tickets.md",
+    "[graph_15_0_a6558e6b6f25] en2_directory.md"
+   ],
+   "documents": [
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes.",
+    "# Tickets für das Archivsystem\nDas AS-5 Zugriffsticket gilt für das Archivsystem.\nEin AS-5 Ticket läuft nach 8 Stunden ab.",
+    "# Payments team directory\nMarc Okafor is the Payments Platform Lead.\nHe is the escalation contact for settlement incidents."
+   ],
+   "latency_ms": 257.2,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.6506,
+   "best_coverage": 0.3333,
+   "best_rerank_score": -1.1487,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.6666666666666666,
+   "context_precision": 0.6666666666666666,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-en3",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "How many rows can be exported under the ticket for the warehouse that Priya Raman is responsible for approving?",
+   "standalone_question": "How many rows can be exported under the ticket for the warehouse that Priya Raman is responsible for approving?",
+   "answer": "The CW-3 Export Ticket applies to the Customer Warehouse. A CW-3 ticket allows an export of at most 5000 rows.",
+   "citations": [
+    "[graph_20_0_094f9abd683f] en3_tickets.md"
+   ],
+   "documents": [
+    "# Warehouse tickets\nThe CW-3 Export Ticket applies to the Customer Warehouse.\nA CW-3 ticket allows an export of at most 5000 rows."
+   ],
+   "latency_ms": 295.2,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.52,
+   "best_coverage": 0.3333,
+   "best_rerank_score": 3.8215,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 1.0,
+   "keyword_recall": 1.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-en4",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Within what time must the override ticket be closed for the pipeline that Tomas Berg approves overrides for?",
+   "standalone_question": "Within what time must the override ticket be closed for the pipeline that Tomas Berg approves overrides for?",
+   "answer": "The DP-9 Override Ticket applies to the Deployment Pipeline. A DP-9 ticket must be closed within 2 days.",
+   "citations": [
+    "[graph_23_0_c311a99192ec] en4_tickets.md"
+   ],
+   "documents": [
+    "# Pipeline tickets\nThe DP-9 Override Ticket applies to the Deployment Pipeline.\nA DP-9 ticket must be closed within 2 days."
+   ],
+   "latency_ms": 252.0,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.6529,
+   "best_coverage": 0.5,
+   "best_rerank_score": 4.2267,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 1.0,
+   "keyword_recall": 1.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-en5",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "How long is the change window on the ticket for the device whose changes Hannah Lindqvist signs off?",
+   "standalone_question": "How long is the change window on the ticket for the device whose changes Hannah Lindqvist signs off?",
+   "answer": "An EF-4 ticket limits the change window to 30 minutes.",
+   "citations": [
+    "[graph_26_0_4d125d625e83] en5_tickets.md",
+    "[graph_24_0_966672d24f44] en5_directory.md"
+   ],
+   "documents": [
+    "# Firewall tickets\nThe EF-4 Change Ticket applies to the Edge Firewall.\nAn EF-4 ticket limits the change window to 30 minutes.",
+    "# Network operations directory\nHannah Lindqvist is the Network Operations Lead.\nShe chairs the weekly change review."
+   ],
+   "latency_ms": 216.3,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5454,
+   "best_coverage": 0.3333,
+   "best_rerank_score": -0.1488,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.6666666666666666,
+   "context_precision": 1.0,
+   "keyword_recall": 1.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-en6",
+   "split": "test",
+   "suite": "graph",
+   "lang": "en",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "For how long is the entry ticket valid for the room that Kofi Mensah authorises people to enter?",
+   "standalone_question": "For how long is the entry ticket valid for the room that Kofi Mensah authorises people to enter?",
+   "answer": "The SR-1 Entry Ticket applies to the Server Room.",
+   "citations": [
+    "[graph_29_0_cb825a01919d] en6_tickets.md",
+    "[graph_17_0_2db5b6b67705] en2_tickets.md"
+   ],
+   "documents": [
+    "# Server room tickets\nThe SR-1 Entry Ticket applies to the Server Room.\nAn SR-1 ticket is valid for 1 shift.",
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes."
+   ],
+   "latency_ms": 227.9,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5513,
+   "best_coverage": 0.4,
+   "best_rerank_score": -1.5492,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 0.5,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-de1",
+   "split": "test",
+   "suite": "graph",
+   "lang": "de",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Wie lange ist das Zugriffsticket gültig für das System, dessen Zugriff Jonas Keller freigibt?",
+   "standalone_question": "Wie lange ist das Zugriffsticket gültig für das System, dessen Zugriff Jonas Keller freigibt?",
+   "answer": "Das AS-5 Zugriffsticket gilt für das Archivsystem.",
+   "citations": [
+    "[graph_2_0_abf7354fd0ff] de1_tickets.md",
+    "[graph_17_0_2db5b6b67705] en2_tickets.md",
+    "[graph_5_0_3a1b15d35740] de2_tickets.md"
+   ],
+   "documents": [
+    "# Tickets für das Archivsystem\nDas AS-5 Zugriffsticket gilt für das Archivsystem.\nEin AS-5 Ticket läuft nach 8 Stunden ab.",
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes.",
+    "# Tickets für Zahlungsläufe\nDas ZS-2 Freigabeticket gilt für den Zahlungsserver.\nEin ZS-2 Ticket bleibt 12 Stunden gültig."
+   ],
+   "latency_ms": 219.7,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5904,
+   "best_coverage": 0.25,
+   "best_rerank_score": 0.4202,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 0.3333333333333333,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-de2",
+   "split": "test",
+   "suite": "graph",
+   "lang": "de",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Wie lange bleibt das Freigabeticket gültig für den Server, den Sabine Roth genehmigen muss?",
+   "standalone_question": "Wie lange bleibt das Freigabeticket gültig für den Server, den Sabine Roth genehmigen muss?",
+   "answer": "Ein ZS-2 Ticket bleibt 12 Stunden gültig.",
+   "citations": [
+    "[graph_5_0_3a1b15d35740] de2_tickets.md"
+   ],
+   "documents": [
+    "# Tickets für Zahlungsläufe\nDas ZS-2 Freigabeticket gilt für den Zahlungsserver.\nEin ZS-2 Ticket bleibt 12 Stunden gültig."
+   ],
+   "latency_ms": 223.8,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5546,
+   "best_coverage": 0.4286,
+   "best_rerank_score": 1.8193,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 1.0,
+   "keyword_recall": 1.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-fr1",
+   "split": "test",
+   "suite": "graph",
+   "lang": "fr",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Combien de temps le ticket d'accès reste-t-il valable pour le système dont Claire Dubois approuve l'accès ?",
+   "standalone_question": "Combien de temps le ticket d'accès reste-t-il valable pour le système dont Claire Dubois approuve l'accès ?",
+   "answer": "The LD-7 Access Ticket applies to the Ledger Database. Le ticket PF-8 s'applique au Portail Fournisseurs.",
+   "citations": [
+    "[graph_17_0_2db5b6b67705] en2_tickets.md",
+    "[graph_35_0_96e7299853e0] fr2_tickets.md",
+    "[graph_14_0_fda836d3d3b8] en1_tickets.md"
+   ],
+   "documents": [
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes.",
+    "# Tickets du portail fournisseurs\nLe ticket PF-8 s'applique au Portail Fournisseurs.\nUn ticket PF-8 est valable 48 heures.",
+    "# Vault tickets\nThe PV-2 Access Ticket applies to the Production Vault.\nA PV-2 ticket expires after 6 hours and cannot be renewed."
+   ],
+   "latency_ms": 267.5,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5258,
+   "best_coverage": 0.2,
+   "best_rerank_score": -1.7968,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.0,
+   "context_precision": 0.0,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-fr2",
+   "split": "test",
+   "suite": "graph",
+   "lang": "fr",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Quelle est la durée de validité du ticket pour le portail dont Louis Martin doit approuver l'accès ?",
+   "standalone_question": "Quelle est la durée de validité du ticket pour le portail dont Louis Martin doit approuver l'accès ?",
+   "answer": "Le ticket PF-8 s'applique au Portail Fournisseurs.",
+   "citations": [
+    "[graph_35_0_96e7299853e0] fr2_tickets.md",
+    "[graph_17_0_2db5b6b67705] en2_tickets.md",
+    "[graph_14_0_fda836d3d3b8] en1_tickets.md"
+   ],
+   "documents": [
+    "# Tickets du portail fournisseurs\nLe ticket PF-8 s'applique au Portail Fournisseurs.\nUn ticket PF-8 est valable 48 heures.",
+    "# Ledger tickets\nThe LD-7 Access Ticket applies to the Ledger Database.\nAn LD-7 ticket stays valid for 90 minutes.",
+    "# Vault tickets\nThe PV-2 Access Ticket applies to the Production Vault.\nA PV-2 ticket expires after 6 hours and cannot be renewed."
+   ],
+   "latency_ms": 231.0,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.614,
+   "best_coverage": 0.2222,
+   "best_rerank_score": -0.6258,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 0.3333333333333333,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-el1",
+   "split": "test",
+   "suite": "graph",
+   "lang": "el",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Για πόσο διάστημα ισχύει το δελτίο πρόσβασης για το σύστημα που εγκρίνει η Ελένη Παπαδοπούλου;",
+   "standalone_question": "Για πόσο διάστημα ισχύει το δελτίο πρόσβασης για το σύστημα που εγκρίνει η Ελένη Παπαδοπούλου;",
+   "answer": "Η Ελένη Παπαδοπούλου είναι η υπεύθυνη ασφάλειας συστημάτων. Το δελτίο ΠΠ-2 ισχύει για την Πύλη Προμηθευτών.",
+   "citations": [
+    "[graph_6_0_a95b0faebd80] el1_directory.md",
+    "[graph_11_0_b4ca2cf16f03] el2_tickets.md"
+   ],
+   "documents": [
+    "# Κατάλογος ασφάλειας\nΗ Ελένη Παπαδοπούλου είναι η υπεύθυνη ασφάλειας συστημάτων.\nΗ ομάδα συναντάται κάθε Τετάρτη.",
+    "# Δελτία για την Πύλη Προμηθευτών\nΤο δελτίο ΠΠ-2 ισχύει για την Πύλη Προμηθευτών.\nΈνα δελτίο ΠΠ-2 παραμένει έγκυρο 24 ώρες."
+   ],
+   "latency_ms": 245.1,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.5534,
+   "best_coverage": 0.25,
+   "best_rerank_score": -3.2236,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 0.5,
+   "keyword_recall": 0.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  },
+  {
+   "id": "graph-el2",
+   "split": "test",
+   "suite": "graph",
+   "lang": "el",
+   "workspace": "graph",
+   "expect": "answer",
+   "question": "Πόσο καιρό παραμένει έγκυρο το δελτίο για την πύλη που πρέπει να εγκρίνει ο Νίκος Αλεξίου;",
+   "standalone_question": "Πόσο καιρό παραμένει έγκυρο το δελτίο για την πύλη που πρέπει να εγκρίνει ο Νίκος Αλεξίου;",
+   "answer": "Το δελτίο ΠΠ-2 ισχύει για την Πύλη Προμηθευτών. Ένα δελτίο ΠΠ-2 παραμένει έγκυρο 24 ώρες.",
+   "citations": [
+    "[graph_11_0_b4ca2cf16f03] el2_tickets.md"
+   ],
+   "documents": [
+    "# Δελτία για την Πύλη Προμηθευτών\nΤο δελτίο ΠΠ-2 ισχύει για την Πύλη Προμηθευτών.\nΈνα δελτίο ΠΠ-2 παραμένει έγκυρο 24 ώρες."
+   ],
+   "latency_ms": 285.4,
+   "abstained": false,
+   "cache_hit": false,
+   "best_similarity": 0.478,
+   "best_coverage": 0.5,
+   "best_rerank_score": 2.6758,
+   "relevant": true,
+   "degraded": [],
+   "graph_candidates": 0,
+   "judge_supported": null,
+   "context_recall": 0.3333333333333333,
+   "context_precision": 1.0,
+   "keyword_recall": 1.0,
+   "groundedness": 1.0,
+   "nli_supported": true,
+   "passed": false
+  }
+ ]
+}

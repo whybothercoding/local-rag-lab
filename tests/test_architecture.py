@@ -99,6 +99,7 @@ def test_eval_documentation_tracks_golden_set():
     )
     assert f"`messy` ({by_suite['messy']}:" in readme, f"eval/README.md suite 'messy' count drifted from {by_suite['messy']}"
     assert f"`stress` ({by_suite['stress']}:" in readme, f"eval/README.md suite 'stress' count drifted from {by_suite['stress']}"
+    assert f"`graph` ({by_suite['graph']}:" in readme, f"eval/README.md suite 'graph' count drifted from {by_suite['graph']}"
     assert f"`conversation` ({by_suite['conversation']} follow-ups)" in readme, (
         f"eval/README.md suite 'conversation' count drifted from {by_suite['conversation']}"
     )
@@ -107,7 +108,7 @@ def test_eval_documentation_tracks_golden_set():
     )
 
     # Invariants for the held-out test split vs calibration split
-    assert by_split["test"] == 131, f"Unexpected test split count: {by_split['test']}"
+    assert by_split["test"] == 143, f"Unexpected test split count: {by_split['test']}"
     assert by_split["calibration"] == 58, f"Unexpected calibration split count: {by_split['calibration']}"
     assert test_conv == 9, f"Unexpected conversation test count: {test_conv}"
 

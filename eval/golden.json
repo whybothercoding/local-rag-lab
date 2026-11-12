@@ -2488,5 +2488,197 @@
   ],
   "suite": "stress",
   "lang": "en"
+ },
+ {
+  "id": "graph-en1",
+  "split": "test",
+  "workspace": "graph",
+  "question": "How long does the access ticket last for the system whose access Eleni Vance signs off?",
+  "expected_sources": [
+   "en1_directory.md",
+   "en1_rules.md",
+   "en1_tickets.md"
+  ],
+  "expected_keywords": [
+   "6 hours"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-en2",
+  "split": "test",
+  "workspace": "graph",
+  "question": "What is the validity period of the ticket needed for the database that Marc Okafor must approve access to?",
+  "expected_sources": [
+   "en2_directory.md",
+   "en2_rules.md",
+   "en2_tickets.md"
+  ],
+  "expected_keywords": [
+   "90 minutes"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-en3",
+  "split": "test",
+  "workspace": "graph",
+  "question": "How many rows can be exported under the ticket for the warehouse that Priya Raman is responsible for approving?",
+  "expected_sources": [
+   "en3_directory.md",
+   "en3_rules.md",
+   "en3_tickets.md"
+  ],
+  "expected_keywords": [
+   "5000"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-en4",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Within what time must the override ticket be closed for the pipeline that Tomas Berg approves overrides for?",
+  "expected_sources": [
+   "en4_directory.md",
+   "en4_rules.md",
+   "en4_tickets.md"
+  ],
+  "expected_keywords": [
+   "2 days"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-en5",
+  "split": "test",
+  "workspace": "graph",
+  "question": "How long is the change window on the ticket for the device whose changes Hannah Lindqvist signs off?",
+  "expected_sources": [
+   "en5_directory.md",
+   "en5_rules.md",
+   "en5_tickets.md"
+  ],
+  "expected_keywords": [
+   "30 minutes"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-en6",
+  "split": "test",
+  "workspace": "graph",
+  "question": "For how long is the entry ticket valid for the room that Kofi Mensah authorises people to enter?",
+  "expected_sources": [
+   "en6_directory.md",
+   "en6_rules.md",
+   "en6_tickets.md"
+  ],
+  "expected_keywords": [
+   "1 shift"
+  ],
+  "suite": "graph",
+  "lang": "en"
+ },
+ {
+  "id": "graph-de1",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Wie lange ist das Zugriffsticket gültig für das System, dessen Zugriff Jonas Keller freigibt?",
+  "expected_sources": [
+   "de1_directory.md",
+   "de1_rules.md",
+   "de1_tickets.md"
+  ],
+  "expected_keywords": [
+   "8 stunden"
+  ],
+  "suite": "graph",
+  "lang": "de"
+ },
+ {
+  "id": "graph-de2",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Wie lange bleibt das Freigabeticket gültig für den Server, den Sabine Roth genehmigen muss?",
+  "expected_sources": [
+   "de2_directory.md",
+   "de2_rules.md",
+   "de2_tickets.md"
+  ],
+  "expected_keywords": [
+   "12 stunden"
+  ],
+  "suite": "graph",
+  "lang": "de"
+ },
+ {
+  "id": "graph-fr1",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Combien de temps le ticket d'accès reste-t-il valable pour le système dont Claire Dubois approuve l'accès ?",
+  "expected_sources": [
+   "fr1_directory.md",
+   "fr1_rules.md",
+   "fr1_tickets.md"
+  ],
+  "expected_keywords": [
+   "5 heures"
+  ],
+  "suite": "graph",
+  "lang": "fr"
+ },
+ {
+  "id": "graph-fr2",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Quelle est la durée de validité du ticket pour le portail dont Louis Martin doit approuver l'accès ?",
+  "expected_sources": [
+   "fr2_directory.md",
+   "fr2_rules.md",
+   "fr2_tickets.md"
+  ],
+  "expected_keywords": [
+   "48 heures"
+  ],
+  "suite": "graph",
+  "lang": "fr"
+ },
+ {
+  "id": "graph-el1",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Για πόσο διάστημα ισχύει το δελτίο πρόσβασης για το σύστημα που εγκρίνει η Ελένη Παπαδοπούλου;",
+  "expected_sources": [
+   "el1_directory.md",
+   "el1_rules.md",
+   "el1_tickets.md"
+  ],
+  "expected_keywords": [
+   "3 ώρες"
+  ],
+  "suite": "graph",
+  "lang": "el"
+ },
+ {
+  "id": "graph-el2",
+  "split": "test",
+  "workspace": "graph",
+  "question": "Πόσο καιρό παραμένει έγκυρο το δελτίο για την πύλη που πρέπει να εγκρίνει ο Νίκος Αλεξίου;",
+  "expected_sources": [
+   "el2_directory.md",
+   "el2_rules.md",
+   "el2_tickets.md"
+  ],
+  "expected_keywords": [
+   "24 ώρες"
+  ],
+  "suite": "graph",
+  "lang": "el"
  }
 ]

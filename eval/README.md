@@ -7,8 +7,8 @@ Everything runs locally: a fresh index is built in `eval/out/`, and no productio
 
 - `corpus/` holds synthetic policy documents in six workspaces: `engineering`, `finance`, `hr` (English),
   `zurich` (German, with one confidential file), `geneve` (French), and `athens` (Greek).
-- `golden.json` has 189 cases. Each case has:
-  - `suite`: `en` (50), `multilingual` (98: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups), `messy` (14: DOCX, XLSX and PDF fixtures, below), `stress` (16: near-duplicate files, below).
+- `golden.json` has 201 cases. Each case has:
+  - `suite`: `en` (50), `multilingual` (98: German, French, Greek, and cross-lingual questions), `conversation` (11 follow-ups), `messy` (14: DOCX, XLSX and PDF fixtures, below), `graph` (12: multi-hop questions for the GraphRAG ablation, below), `stress` (16: near-duplicate files, below).
   - `lang`: the question's language (`en`, `de`, `fr`, `el`). Cross-lingual cases ask in one language about documents in another.
   - `split`: `calibration` chooses thresholds; `test` is held out and gated.
   - `expect`: `answer` (default), `abstain`, `blocked` (prompt injection), `denied` (no grant), `fresh` (a negated or
@@ -100,6 +100,28 @@ Reading, including the weak parts:
 - Cross-lingual questions abstain more: 16 of 179 (de to en) and 23 of 179 (el to en) against 0 to 2 for the same-language pairs. The relevance gate is calibrated on the synthetic corpus, and it declines more of these questions than the same-language ones. It was left as it is.
 - Not covered: French, multi-hop questions, unanswerable questions (SQuAD v1.1 has none, so abstention accuracy is not measured here), the real model.
 
+## GraphRAG ablation (experimental: no measured benefit)
+
+The `graph` suite has 12 multi-hop questions (6 English, 2 German, 2 French, 2 Greek) in the `graph` workspace of 36 short documents, three per chain: a directory (*person is the role*), an access rule (*system access requires approval from the role*) and a ticket sheet (*the ticket applies to the system, expires after N hours*). The question names the person and asks for the ticket's validity, so the answer needs Person to Role to System Authority to Access Ticket. The questions and corpus were written, and frozen, before graph retrieval was ever run on them; they were not adjusted afterwards. They are plain prose, not phrased to fit the extractor's regular expressions. Run with `make eval-graph` (the same cases with `ENABLE_GRAPH_RAG` off, then on, then a per-case comparison); the committed runs are `baselines/graph_ablation_off.json`, `graph_ablation_on.json` and `graph_ablation_summary.json`.
+
+| 12 cases, deterministic answerer | graph off | graph on |
+|---|---|---|
+| all three gold documents in the context | 0/12 [0.00, 0.24] | 0/12 [0.00, 0.24] |
+| mean share of gold documents in the context (`retrieval_recall`) | 0.361 | 0.556 |
+| gold fact in the answer | 5/12 [0.19, 0.68] | 5/12 [0.19, 0.68] |
+| cases that received graph chunks | 0 | 12 |
+| cases that flipped to passing / to failing | none / none | |
+
+Delta: **zero on the outcomes that matter** (no chain completed, the same 5 answers contain the fact), and **+0.19 on the share of gold documents reaching the context** (0.361 to 0.556), which the graph adds by returning the chunks of the matched person's entity and of the entities one hop away. Per-case: recall rose in 7 of 12 cases and fell in none (`make eval-graph` prints each).
+
+Why it does not help, from dumping the extracted triplets (18 relationships, 33 entities, over the 36 files):
+
+- The directory sentence (*X is the Y*) was extracted in 12 of 12 files, and the access-rule sentence in 6 of 12 (EN 3 of 6, EL 2 of 2, FR 1 of 2 with its target cut off at "systèm", DE 0 of 2: the German pattern needs a capital right after "durch" and natural German has "durch den ..."). The ticket sentence (*the ticket applies to the system*) was extracted in 0 of 12: the pattern for `applies to` needs a capital letter directly after "to", and the sentences read "applies to the Production Vault". So no chain has its last hop.
+- Where the middle hop was extracted, its system entity is "Production Vault access", while the ticket sheet says "Production Vault"; entity ids are exact normalised names, so the two would not join even if the third edge existed.
+- With a seed in the question, the graph only ever reached the directory and rule documents: **0 of 12 chains** are fully reachable from the question's entity within the default two hops (3 of 12 reach the rule document).
+
+Conclusion: in this configuration GraphRAG is **experimental**. The traversal code works (`tests/test_graph_rag.py` builds the chain by hand and traverses it), but the regex extractor does not produce the graph that multi-hop retrieval would need from ordinary prose, and nothing here shows an end-to-end gain. Small and single-author: 12 cases on a corpus the author wrote, so a different corpus phrased to match the patterns would likely look better, which is exactly the limitation. It stays off by default (`ENABLE_GRAPH_RAG=false`); an LLM- or parser-based extractor is the obvious next step and was not tried.
+
 ## Running
 
 ```bash
@@ -107,6 +129,7 @@ make eval                     # deterministic synthesizer, all suites; this is w
 make eval-llm [SUITE=en]      # answers from the local Ollama model, LLM judge gated (needs 'ollama serve')
                               # CI runs it weekly and on demand (.github/workflows/eval-llm.yml), non-blocking
 make eval-judge               # deterministic answers plus an advisory judge
+make eval-graph               # GraphRAG ablation on the 12-case graph suite, graph retrieval off then on
 make eval-external            # public XQuAD slice (en/de/el), reported not gated, about 10 minutes
 make eval-calibrate           # per-case retrieval signals for the calibration split
 ```
@@ -153,7 +176,7 @@ retrieval recall, keyword recall >= 0.7, groundedness and entailment).
 | conversation | llm | 1.00 | 1.00 | 0.89 | - | - | - | 0.89 |
 
 The tables above are the record of their milestones, measured on an earlier, smaller `golden.json`. A deterministic
-`make eval` on the current 189 cases (test split, 2026-11-10) gives:
+`make eval` on the current 201 cases (test split, 2026-11-12) gives:
 
 | Suite | Mode | answer | recall | keywords | abstain | security | cache | judge |
 |---|---|---|---|---|---|---|---|---|
@@ -162,6 +185,7 @@ The tables above are the record of their milestones, measured on an earlier, sma
 | conversation | deterministic | 1.00 | 1.00 | 0.78 | - | - | - | - |
 | messy | deterministic | 1.00 | 1.00 | 1.00 | 1.00 | - | - | - |
 | stress | deterministic | 1.00 | 1.00 | 1.00 | - | - | - | - |
+| graph (graph retrieval off, not gated) | deterministic | 1.00 | 0.56 | 0.42 | - | - | - | - |
 
 A cache case is inconclusive when its earlier answer was never cached (a real model's terse answer went to
 review instead), so nothing could have been reused. Deterministic runs require every cache case to be conclusive.

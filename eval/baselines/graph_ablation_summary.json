@@ -1,0 +1,61 @@
+{
+ "cases": 12,
+ "off": {
+  "passed": {
+   "k": 0,
+   "n": 12,
+   "ci95": [
+    0.0,
+    0.2425
+   ]
+  },
+  "gold_source_cited": {
+   "k": 0,
+   "n": 12,
+   "ci95": [
+    0.0,
+    0.2425
+   ]
+  },
+  "all_keywords_in_answer": {
+   "k": 5,
+   "n": 12,
+   "ci95": [
+    0.1933,
+    0.6805
+   ]
+  },
+  "mean_context_recall": 0.3611,
+  "cases_with_graph_chunks": 0
+ },
+ "on": {
+  "passed": {
+   "k": 0,
+   "n": 12,
+   "ci95": [
+    0.0,
+    0.2425
+   ]
+  },
+  "gold_source_cited": {
+   "k": 0,
+   "n": 12,
+   "ci95": [
+    0.0,
+    0.2425
+   ]
+  },
+  "all_keywords_in_answer": {
+   "k": 5,
+   "n": 12,
+   "ci95": [
+    0.1933,
+    0.6805
+   ]
+  },
+  "mean_context_recall": 0.5556,
+  "cases_with_graph_chunks": 12
+ },
+ "improved": [],
+ "regressed": []
+}

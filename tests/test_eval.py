@@ -344,3 +344,33 @@ def test_external_slice_is_self_consistent_and_carries_its_licence():
     assert "CC BY-SA 4.0" in notice and "7d30520c717524000f0d9d2f9c10a069acd9d285" in notice
     golden = json.loads((ROOT / "eval" / "golden.json").read_text(encoding="utf-8"))
     assert not {c["id"] for c in cases} & {c["id"] for c in golden}, "external cases must not leak into golden.json"
+
+
+def test_graph_suite_cases_point_at_committed_documents():
+    cases = [c for c in json.loads((ROOT / "eval" / "golden.json").read_text(encoding="utf-8")) if c["suite"] == "graph"]
+    assert len(cases) == 12 and SUITE_GATES["graph"] is None  # reported for the ablation, never gated
+    for case in cases:
+        assert len(case["expected_sources"]) == 3  # person -> role -> system -> ticket: three documents per chain
+        for source in case["expected_sources"]:
+            assert (ROOT / "eval" / "corpus" / case["workspace"] / source).is_file(), case["id"]
+
+
+def test_compare_reports_lists_flips_and_refuses_swapped_arms(tmp_path, capsys):
+    from rag_lab.ops.eval import compare_reports
+
+    def row(case_id, recall, passed, graph_chunks):
+        return {"id": case_id, "lang": "en", "expect": "answer", "abstained": False, "passed": passed,
+                "context_recall": recall, "keyword_recall": 1.0 if passed else 0.0, "nli_supported": True,
+                "graph_candidates": graph_chunks}
+
+    off = {"graph_rag": "off", "results": [row("a", 0.5, False, 0), row("b", 1.0, True, 0)]}
+    on = {"graph_rag": "on", "results": [row("a", 1.0, True, 2), row("b", 0.5, False, 1)]}
+    (tmp_path / "off").mkdir()
+    (tmp_path / "on").mkdir()
+    (tmp_path / "off" / "report.json").write_text(json.dumps(off))
+    (tmp_path / "on" / "report.json").write_text(json.dumps(on))
+    assert compare_reports(tmp_path / "off" / "report.json", tmp_path / "on" / "report.json") == 0
+    summary = json.loads((tmp_path / "graph_ablation.json").read_text())
+    assert summary["improved"] == ["a"] and summary["regressed"] == ["b"]
+    assert summary["on"]["cases_with_graph_chunks"] == 2 and summary["off"]["cases_with_graph_chunks"] == 0
+    assert compare_reports(tmp_path / "on" / "report.json", tmp_path / "off" / "report.json") == 2

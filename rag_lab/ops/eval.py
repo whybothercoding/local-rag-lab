@@ -5,7 +5,7 @@ Builds its own index from eval/corpus/ under eval/out/ and runs the real LangGra
 store is redirected into eval/out/ before the project imports load, so the evaluation never reads or
 writes production data.
 
-Cases carry a `suite` (en, multilingual, conversation, messy, stress) and a `lang` (question language). Each suite
+Cases carry a `suite` (en, multilingual, conversation, messy, stress, graph) and a `lang` (question language). Each suite
 has its own gates, measured on its held-out test split; the calibration split is for choosing
 thresholds. A suite whose gates are None is measured and reported but not gated yet (see SUITE_GATES).
 
@@ -23,6 +23,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from rag_lab import ROOT  # the package root only: no project module may load before the redirect below
 
@@ -141,12 +142,15 @@ STRESS_THRESHOLDS = {
     "groundedness": 0.5,
     "entailment_rate": 0.9,
 }
+# Multi-hop questions (person -> role -> system -> access ticket) for the GraphRAG ablation. Not gated: it is run
+# with graph retrieval off in `make eval` and compared off against on by `make eval-graph`. See eval/README.md.
 SUITE_GATES: dict[str, dict[str, float] | None] = {
     "en": DEFAULT_THRESHOLDS,
     "multilingual": MULTILINGUAL_THRESHOLDS,
     "conversation": CONVERSATION_THRESHOLDS,
     "messy": MESSY_THRESHOLDS,
     "stress": STRESS_THRESHOLDS,
+    "graph": None,
 }
 # Added to every gated suite in --llm mode: share of answers the judge finds supported by their context.
 LLM_JUDGE_MIN = float(os.getenv("EVAL_LLM_JUDGE_MIN", "0.8"))
@@ -158,7 +162,7 @@ JUDGE_PROMPT = (
 )
 
 WORKSPACES = ("engineering", "finance", "hr", "zurich", "geneve", "athens", "messy", "stress",
-              "xquad_en", "xquad_de", "xquad_el")
+              "xquad_en", "xquad_de", "xquad_el", "graph")
 # `--external`: a fixed slice of public XQuAD data (eval/external/README.md), reported and never gated.
 EXTERNAL_DIR = EVAL_DIR / "external"
 EXTERNAL_SUITE = "external"
@@ -285,6 +289,7 @@ def run_case(engine, case: dict, judge_llm=None) -> dict:
         "best_rerank_score": telemetry.get("best_rerank_score"),
         "relevant": telemetry.get("relevant"),
         "degraded": values.get("degraded", []),
+        "graph_candidates": telemetry.get("graph_candidates_count", 0),
         "judge_supported": None,
     }
     if expect == "denied":
@@ -393,6 +398,43 @@ def judge_report(path: Path) -> int:
     return 0
 
 
+def compare_reports(off_path: Path, on_path: Path) -> int:
+    """Print the per-case difference between a graph-off and a graph-on run of the same suite."""
+    off, on = (json.loads(p.read_text(encoding="utf-8")) for p in (off_path, on_path))
+    if off.get("graph_rag") != "off" or on.get("graph_rag") != "on":
+        print("--compare needs a graph-off report first and a graph-on report second.")
+        return 2
+    on_by_id = {r["id"]: r for r in on["results"]}
+    rows = [(a, on_by_id[a["id"]]) for a in off["results"]]
+    print(f"{'case':<14}{'lang':<5}{'ctx recall off/on':>19}{'passed off/on':>16}{'graph chunks on':>17}")
+    flipped_up, flipped_down = [], []
+    for a, b in rows:
+        print(f"{a['id']:<14}{a['lang']:<5}{a['context_recall']:>10.2f} /{b['context_recall']:.2f}"
+              f"{str(a['passed']):>10} /{str(b['passed']):<6}{b.get('graph_candidates', 0):>8}")
+        if b["passed"] and not a["passed"]:
+            flipped_up.append(a["id"])
+        if a["passed"] and not b["passed"]:
+            flipped_down.append(a["id"])
+    summary: dict[str, Any] = {"cases": len(rows)}
+    for name, arm in (("off", [a for a, _ in rows]), ("on", [b for _, b in rows])):
+        counts = binary_counts(arm)
+        summary[name] = {
+            "passed": counts["passed"], "gold_source_cited": counts["gold_source_cited"],
+            "all_keywords_in_answer": counts["all_keywords_in_answer"],
+            "mean_context_recall": round(sum(r["context_recall"] for r in arm) / len(arm), 4),
+            "cases_with_graph_chunks": sum(1 for r in arm if r.get("graph_candidates")),
+        }
+    summary["improved"], summary["regressed"] = flipped_up, flipped_down
+    for name in ("off", "on"):
+        c = summary[name]
+        print(f"\ngraph {name}: passed {c['passed']['k']}/{c['passed']['n']} {c['passed']['ci95']}, "
+              f"all gold sources in context {c['gold_source_cited']['k']}/{c['gold_source_cited']['n']}, "
+              f"mean source recall {c['mean_context_recall']}, cases with graph chunks {c['cases_with_graph_chunks']}")
+    print(f"improved by graph: {flipped_up or 'none'}; regressed: {flipped_down or 'none'}")
+    (on_path.parent.parent / "graph_ablation.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    return 0
+
+
 def suite_gates(suite: str, overrides: dict[str, float], llm_mode: bool) -> dict[str, float] | None:
     gates = SUITE_GATES.get(suite)
     if gates is None:
@@ -422,6 +464,8 @@ def main() -> int:
                         help="Run the public XQuAD slice in eval/external/ instead of golden.json (reported, not gated)")
     parser.add_argument("--graph-rag", choices=("on", "off"), default="off",
                         help="Graph-augmented retrieval for this run (default off, as in CI)")
+    parser.add_argument("--compare", nargs=2, type=Path, metavar=("OFF_REPORT", "ON_REPORT"),
+                        help="Compare a graph-off and a graph-on report of the same suite (the GraphRAG ablation)")
     parser.add_argument("--suite", action="append", choices=sorted(SUITE_GATES),
                         help="Run only these suites (repeatable); default all")
     args = parser.parse_args()
@@ -429,6 +473,8 @@ def main() -> int:
 
     if args.judge_only:
         return judge_report(args.judge_only)
+    if args.compare:
+        return compare_reports(*args.compare)
 
     out_dir = OUT_DIR / "external" if args.external else OUT_DIR
     redirect_stores(out_dir, args.llm, graph_rag=args.graph_rag == "on")
