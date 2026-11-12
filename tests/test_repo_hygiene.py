@@ -48,3 +48,9 @@ def test_the_license_is_declared_once_and_agrees_everywhere():
     assert "Apache-2.0" in (ROOT / "README.md").read_text(encoding="utf-8").rsplit("## License", 1)[1]
     text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     assert "Apache License" in text.splitlines()[0] and "Version 2.0, January 2004" in text
+
+
+def test_the_readme_screenshot_exists_and_is_not_gitignored():
+    assert "docs/ui-screenshot.png" in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert (ROOT / "docs" / "ui-screenshot.png").is_file()
+    assert _ignored([ROOT / "docs" / "ui-screenshot.png"]) == []

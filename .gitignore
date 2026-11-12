@@ -74,3 +74,5 @@ ehthumbs.db
 
 # Exported raster artifacts (keep .mmd in git, ignore generated binaries)
 docs/*.png
+# The README screenshot is a committed asset, not a generated export
+!docs/ui-screenshot.png

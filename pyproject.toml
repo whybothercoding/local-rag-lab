@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-rag-lab"
 version = "0.1.0"
-description = "Air-gapped Compound AI retrieval and compliance engine"
+description = "Local, offline RAG pipeline with per-sentence NLI grounding and a multilingual evaluation harness"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
@@ -18,12 +18,11 @@ keywords = [
     "langgraph",
     "air-gapped",
     "security",
-    "zero-trust",
     "onnx",
     "cross-encoder",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Programming Language :: Python :: 3",

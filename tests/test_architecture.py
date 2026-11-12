@@ -45,10 +45,10 @@ def test_every_documented_make_command_exists():
     import re
 
     defined, phony, helped = _make_targets()
-    for doc in ("CLAUDE.md", "README.md"):
+    for doc in ("CLAUDE.md", "README.md", "docs/usage.md", "docs/design-overview.md"):
         text = (ROOT / doc).read_text(encoding="utf-8")
         documented = set(re.findall(r"(?m)^\s*make ([a-z][a-z0-9-]*)", text))
-        assert documented, doc
+        assert documented or doc == "docs/design-overview.md", doc  # prose only: no command blocks
         assert documented <= defined, f"{doc} documents missing targets: {sorted(documented - defined)}"
     assert helped <= defined, f"make help lists missing targets: {sorted(helped - defined)}"
 
