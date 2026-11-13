@@ -3,7 +3,7 @@
 
 # 0. Command Reference & System Readiness
 help:
-	@echo "Local Enterprise RAG Lab — Available Make Commands"
+	@echo "Local RAG Lab — Available Make Commands"
 	@echo ""
 	@echo "Setup & Health:"
 	@echo "  make setup                                     Create venv and install Python dependencies"

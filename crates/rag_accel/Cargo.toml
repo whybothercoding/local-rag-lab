@@ -2,7 +2,7 @@
 name = "rag_accel"
 version = "0.1.0"
 edition = "2021"
-description = "Native accelerator for Local Enterprise RAG Lab: the prompt-injection pattern scan"
+description = "Native accelerator for Local RAG Lab: the prompt-injection pattern scan"
 
 [lib]
 name = "rag_accel"

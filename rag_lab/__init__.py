@@ -1,4 +1,4 @@
-"""Local Enterprise RAG Lab.
+"""Local RAG Lab.
 
 Importing the package anchors runtime data at the repository root and switches off every model-hub
 and telemetry call before any submodule (chromadb, fastembed) is imported. Keep this file free of

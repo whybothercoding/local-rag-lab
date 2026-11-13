@@ -1,6 +1,6 @@
 """Pluggable LLM factory supporting Ollama, local OpenAI-compatible engines, and in-process synthesizer.
 
-Ensures the Local Enterprise Hub operates seamlessly:
+Ensures the Local RAG Lab operates seamlessly:
 - Uses local Ollama (default `qwen3:8b`, settings.chat_model) when the daemon is active.
 - Connects to local OpenAI-compatible endpoints (vLLM, LM Studio, llama.cpp server) when configured.
 - Gracefully falls back to an in-process grounded context synthesizer when no external daemon is running.

@@ -1,6 +1,6 @@
 # Agent Guidelines & Architecture Reference
 
-Standards for AI assistants working on **Local Enterprise RAG Lab**. Commands: `make help`. Measurements and decisions: `eval/README.md`, `docs/scaling.md`, `docs/lan-tls.md`, `docs/threat-model.md`. Visual guides: `docs/beginner-guide.html`, `docs/concept-map.html`.
+Standards for AI assistants working on **Local RAG Lab**. Commands: `make help`. Measurements and decisions: `eval/README.md`, `docs/scaling.md`, `docs/lan-tls.md`, `docs/threat-model.md`. Visual guides: `docs/beginner-guide.html`, `docs/concept-map.html`.
 
 ---
 

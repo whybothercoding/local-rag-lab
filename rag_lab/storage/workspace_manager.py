@@ -350,7 +350,7 @@ def print_status() -> int:
         from rag_lab.ops.approve import list_pending_threads
         from rag_lab.pipeline.graph import workflow
     except accel.AcceleratorUnavailableError as exc:
-        print("=== Local Enterprise RAG Lab: System Status ===")
+        print("=== Local RAG Lab: System Status ===")
         print(f"[!!] Context sanitizer   : {exc}")
         return 1
     from rag_lab.security.audit import verify_anchors, verify_chain
@@ -360,7 +360,7 @@ def print_status() -> int:
     from rag_lab.security.model_integrity import ModelIntegrityError, verify_model
 
     ok = True
-    print("=== Local Enterprise RAG Lab: System Status ===")
+    print("=== Local RAG Lab: System Status ===")
 
     # 1. Embedding provider and pinned ONNX models. Only the models this configuration loads are required.
     runtime_fingerprint: str | None = None

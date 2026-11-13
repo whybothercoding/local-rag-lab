@@ -1,6 +1,6 @@
 # Threat Model & Security Architecture
 
-This document formalizes the threat model, trust boundaries, attack vectors, and cryptographic guarantees of the **Local Enterprise RAG Lab**.
+This document formalizes the threat model, trust boundaries, attack vectors, and cryptographic guarantees of the **Local RAG Lab**.
 
 ---
 

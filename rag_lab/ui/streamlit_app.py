@@ -67,7 +67,7 @@ from rag_lab.storage.workspace_manager import (
 )
 from pathlib import Path
 
-st.set_page_config(page_title="Local Enterprise Knowledge Hub", layout="wide")
+st.set_page_config(page_title="Local Knowledge Hub", layout="wide")
 
 
 def render_citations(citations):
@@ -142,7 +142,7 @@ def login_gate() -> None:
             st.query_params["session"] = token
             return
 
-    st.title("Local Enterprise Knowledge Hub")
+    st.title("Local Knowledge Hub")
     if notice := st.session_state.pop("notice", ""):
         st.info(notice)
     try:

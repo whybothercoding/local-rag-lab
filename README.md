@@ -1,4 +1,4 @@
-# Local Enterprise RAG Lab
+# Local RAG Lab
 
 A local, offline retrieval-augmented generation pipeline (LangGraph) that checks every answer sentence against its sources with an NLI model, in English, German, French and Greek, with a measured evaluation harness. It is a single-author lab project run on one machine, **not a deployed product**: nobody else uses it, and its benchmark corpus is synthetic and written by the author.
 
