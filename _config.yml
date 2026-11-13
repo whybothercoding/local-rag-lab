@@ -1,0 +1,41 @@
+# GitHub Pages (legacy Jekyll build from main, repo root): the Markdown in this repo is the site.
+title: Local RAG Lab
+description: Local, offline RAG pipeline with per-sentence NLI grounding and a multilingual evaluation harness. A lab project, not a deployed product.
+theme: jekyll-theme-minimal
+show_downloads: false
+plugins:
+  - jekyll-readme-index
+  - jekyll-optional-front-matter
+  - jekyll-relative-links
+  - jekyll-titles-from-headings
+  - jekyll-github-metadata
+relative_links:
+  enabled: true
+  collections: false
+# Publish only the documentation. Code, corpora, models and agent guides stay out of the build.
+exclude:
+  - AGENTS.md
+  - CLAUDE.md
+  - Makefile
+  - ui.py
+  - pyproject.toml
+  - requirements.txt
+  - requirements.lock
+  - docker-compose.yml
+  - rag_lab
+  - tests
+  - crates
+  - deploy
+  - data
+  - models
+  - knowledge_base
+  - uploads
+  - eval/corpus
+  - eval/external/corpus
+  - eval/baselines
+  - eval/out
+  - eval/golden.json
+  - eval/external/cases.json
+  - venv
+  - chroma_data
+  - bm25_indices

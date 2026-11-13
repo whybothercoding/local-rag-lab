@@ -54,3 +54,20 @@ def test_the_readme_screenshot_exists_and_is_not_gitignored():
     assert "docs/ui-screenshot.png" in (ROOT / "README.md").read_text(encoding="utf-8")
     assert (ROOT / "docs" / "ui-screenshot.png").is_file()
     assert _ignored([ROOT / "docs" / "ui-screenshot.png"]) == []
+
+
+def test_relative_links_in_the_published_docs_resolve():
+    """The GitHub Pages site is the Markdown itself: a deleted or renamed file must not leave a dead link."""
+    import re
+
+    pages = [ROOT / "README.md", ROOT / "eval" / "README.md", ROOT / "eval" / "external" / "README.md",
+             *sorted((ROOT / "docs").glob("*.md"))]
+    dead = []
+    for page in pages:
+        for target in re.findall(r"\]\(([^)\s]+)\)", page.read_text(encoding="utf-8")):
+            path = target.split("#")[0]
+            if not path or re.match(r"^[a-z]+:", path):
+                continue
+            if not (page.parent / path).exists():
+                dead.append(f"{page.relative_to(ROOT)} -> {target}")
+    assert dead == []
