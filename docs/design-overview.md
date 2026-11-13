@@ -22,7 +22,6 @@ Scores are the author's self-assessment, not an external audit; each cites the m
 | **AI Systems** | **Evaluation Benchmark** | **9 / 10** | 201 golden benchmark cases (143 held-out test split) across 4 languages, a messy-document suite (DOCX, XLSX, PDF) and a near-duplicate stress suite that measures the candidate pool with committed reference baselines, plus `make eval-llm` runs of the real model on every suite, which found a grader defect the deterministic run could not ([eval/README.md](../eval/README.md)). |
 
 *Full security threat model and cryptographic boundaries: see [docs/threat-model.md](threat-model.md).*  
-*Interactive visual guides: see [Beginner Guide](beginner-guide.html) and [Concept Map](concept-map.html).*  
 *Horizontal scaling and containerized cloud deployment options: see [docs/scaling.md](scaling.md).*
 
 ---
@@ -119,7 +118,7 @@ local-rag-lab/
 ├── Makefile                 # Unified setup, test, sync, UI, review, and audit workflows (`make help`)
 ├── docker-compose.yml       # PostgreSQL for durable checkpoints; opt-in profiles: qdrant, pgvector, vllm, caddy
 ├── deploy/                  # Caddyfile for the optional LAN TLS proxy
-├── docs/                    # beginner-guide.html, concept-map.html, scaling.md, lan-tls.md, threat-model.md, architecture.mmd
+├── docs/                    # design-overview.md, design-decisions.md, usage.md, scaling.md, lan-tls.md, threat-model.md, architecture.mmd
 ├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), eval-llm.yml (weekly, non-blocking), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
 ├── knowledge_base/          # Multi-tenant knowledge base folders

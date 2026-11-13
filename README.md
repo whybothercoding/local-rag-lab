@@ -71,7 +71,6 @@ make eval                     # offline benchmark gates over eval/golden.json
 - [docs/design-overview.md](docs/design-overview.md): self-assessed scorecard, the fourteen techniques, repository layout
 - [docs/usage.md](docs/usage.md): accounts and roles, workspaces and ingestion, review, audit, storage, scaling notes
 - [docs/scaling.md](docs/scaling.md), [docs/lan-tls.md](docs/lan-tls.md), [docs/threat-model.md](docs/threat-model.md)
-- [Beginner guide](docs/beginner-guide.html), [concept map](docs/concept-map.html)
 
 ## License
 
