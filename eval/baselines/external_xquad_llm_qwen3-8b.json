@@ -1,0 +1,458 @@
+{
+ "mode": "llm",
+ "graph_rag": "off",
+ "suites": {
+  "external": {
+   "calibration": {
+    "cases": 0,
+    "inconclusive": 0,
+    "answer_rate": null,
+    "retrieval_recall": null,
+    "context_precision": null,
+    "page_accuracy": null,
+    "keyword_recall": null,
+    "groundedness": null,
+    "entailment_rate": null,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": null,
+    "degraded_cases": 0,
+    "median_latency_ms": null
+   },
+   "test": {
+    "cases": 895,
+    "inconclusive": 0,
+    "answer_rate": 0.9732,
+    "retrieval_recall": 0.9687,
+    "context_precision": 0.9127,
+    "page_accuracy": null,
+    "keyword_recall": 0.5788,
+    "groundedness": 0.5538,
+    "entailment_rate": 0.8996,
+    "abstention_accuracy": null,
+    "security_accuracy": null,
+    "cache_accuracy": null,
+    "chitchat_accuracy": null,
+    "cache_conclusive_rate": null,
+    "judge_support": 0.6556,
+    "degraded_cases": 0,
+    "median_latency_ms": 4489.8
+   },
+   "thresholds": null,
+   "failures": [],
+   "test_counts": {
+    "passed": {
+     "k": 518,
+     "n": 895,
+     "ci95": [
+      0.5462,
+      0.6107
+     ]
+    },
+    "answered": {
+     "k": 871,
+     "n": 895,
+     "ci95": [
+      0.9604,
+      0.9819
+     ]
+    },
+    "gold_source_cited": {
+     "k": 867,
+     "n": 895,
+     "ci95": [
+      0.9552,
+      0.9783
+     ]
+    },
+    "all_keywords_in_answer": {
+     "k": 518,
+     "n": 895,
+     "ci95": [
+      0.5462,
+      0.6107
+     ]
+    },
+    "entailed": {
+     "k": 771,
+     "n": 857,
+     "ci95": [
+      0.8777,
+      0.918
+     ]
+    },
+    "judge_supported": {
+     "k": 571,
+     "n": 871,
+     "ci95": [
+      0.6234,
+      0.6864
+     ]
+    }
+   },
+   "by_pair": {
+    "de->de": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9944,
+      "retrieval_recall": 0.9888,
+      "context_precision": 0.9488,
+      "page_accuracy": null,
+      "keyword_recall": 0.7765,
+      "groundedness": 0.7535,
+      "entailment_rate": 0.904,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": 0.7584,
+      "degraded_cases": 0,
+      "median_latency_ms": 3790.2
+     },
+     "counts": {
+      "passed": {
+       "k": 139,
+       "n": 179,
+       "ci95": [
+        0.7101,
+        0.8314
+       ]
+      },
+      "answered": {
+       "k": 178,
+       "n": 179,
+       "ci95": [
+        0.969,
+        0.999
+       ]
+      },
+      "gold_source_cited": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 139,
+       "n": 179,
+       "ci95": [
+        0.7101,
+        0.8314
+       ]
+      },
+      "entailed": {
+       "k": 160,
+       "n": 177,
+       "ci95": [
+        0.8516,
+        0.9392
+       ]
+      },
+      "judge_supported": {
+       "k": 135,
+       "n": 178,
+       "ci95": [
+        0.6905,
+        0.8154
+       ]
+      }
+     }
+    },
+    "de->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9441,
+      "retrieval_recall": 0.933,
+      "context_precision": 0.865,
+      "page_accuracy": null,
+      "keyword_recall": 0.3128,
+      "groundedness": 0.2272,
+      "entailment_rate": 0.8765,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": 0.5562,
+      "degraded_cases": 0,
+      "median_latency_ms": 4378.5
+     },
+     "counts": {
+      "passed": {
+       "k": 56,
+       "n": 179,
+       "ci95": [
+        0.2495,
+        0.3841
+       ]
+      },
+      "answered": {
+       "k": 169,
+       "n": 179,
+       "ci95": [
+        0.9002,
+        0.9694
+       ]
+      },
+      "gold_source_cited": {
+       "k": 167,
+       "n": 179,
+       "ci95": [
+        0.8865,
+        0.9612
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 56,
+       "n": 179,
+       "ci95": [
+        0.2495,
+        0.3841
+       ]
+      },
+      "entailed": {
+       "k": 142,
+       "n": 162,
+       "ci95": [
+        0.817,
+        0.9186
+       ]
+      },
+      "judge_supported": {
+       "k": 94,
+       "n": 169,
+       "ci95": [
+        0.4809,
+        0.629
+       ]
+      }
+     }
+    },
+    "el->el": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9888,
+      "retrieval_recall": 0.9888,
+      "context_precision": 0.9451,
+      "page_accuracy": null,
+      "keyword_recall": 0.7654,
+      "groundedness": 0.767,
+      "entailment_rate": 0.9545,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": 0.6836,
+      "degraded_cases": 0,
+      "median_latency_ms": 7904.2
+     },
+     "counts": {
+      "passed": {
+       "k": 137,
+       "n": 179,
+       "ci95": [
+        0.6981,
+        0.8215
+       ]
+      },
+      "answered": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "gold_source_cited": {
+       "k": 177,
+       "n": 179,
+       "ci95": [
+        0.9602,
+        0.9969
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 137,
+       "n": 179,
+       "ci95": [
+        0.6981,
+        0.8215
+       ]
+      },
+      "entailed": {
+       "k": 168,
+       "n": 176,
+       "ci95": [
+        0.9129,
+        0.9768
+       ]
+      },
+      "judge_supported": {
+       "k": 121,
+       "n": 177,
+       "ci95": [
+        0.6118,
+        0.7476
+       ]
+      }
+     }
+    },
+    "el->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 0.9385,
+      "retrieval_recall": 0.933,
+      "context_precision": 0.8864,
+      "page_accuracy": null,
+      "keyword_recall": 0.162,
+      "groundedness": 0.0944,
+      "entailment_rate": 0.7791,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": 0.3929,
+      "degraded_cases": 0,
+      "median_latency_ms": 6172.0
+     },
+     "counts": {
+      "passed": {
+       "k": 29,
+       "n": 179,
+       "ci95": [
+        0.1152,
+        0.223
+       ]
+      },
+      "answered": {
+       "k": 168,
+       "n": 179,
+       "ci95": [
+        0.8933,
+        0.9653
+       ]
+      },
+      "gold_source_cited": {
+       "k": 167,
+       "n": 179,
+       "ci95": [
+        0.8865,
+        0.9612
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 29,
+       "n": 179,
+       "ci95": [
+        0.1152,
+        0.223
+       ]
+      },
+      "entailed": {
+       "k": 127,
+       "n": 163,
+       "ci95": [
+        0.7094,
+        0.836
+       ]
+      },
+      "judge_supported": {
+       "k": 66,
+       "n": 168,
+       "ci95": [
+        0.3222,
+        0.4683
+       ]
+      }
+     }
+    },
+    "en->en": {
+     "summary": {
+      "cases": 179,
+      "inconclusive": 0,
+      "answer_rate": 1.0,
+      "retrieval_recall": 1.0,
+      "context_precision": 0.9181,
+      "page_accuracy": null,
+      "keyword_recall": 0.8771,
+      "groundedness": 0.8608,
+      "entailment_rate": 0.9721,
+      "abstention_accuracy": null,
+      "security_accuracy": null,
+      "cache_accuracy": null,
+      "chitchat_accuracy": null,
+      "cache_conclusive_rate": null,
+      "judge_support": 0.8659,
+      "degraded_cases": 0,
+      "median_latency_ms": 3045.7
+     },
+     "counts": {
+      "passed": {
+       "k": 157,
+       "n": 179,
+       "ci95": [
+        0.8209,
+        0.9174
+       ]
+      },
+      "answered": {
+       "k": 179,
+       "n": 179,
+       "ci95": [
+        0.979,
+        1.0
+       ]
+      },
+      "gold_source_cited": {
+       "k": 179,
+       "n": 179,
+       "ci95": [
+        0.979,
+        1.0
+       ]
+      },
+      "all_keywords_in_answer": {
+       "k": 157,
+       "n": 179,
+       "ci95": [
+        0.8209,
+        0.9174
+       ]
+      },
+      "entailed": {
+       "k": 174,
+       "n": 179,
+       "ci95": [
+        0.9363,
+        0.988
+       ]
+      },
+      "judge_supported": {
+       "k": 155,
+       "n": 179,
+       "ci95": [
+        0.8082,
+        0.9082
+       ]
+      }
+     }
+    }
+   }
+  }
+ },
+ "judge_model": "(the answering model)",
+ "n_results": 895,
+ "answer_model": "qwen3:8b (thinking off)"
+}

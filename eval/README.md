@@ -92,7 +92,7 @@ Every gated suite clears the judge gate (0.8) and its other gates. Reading it:
 - Against the earlier same-model judge figures the independent judge agrees on en (0.94) and messy and stress (1.00), is higher on multilingual (1.00 against 0.91) and lower on conversation (0.89 against 1.00, one case of 9). It was not uniformly harsher than the answering model, so self-grading did not visibly inflate those figures. One judge, one run: intervals this wide (9 to 44 cases) settle little.
 - The judge is more lenient than the entailment grader on multilingual: it supported 44 of 44 answers while the NLI grader entailed 41 of 44, so the three that the grader rejects, and sends to review, are ones the judge accepts.
 - The graph suite is the weak one with a real model too: 7 of 12 judged supported, 9 of 12 entailed, keyword recall 0.50 (graph retrieval off, as the default).
-- Not done: a second judge family, and `make eval-llm` on the XQuAD slice.
+- Not done: a second judge family.
 
 ## External slice (XQuAD)
 
@@ -112,9 +112,9 @@ Every gated suite clears the judge gate (0.8) and its other gates. Reading it:
 Reading, including the weak parts:
 
 - Retrieval holds up on data the author did not write: the gold paragraph is cited in 851 of 895 cases. Entailment holds too (847 of 851 answered cases).
-- The weak number is the answer itself: the gold span appears in 708 of 895 answers (79.1%, interval 0.76 to 0.82), lowest cross-lingual (Greek to English 122/179, 68.2%). The right paragraph is cited far more often than the span is found (143 of the 851 cases that cite it lack the span), so the misses sit after retrieval; the likely cause is the extractive answerer quoting another sentence of the paragraph, but the 143 answers were not inspected one by one. That is a limit of the deterministic answerer, not a measurement of the real model; `make eval-llm` has not been run on this slice.
+- The weak number is the answer itself: the gold span appears in 708 of 895 answers (79.1%, interval 0.76 to 0.82), lowest cross-lingual (Greek to English 122/179, 68.2%). The right paragraph is cited far more often than the span is found (143 of the 851 cases that cite it lack the span), so the misses sit after retrieval; the likely cause is the extractive answerer quoting another sentence of the paragraph, but the 143 answers were not inspected one by one. That is a limit of the deterministic answerer; the real-model run below scores differently.
 - Cross-lingual questions abstain more: 16 of 179 (de to en) and 23 of 179 (el to en) against 0 to 2 for the same-language pairs. The relevance gate is calibrated on the synthetic corpus, and it declines more of these questions than the same-language ones. It was left as it is.
-- Not covered: French, multi-hop questions, unanswerable questions (SQuAD v1.1 has none, so abstention accuracy is not measured here), the real model.
+- Not covered: French, multi-hop questions, unanswerable questions (SQuAD v1.1 has none, so abstention accuracy is not measured here).
 
 ## GraphRAG ablation (experimental: no measured benefit)
 
@@ -137,6 +137,25 @@ Why it does not help, from dumping the extracted triplets (18 relationships, 33 
 - With a seed in the question, the graph only ever reached the directory and rule documents: **0 of 12 chains** are fully reachable from the question's entity within the default two hops (3 of 12 reach the rule document).
 
 Conclusion: in this configuration GraphRAG is **experimental**. The traversal code works (`tests/test_graph_rag.py` builds the chain by hand and traverses it), but the regex extractor does not produce the graph that multi-hop retrieval would need from ordinary prose, and nothing here shows an end-to-end gain. Small and single-author: 12 cases on a corpus the author wrote, so a different corpus phrased to match the patterns would likely look better, which is exactly the limitation. It stays off by default (`ENABLE_GRAPH_RAG=false`); an LLM- or parser-based extractor is the obvious next step and was not tried.
+
+### Same slice, real model (qwen3:8b, thinking off)
+
+Run on 2026-11-13 as `python -m rag_lab.ops.eval --external --llm`; committed as `baselines/external_xquad_llm_qwen3-8b.json`. The judge column is the answering model grading itself (no independent judge was run on this slice), so read it as lenient.
+
+| Question to documents | gold answer span in answer | entailed (of answered) | judge (self) | median latency |
+|---|---|---|---|---|
+| en to en | 157/179 [0.82, 0.92] | 174/179 | 155/179 | 3.0 s |
+| de to de | 139/179 [0.71, 0.83] | 160/177 | 135/178 | 3.8 s |
+| el to el | 137/179 [0.70, 0.82] | 168/176 | 121/177 | 7.9 s |
+| de to en | 56/179 [0.25, 0.38] | 142/162 | 94/169 | 4.4 s |
+| el to en | 29/179 [0.12, 0.22] | 127/163 | 66/168 | 6.2 s |
+| **all** | **518/895 [0.55, 0.61]** | **771/857 [0.88, 0.92]** | 571/871 | 4.5 s |
+
+Answered 871/895 and the gold paragraph cited in 867/895 (extractive: 853 and 851), so retrieval is as good as before. What changed is the answer:
+
+- **I expected a real model to beat the extractive answerer on the span metric; it did not.** Over the three same-language pairs it found the span in 433/537 answers (80.6%, [0.77, 0.84]) against 451/537 for the extractive answerer (84.0%, [0.81, 0.87]). The extractive answerer quotes the source, so the span survives; the model paraphrases, so an exact-string match can fail on a correct answer.
+- **The cross-lingual collapse is mostly the metric, not the model.** For Greek to English all 139 answers that missed the span are written in Greek (checked by script): the model answers in the question's language, so the English gold span cannot match. The German to English figure looks like the same effect; I only verified Greek. The span metric is therefore not valid for cross-lingual answers from a model, and those two rows should not be read as retrieval or comprehension failures. No translation-aware metric was built.
+- **Entailment is lower with the model** (771/857, 90.0%, against 847/851 for the extractive answerer), as expected: verbatim quotes are entailed trivially, model-written sentences are not. In same-language pairs: 502/532 (94.4%, [0.92, 0.96]) against 533/533.
 
 ## Running
 
