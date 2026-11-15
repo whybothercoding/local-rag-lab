@@ -56,7 +56,7 @@ Needs Python 3.11–3.14, about 2 GB for the pinned models (network needed once)
 make setup                    # virtualenv and dependencies
 make models                   # download and verify the pinned models (the only network use)
 make add-user ACCOUNT=me ADMIN=1   # first account becomes the owner; prompts for a password
-make sync ADMIN=me            # index knowledge_base/ (prompts for the password)
+make sync ADMIN=me            # index knowledge_base/: one workspace, local_rag_lab, which describes this project (prompts for the password)
 make ui ADMIN=me              # Streamlit on 127.0.0.1
 make test                     # 1,000+ tests; those needing Postgres, Qdrant or pgvector skip without them
 make eval                     # offline benchmark gates over eval/golden.json

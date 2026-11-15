@@ -121,7 +121,7 @@ make reset-users CONFIRM=yes
 
 ### 3. Workspace Management & Document Ingestion
 
-Place `.md`, `.txt`, `.pdf`, `.docx`, or other supported files in dedicated folders under `knowledge_base/<workspace>/` (or manage workspaces directly via `make`):
+The repository ships one workspace, `knowledge_base/local_rag_lab/`: a short guide to this project's features, security model, scaling options and commands, so a first `make sync` gives you something to ask questions about. Add your own by placing `.md`, `.txt`, `.pdf`, `.docx`, or other supported files in dedicated folders under `knowledge_base/<workspace>/` (or manage workspaces directly via `make`):
 
 ```bash
 # List all workspaces with file counts, chunk counts, and FTS5 index status
@@ -135,8 +135,8 @@ make delete-workspace WS=legal YES=1
 make sync ADMIN=alice
 
 # Sync a single workspace (auto-discovers knowledge_base/<ws>/ or accepts a custom DIR, which needs WS; optional FORCE=1)
-make sync ADMIN=alice WS=accounting
-make sync ADMIN=alice WS=accounting DIR=./knowledge_base/accounting FORCE=1
+make sync ADMIN=alice WS=local_rag_lab
+make sync ADMIN=alice WS=local_rag_lab DIR=./knowledge_base/local_rag_lab FORCE=1
 ```
 
 * Workspaces are automatically sanitized (e.g., `Accounting & Tax` becomes `accounting_tax`).

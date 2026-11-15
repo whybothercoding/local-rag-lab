@@ -121,6 +121,6 @@ local-rag-lab/
 ├── docs/                    # design-overview.md, design-decisions.md, usage.md, scaling.md, lan-tls.md, threat-model.md, architecture.mmd
 ├── .github/workflows/       # ci.yml (lint, mypy, tests online + offline), eval-llm.yml (weekly, non-blocking), wheels.yml
 ├── eval/                    # Golden test dataset, benchmark corpus, measurements and decisions (README.md)
-├── knowledge_base/          # Multi-tenant knowledge base folders
+├── knowledge_base/          # Workspace folders; ships one, local_rag_lab, which documents this project
 └── tests/                   # ~1,000 unit, integration and security tests
 ```
