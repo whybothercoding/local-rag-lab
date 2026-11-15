@@ -40,7 +40,7 @@ def grant_target():
     """A throwaway account for the grants panel; removed afterwards so the shared policy stays as seeded."""
     add_user("uigrant", TEST_PASSWORD)
     set_user_permissions_everywhere("uigrant", [])
-    set_grant("uigrant", "accounting", ["query"])
+    set_grant("uigrant", "local_rag_lab", ["query"])
     yield "uigrant"
     delete_user("uigrant")
 
@@ -60,17 +60,17 @@ def test_non_admin_page_has_no_admin_panels():
 def test_grants_panel_shows_and_saves_effective_permissions(grant_target):
     app = _signed_in("alice")
     app.selectbox(key="grant_user_select").set_value(grant_target).run()
-    app.selectbox(key="grant_ws_select").set_value("accounting").run()
+    app.selectbox(key="grant_ws_select").set_value("local_rag_lab").run()
     assert not app.exception, app.exception
 
-    prefix = f"{grant_target}_accounting"
+    prefix = f"{grant_target}_local_rag_lab"
     assert app.checkbox(key=f"g_q_{prefix}").value is True
     assert app.checkbox(key=f"g_r_{prefix}").value is False
 
     app.checkbox(key=f"g_r_{prefix}").check().run()
     app.button(key=f"save_grants_{prefix}").click().run()
     assert not app.exception, app.exception
-    assert authorize(grant_target, "accounting", "review")
+    assert authorize(grant_target, "local_rag_lab", "review")
 
     # The "all" view reads the account's permissions on the active workspace and must render too.
     app.selectbox(key="grant_ws_select").set_value("all").run()
@@ -100,7 +100,7 @@ def test_groups_panel_creates_a_group_adds_a_member_and_grants_a_role(grant_targ
         app.button(key="group_grant_btn").click().run()
         assert not app.exception, app.exception
         assert list_groups() == [{"group": "uiteam", "members": [grant_target], "grants": {"*": "member"}}]
-        assert authorize(grant_target, "accounting", "query"), "the account's own grant still wins"
+        assert authorize(grant_target, "local_rag_lab", "query"), "the account's own grant still wins"
     finally:
         delete_group("uiteam")
 
@@ -146,7 +146,7 @@ def test_sign_out_clears_second_factor_material_and_typed_secrets():
 
 def test_session_restores_on_reload_via_query_params():
     """When a signed session token is present in query params, reload bypasses login and restores user state."""
-    set_grant("alice", "strategy", ["query", "review"])
+    set_grant("alice", "local_rag_lab", ["query", "review"])
     try:
         app = _signed_in("alice")
         token = app.query_params.get("session")
@@ -155,13 +155,13 @@ def test_session_restores_on_reload_via_query_params():
         # Simulate browser reload with clean session state but preserved URL query params
         reloaded = AppTest.from_file(UI, default_timeout=120)
         reloaded.query_params["session"] = token
-        reloaded.query_params["ws"] = "strategy"
+        reloaded.query_params["ws"] = "local_rag_lab"
         reloaded.run()
         assert not reloaded.exception, reloaded.exception
         assert reloaded.session_state.get("user") == "alice"
-        assert reloaded.sidebar.selectbox[0].value == "strategy"
+        assert reloaded.sidebar.selectbox[0].value == "local_rag_lab"
     finally:
-        set_grant("alice", "strategy", [])
+        set_grant("alice", "local_rag_lab", [])
 
 
 def test_sign_out_clears_session_and_query_params():

@@ -208,7 +208,7 @@ def _seed_access_policy() -> None:
     set_user_permissions_everywhere("alice", [])
     set_grant("alice", "default", ["query", "review"])
     set_grant("alice", "ops", ["query", "review"])
-    set_grant("alice", "accounting", ["query", "review"])
+    set_grant("alice", "local_rag_lab", ["query", "review"])
 
     add_user("bob", TEST_PASSWORD)
     set_user_permissions_everywhere("bob", [])
